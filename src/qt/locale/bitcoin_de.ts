@@ -4174,8 +4174,8 @@ Die Sicherung der Wallet kann nicht wiederhergestellt werden.</translation>
         <translation type="unfinished">whitebind darf nur für eingehende Verbindungen verwendet werden ("out" wurde übergeben)</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
-        <translation type="unfinished">-paytxfee ist veraltet und wird in v31.0 vollständig entfernt.</translation>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
+        <translation type="unfinished">-paytxfee ist veraltet und wird in v2.0 vollständig entfernt.</translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>

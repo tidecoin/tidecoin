@@ -4090,7 +4090,7 @@ Kan mislukte migratie niet opschonen</translation>
         <translation type="unfinished">standaard portemonnee</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
         <translation type="unfinished">-paytxfee is verouderd en zal volledig worden verwijderd in versie 31.0.</translation>
     </message>
     <message>

@@ -4394,8 +4394,8 @@ A tárca biztonsági mentésének visszaállítása sikertelen.</translation>
         <translation type="unfinished">A whitebind csak bejövő kapcsolatokhoz használható ("out" lett megadva)</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
-        <translation type="unfinished">A -paytxfee elavult, és a v31.0 verzióban teljesen eltávolításra kerül.</translation>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
+        <translation type="unfinished">A -paytxfee elavult, és a v2.0 verzióban teljesen eltávolításra kerül.</translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>

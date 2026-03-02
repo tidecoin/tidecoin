@@ -37,6 +37,7 @@ static void SetupBenchArgs(ArgsManager& argsman)
     argsman.AddArg("-output-csv=<output.csv>", "Generate CSV file with the most important benchmark results", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-output-json=<output.json>", "Generate JSON file with all benchmark results", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-sanity-check", "Run benchmarks for only one iteration with no output", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-slow-wallet-bench", "Enable slow wallet benchmarks (disabled by default)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-priority-level=<l1,l2,l3>", strprintf("Run benchmarks of one or multiple priority level(s) (%s), default: '%s'",
                                                            benchmark::ListPriorities(), DEFAULT_PRIORITY), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 }
@@ -144,6 +145,7 @@ int main(int argc, char** argv)
         args.output_json = argsman.GetPathArg("-output-json");
         args.regex_filter = argsman.GetArg("-filter", DEFAULT_BENCH_FILTER);
         args.sanity_check = argsman.GetBoolArg("-sanity-check", false);
+        args.slow_wallet_bench = argsman.GetBoolArg("-slow-wallet-bench", false);
         args.priority = parsePriorityLevel(argsman.GetArg("-priority-level", DEFAULT_PRIORITY));
         args.setup_args = parseTestSetupArgs(argsman);
 

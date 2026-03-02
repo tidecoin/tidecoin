@@ -15,7 +15,7 @@ QT_TRANSLATE_NOOP("bitcoin-core", "%s is set very high! Fees this large could be
 QT_TRANSLATE_NOOP("bitcoin-core", "%s not allowed at height %i"),
 QT_TRANSLATE_NOOP("bitcoin-core", "%s request to listen on port %u. This port is considered \"bad\" and thus it is unlikely that any peer will connect to it. See doc/p2p-bad-ports.md for details and a full list."),
 QT_TRANSLATE_NOOP("bitcoin-core", "-maxmempool must be at least %d MB"),
-QT_TRANSLATE_NOOP("bitcoin-core", "-paytxfee is deprecated and will be fully removed in v31.0."),
+QT_TRANSLATE_NOOP("bitcoin-core", "-paytxfee is deprecated and will be fully removed in v2.0."),
 QT_TRANSLATE_NOOP("bitcoin-core", "A %zu MiB dbcache may be too large for a system memory of only %zu MiB."),
 QT_TRANSLATE_NOOP("bitcoin-core", "A fatal internal error occurred, see debug.log for details: "),
 QT_TRANSLATE_NOOP("bitcoin-core", "Assumeutxo data not found for the given blockhash '%s'."),

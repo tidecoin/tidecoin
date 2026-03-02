@@ -1,7 +1,7 @@
-Tidecoin v30.0 Release Notes
+Tidecoin v1.0.0 Release Notes
 ============================
 
-Tidecoin v30.0 is now available from:
+Tidecoin v1.0.0 is now available from:
 
   <https://github.com/tidecoin/tidecoin/releases>
 
@@ -170,7 +170,7 @@ Genesis block
 Inherited from Bitcoin Core v30
 ================================
 
-Tidecoin v30.0 inherits all applicable improvements from Bitcoin Core v30.
+Tidecoin v1.0.0 inherits all applicable improvements from Bitcoin Core v30.
 Notable upstream changes include:
 
 - **GUI migrated from Qt 5 to Qt 6** with Windows dark mode support and macOS

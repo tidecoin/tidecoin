@@ -4,9 +4,11 @@
 
 #include <bench/bench.h>
 #include <interfaces/chain.h>
+#include <key_io.h>
 #include <kernel/chainparams.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
+#include <script/script.h>
 #include <sync.h>
 #include <test/util/mining.h>
 #include <test/util/setup_common.h>
@@ -28,7 +30,7 @@ static void WalletBalance(benchmark::Bench& bench, const bool set_dirty, const b
 {
     const auto test_setup = MakeNoLogFileContext<const TestingSetup>();
 
-    const auto& ADDRESS_WATCHONLY = ADDRESS_BCRT1_UNSPENDABLE;
+    const std::string address_watchonly = EncodeDestination(WitnessV0ScriptHash(CScript{} << OP_TRUE));
 
     // Set clock to genesis block, so the descriptors/keys creation time don't interfere with the blocks scanning process.
     // The reason is 'generatetoaddress', which creates a chain with deterministic timestamps in the past.
@@ -44,8 +46,8 @@ static void WalletBalance(benchmark::Bench& bench, const bool set_dirty, const b
     const std::optional<std::string> address_mine{add_mine ? std::optional<std::string>{getnewaddress(wallet)} : std::nullopt};
 
     for (int i = 0; i < 100; ++i) {
-        generatetoaddress(test_setup->m_node, address_mine.value_or(ADDRESS_WATCHONLY));
-        generatetoaddress(test_setup->m_node, ADDRESS_WATCHONLY);
+        generatetoaddress(test_setup->m_node, address_mine.value_or(address_watchonly));
+        generatetoaddress(test_setup->m_node, address_watchonly);
     }
     // Calls SyncWithValidationInterfaceQueue
     wallet.chain().waitForNotificationsIfTipChanged(uint256::ZERO);
@@ -59,10 +61,29 @@ static void WalletBalance(benchmark::Bench& bench, const bool set_dirty, const b
     });
 }
 
-static void WalletBalanceDirty(benchmark::Bench& bench) { WalletBalance(bench, /*set_dirty=*/true, /*add_mine=*/true); }
-static void WalletBalanceClean(benchmark::Bench& bench) { WalletBalance(bench, /*set_dirty=*/false, /*add_mine=*/true); }
-static void WalletBalanceMine(benchmark::Bench& bench) { WalletBalance(bench, /*set_dirty=*/false, /*add_mine=*/true); }
-static void WalletBalanceWatch(benchmark::Bench& bench) { WalletBalance(bench, /*set_dirty=*/false, /*add_mine=*/false); }
+static void WalletBalanceDirty(benchmark::Bench& bench)
+{
+    if (!benchmark::ShouldRunSlowWalletBench()) return;
+    WalletBalance(bench, /*set_dirty=*/true, /*add_mine=*/true);
+}
+
+static void WalletBalanceClean(benchmark::Bench& bench)
+{
+    if (!benchmark::ShouldRunSlowWalletBench()) return;
+    WalletBalance(bench, /*set_dirty=*/false, /*add_mine=*/true);
+}
+
+static void WalletBalanceMine(benchmark::Bench& bench)
+{
+    if (!benchmark::ShouldRunSlowWalletBench()) return;
+    WalletBalance(bench, /*set_dirty=*/false, /*add_mine=*/true);
+}
+
+static void WalletBalanceWatch(benchmark::Bench& bench)
+{
+    if (!benchmark::ShouldRunSlowWalletBench()) return;
+    WalletBalance(bench, /*set_dirty=*/false, /*add_mine=*/false);
+}
 
 BENCHMARK(WalletBalanceDirty, benchmark::PriorityLevel::HIGH);
 BENCHMARK(WalletBalanceClean, benchmark::PriorityLevel::HIGH);

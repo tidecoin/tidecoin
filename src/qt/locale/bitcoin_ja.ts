@@ -4398,8 +4398,8 @@ Unable to restore backup of wallet.</source>
         <translation type="unfinished">whitebindは受信接続のみに使用できます（"out"が渡されました）</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
-        <translation type="unfinished">-paytxfee は非推奨となり、v31.0 で完全に削除されます。</translation>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
+        <translation type="unfinished">-paytxfee は非推奨となり、v2.0 で完全に削除されます。</translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>

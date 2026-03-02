@@ -4346,7 +4346,7 @@ No se puede restaurar la copia de seguridad del monedero.</translation>
         <translation type="unfinished">whitebind solo puede utilizarse para conexiones entrantes (se pasó "out")</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
         <translation type="unfinished">-paytxfee está obsoleto y se eliminará por completo en la versión 31.0.</translation>
     </message>
     <message>

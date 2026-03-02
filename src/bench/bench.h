@@ -55,6 +55,7 @@ uint8_t StringToPriority(const std::string& str);
 struct Args {
     bool is_list_only;
     bool sanity_check;
+    bool slow_wallet_bench;
     std::chrono::milliseconds min_time;
     std::vector<double> asymptote;
     fs::path output_csv;
@@ -63,6 +64,9 @@ struct Args {
     uint8_t priority;
     std::vector<std::string> setup_args;
 };
+
+/** Whether slow wallet-specific benchmarks are enabled for the current run. */
+bool ShouldRunSlowWalletBench();
 
 class BenchRunner
 {

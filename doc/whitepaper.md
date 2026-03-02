@@ -1363,7 +1363,7 @@ The following URLs were accessed during the research and preparation of this whi
 - `src/psbt.h` -- PSBT PQHD proprietary fields
 - `src/clientversion.cpp` -- "Tidecoin" user agent name
 - `src/policy/policy.cpp` -- PQ-aware dust threshold and witness recognition
-- `CMakeLists.txt` -- CLIENT_NAME "Tidecoin", version 30.0.0
+- `CMakeLists.txt` -- CLIENT_NAME "Tidecoin", version 1.0.0
 
 ---
 

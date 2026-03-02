@@ -14,6 +14,7 @@
 #include <key_io.h>
 #include <node/types.h>
 #include <outputtype.h>
+#include <policy/feerate.h>
 #include <pow.h>
 #include <rpc/util.h>
 #include <script/descriptor.h>
@@ -113,7 +114,7 @@ CAmount AmountFromValue(const UniValue& value, int decimals)
 CFeeRate ParseFeeRate(const UniValue& json)
 {
     CAmount val{AmountFromValue(json)};
-    if (val >= COIN) throw JSONRPCError(RPC_INVALID_PARAMETER, "Fee rates larger than or equal to 1BTC/kvB are not accepted");
+    if (val >= COIN) throw JSONRPCError(RPC_INVALID_PARAMETER, "Fee rates larger than or equal to 1" + CURRENCY_UNIT + "/kvB are not accepted");
     return CFeeRate{val};
 }
 

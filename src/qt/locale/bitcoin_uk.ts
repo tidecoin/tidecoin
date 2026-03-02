@@ -4478,8 +4478,8 @@ Unable to restore backup of wallet.</source>
         <translation type="unfinished">whitebind можна використовувати лише для вхідних з'єднань (передано «out»)</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
-        <translation type="unfinished">Опцію -paytxfee визнано застарілою, і її буде остаточно вилучено у версії v31.0.</translation>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
+        <translation type="unfinished">Опцію -paytxfee визнано застарілою, і її буде остаточно вилучено у версії v2.0.</translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>

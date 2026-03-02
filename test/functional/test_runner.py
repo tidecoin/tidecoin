@@ -246,7 +246,6 @@ BASE_SCRIPTS = [
     'wallet_multisig_descriptor_psbt.py',
     'wallet_miniscript_decaying_multisig_descriptor_psbt.py',
     'wallet_txn_doublespend.py',
-    'wallet_backwards_compatibility.py',
     'wallet_txn_clone.py --mineblock',
     'feature_notifications.py',
     'rpc_getblockfilter.py',
@@ -326,7 +325,6 @@ BASE_SCRIPTS = [
     'feature_fastprune.py',
     'feature_framework_miniwallet.py',
     'mempool_unbroadcast.py',
-    'mempool_compatibility.py',
     'mempool_accept_wtxid.py',
     'mempool_dust.py',
     'mempool_sigoplimit.py',
@@ -338,13 +336,11 @@ BASE_SCRIPTS = [
     'rpc_scanblocks.py',
     'p2p_sendtxrcncl.py',
     'rpc_scantxoutset.py',
-    'feature_unsupported_utxo_db.py',
     'feature_logging.py',
     'interface_ipc.py',
     'feature_anchors.py',
     'mempool_datacarrier.py',
     'feature_coinstatsindex.py',
-    'feature_coinstatsindex_compatibility.py',
     'wallet_orphanedreward.py',
     'wallet_timelock.py',
     'p2p_permissions.py',
@@ -365,7 +361,6 @@ BASE_SCRIPTS = [
     'feature_help.py',
     'feature_framework_startup_failures.py',
     'feature_shutdown.py',
-    'wallet_migration.py',
     'p2p_ibd_txrelay.py',
     'p2p_seednode.py',
     # Don't append tests at the end to avoid merge conflicts
@@ -434,7 +429,7 @@ def main():
     # Create base test directory.
     #
     # Keep a unicode marker on non-Windows systems, but use an ASCII-only path
-    # on Windows so very old previous-release binaries can start reliably.
+    # on Windows for broad toolchain and filesystem compatibility.
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     if platform.system() == "Windows":
         tmpdir_name = f"test_runner_btc_run_{timestamp}"

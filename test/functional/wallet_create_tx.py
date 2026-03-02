@@ -70,7 +70,7 @@ class CreateTxWalletTest(BitcoinTestFramework):
             )
 
         self.log.info('Check maxtxfee in combination with settxfee')
-        self.restart_node(0, expected_stderr='Warning: -paytxfee is deprecated and will be fully removed in v31.0.')
+        self.restart_node(0, expected_stderr='Warning: -paytxfee is deprecated and will be fully removed in v2.0.')
         self.nodes[0].settxfee(0.01)
         assert_raises_rpc_error(
             -6,

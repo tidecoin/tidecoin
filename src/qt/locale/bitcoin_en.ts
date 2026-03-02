@@ -5775,7 +5775,7 @@ Unable to restore backup of wallet.</source>
     </message>
     <message>
         <location line="-261"/>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

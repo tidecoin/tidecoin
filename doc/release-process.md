@@ -81,7 +81,7 @@ Release Process
 Tag directly with git from the repository root:
 
 ```sh
-VERSION='30.0.1' # example
+VERSION='1.0.1' # example
 git fetch origin --tags
 git tag -s "v${VERSION}" -m "Tidecoin ${VERSION}"
 git push origin "v${VERSION}"
@@ -112,7 +112,7 @@ and/or an issue thread in `tidecoin/tidecoin`.
 
 Generate list of authors:
 
-    git log --format='- %aN' v(current version, e.g. 29.0)..v(new version, e.g. 30.0) | grep -v 'merge-script' | sort -fiu
+    git log --format='- %aN' v(current version, e.g. 0.18.3)..v(new version, e.g. 1.0.0) | grep -v 'merge-script' | sort -fiu
 
 ### Setup and perform Guix builds
 

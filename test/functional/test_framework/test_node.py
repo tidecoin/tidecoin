@@ -146,7 +146,7 @@ class TestNode():
                 self.ipc_socket_path = self.ipc_tmp_dir / "node.sock"
                 self.args.append(f"-ipcbind=unix:{self.ipc_socket_path}")
 
-        # Use valgrind, expect for previous release binaries
+        # Use valgrind when requested.
         if use_valgrind and version is None:
             default_suppressions_file = Path(__file__).parents[3] / "contrib" / "valgrind.supp"
             suppressions_file = os.getenv("VALGRIND_SUPPRESSIONS_FILE",
@@ -155,25 +155,21 @@ class TestNode():
                          "--gen-suppressions=all", "--exit-on-first-error=yes",
                          "--error-exitcode=1", "--quiet"] + self.args
 
-        if self.version_is_at_least(190000):
+        # Keep default runtime args strict for framework-managed binaries.
+        if version is None:
             self.args.append("-logthreadnames")
-        if self.version_is_at_least(219900):
             self.args.append("-logsourcelocations")
-        if self.version_is_at_least(239000):
             self.args.append("-loglevel=trace")
-        if self.version_is_at_least(299900):
             self.args.append("-nologratelimit")
 
         # Default behavior from global -v2transport flag is added to args to persist it over restarts.
         # May be overwritten in individual tests, using extra_args.
         self.default_to_v2 = v2transport
-        if self.version_is_at_least(260000):
-            # 26.0 and later support v2transport
+        if version is None:
             if v2transport:
                 self.args.append("-v2transport=1")
             else:
                 self.args.append("-v2transport=0")
-        # if v2transport is requested via global flag but not supported for node version, ignore it
 
         self.cli = TestNodeCLI(binaries, self.datadir_path)
         self.use_cli = use_cli
@@ -330,10 +326,10 @@ class TestNode():
                 rpc.auth_service_proxy_instance.reuse_http_connections = self.reuse_http_connections
                 rpc.getblockcount()
                 # If the call to getblockcount() succeeds then the RPC connection is up
-                if self.version_is_at_least(190000) and wait_for_import:
-                    # getmempoolinfo.loaded is available since commit
-                    # bb8ae2c (version 0.19.0)
-                    self.wait_until(lambda: rpc.getmempoolinfo()['loaded'])
+                if wait_for_import:
+                    # On current binaries, wait for mempool load/import completion.
+                    # Older binaries may not expose the "loaded" field.
+                    self.wait_until(lambda: rpc.getmempoolinfo().get('loaded', True))
                     # Wait for the node to finish reindex, block import, and
                     # loading the mempool. Usually importing happens fast or
                     # even "immediate" when the node is started. However, there
@@ -438,9 +434,6 @@ class TestNode():
             wallet_path = "wallet/{}".format(urllib.parse.quote(wallet_name))
             return self._rpc / wallet_path
 
-    def version_is_at_least(self, ver):
-        return self.version is None or self.version >= ver
-
     def stop_node(self, expected_stderr='', *, wait=0, wait_until_stopped=True):
         """Stop the node."""
         if not self.running:
@@ -449,11 +442,15 @@ class TestNode():
             "Should only call stop_node() on a running node after wait_for_rpc_connection() succeeded. "
             f"Did you forget to call the latter after start()? Not connected to process: {self.process.pid}")
         self.log.debug("Stopping node")
-        # Do not use wait argument when testing older nodes, e.g. in wallet_backwards_compatibility.py
-        if self.version_is_at_least(180000):
+        try:
             self.stop(wait=wait)
-        else:
-            self.stop()
+        except JSONRPCException as e:
+            # Some nodes may not support the stop(wait=...) named argument.
+            # Fallback to plain stop() in that case.
+            if "Unknown named parameter" in str(e):
+                self.stop()
+            else:
+                raise
 
         # If there are any running perf processes, stop them.
         for profile_name in tuple(self.perf_subprocesses.keys()):

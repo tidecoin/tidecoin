@@ -24,31 +24,24 @@ using node::BlockAssembler;
 
 static void AssembleBlock(benchmark::Bench& bench)
 {
-    const auto test_setup = MakeNoLogFileContext<const TestingSetup>();
-
-    CScriptWitness witness;
-    witness.stack.push_back(WITNESS_STACK_ELEM_OP_TRUE);
+    auto test_setup = MakeNoLogFileContext<TestChain100Setup>();
     BlockAssembler::Options options;
     options.coinbase_output_script = P2WSH_OP_TRUE;
 
-    // Collect some loose transactions that spend the coinbases of our mined blocks
+    // Build a 200-block chain so the first 101 coinbase outputs are mature and spendable.
     constexpr size_t NUM_BLOCKS{200};
-    std::array<CTransactionRef, NUM_BLOCKS - COINBASE_MATURITY + 1> txs;
-    for (size_t b{0}; b < NUM_BLOCKS; ++b) {
-        CMutableTransaction tx;
-        tx.vin.emplace_back(MineBlock(test_setup->m_node, options));
-        tx.vin.back().scriptWitness = witness;
-        tx.vout.emplace_back(1337, P2WSH_OP_TRUE);
-        if (NUM_BLOCKS - b >= COINBASE_MATURITY)
-            txs.at(b) = MakeTransactionRef(tx);
-    }
-    {
-        LOCK(::cs_main);
-
-        for (const auto& txr : txs) {
-            const MempoolAcceptResult res = test_setup->m_node.chainman->ProcessTransaction(txr);
-            assert(res.m_result_type == MempoolAcceptResult::ResultType::VALID);
-        }
+    test_setup->mineBlocks(COINBASE_MATURITY);
+    constexpr size_t NUM_MATURE_COINBASES{NUM_BLOCKS - COINBASE_MATURITY + 1};
+    for (size_t b{0}; b < NUM_MATURE_COINBASES; ++b) {
+        test_setup->CreateValidMempoolTransaction(
+            /*input_transaction=*/test_setup->m_coinbase_txns.at(b),
+            /*input_vout=*/0,
+            /*input_height=*/static_cast<int>(b + 1),
+            /*input_signing_key=*/test_setup->coinbaseKey,
+            /*output_destination=*/P2WSH_OP_TRUE,
+            /*output_amount=*/CAmount{1 * COIN},
+            /*submit=*/true,
+            /*normalize_falcon_sigs=*/true);
     }
 
     bench.run([&] {

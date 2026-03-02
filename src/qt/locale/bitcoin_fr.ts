@@ -4347,7 +4347,7 @@ Impossible de restaurer la sauvegarde du portefeuille</translation>
         <translation type="unfinished">« whitebind » ne peut être utilisé que pour les connexions entrantes (« out » a été passé)</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
         <translation type="unfinished">« -paytxfee » est obsolète et sera complètement supprimé dans la version 31.0.</translation>
     </message>
     <message>

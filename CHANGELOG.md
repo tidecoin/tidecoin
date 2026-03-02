@@ -4,10 +4,10 @@ All notable Tidecoin-specific changes are documented in this file.
 Tidecoin is built on Bitcoin Core v30. This changelog covers the
 post-quantum integration and Tidecoin-specific development only.
 
-## v30.0 (2026-02-11)
+## v1.0.0 (2026-03-02)
 
-Initial public release rebased on Bitcoin Core v30 with full post-quantum
-cryptographic integration.
+First major release line (`1.x`) rebased on Bitcoin Core v30 with full
+post-quantum cryptographic integration.
 
 ### Post-Quantum Signatures
 

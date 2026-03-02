@@ -128,14 +128,6 @@ Run all possible tests with
 build/test/functional/test_runner.py --extended
 ```
 
-In order to run backwards compatibility tests, first run:
-
-```
-test/get_previous_releases.py
-```
-
-to download the necessary previous release binaries.
-
 By default, up to 4 tests will be run in parallel by test_runner. To specify
 how many jobs to run, append `--jobs=n`
 

@@ -37,12 +37,10 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
   docker volume create "${CONTAINER_NAME}_ccache" || true
   docker volume create "${CONTAINER_NAME}_depends" || true
   docker volume create "${CONTAINER_NAME}_depends_sources" || true
-  docker volume create "${CONTAINER_NAME}_previous_releases" || true
 
   CI_CCACHE_MOUNT="type=volume,src=${CONTAINER_NAME}_ccache,dst=$CCACHE_DIR"
   CI_DEPENDS_MOUNT="type=volume,src=${CONTAINER_NAME}_depends,dst=$DEPENDS_DIR/built"
   CI_DEPENDS_SOURCES_MOUNT="type=volume,src=${CONTAINER_NAME}_depends_sources,dst=$DEPENDS_DIR/sources"
-  CI_PREVIOUS_RELEASES_MOUNT="type=volume,src=${CONTAINER_NAME}_previous_releases,dst=$PREVIOUS_RELEASES_DIR"
   CI_BUILD_MOUNT=""
 
   if [ "$DANGER_CI_ON_HOST_FOLDERS" ]; then
@@ -50,13 +48,11 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
     mkdir -p "${CCACHE_DIR}"
     mkdir -p "${DEPENDS_DIR}/built"
     mkdir -p "${DEPENDS_DIR}/sources"
-    mkdir -p "${PREVIOUS_RELEASES_DIR}"
     mkdir -p "${BASE_BUILD_DIR}"  # Unset by default, must be defined externally
 
     CI_CCACHE_MOUNT="type=bind,src=${CCACHE_DIR},dst=$CCACHE_DIR"
     CI_DEPENDS_MOUNT="type=bind,src=${DEPENDS_DIR}/built,dst=$DEPENDS_DIR/built"
     CI_DEPENDS_SOURCES_MOUNT="type=bind,src=${DEPENDS_DIR}/sources,dst=$DEPENDS_DIR/sources"
-    CI_PREVIOUS_RELEASES_MOUNT="type=bind,src=${PREVIOUS_RELEASES_DIR},dst=$PREVIOUS_RELEASES_DIR"
     CI_BUILD_MOUNT="--mount type=bind,src=${BASE_BUILD_DIR},dst=${BASE_BUILD_DIR}"
   fi
 
@@ -91,7 +87,6 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
                   --mount "${CI_CCACHE_MOUNT}" \
                   --mount "${CI_DEPENDS_MOUNT}" \
                   --mount "${CI_DEPENDS_SOURCES_MOUNT}" \
-                  --mount "${CI_PREVIOUS_RELEASES_MOUNT}" \
                   ${CI_BUILD_MOUNT} \
                   --env-file /tmp/env-$USER-$CONTAINER_NAME \
                   --name "$CONTAINER_NAME" \
@@ -104,7 +99,6 @@ else
   echo "Running on host system without docker wrapper"
   echo "Create missing folders"
   mkdir -p "${CCACHE_DIR}"
-  mkdir -p "${PREVIOUS_RELEASES_DIR}"
 fi
 
 if [ "$CI_OS_NAME" == "macos" ]; then

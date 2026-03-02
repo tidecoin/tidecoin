@@ -4384,8 +4384,8 @@ Nepodarilo sa obnoviť zálohu peňaženky.</translation>
         <translation type="unfinished">"whitebind" môže byť použité len pre prichádzajúce spojenia (bolo zadané "out")</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
-        <translation type="unfinished">-paytxfee je zastaraný a bude úplne odstránený vo verzii v31.0.</translation>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
+        <translation type="unfinished">-paytxfee je zastaraný a bude úplne odstránený vo verzii v2.0.</translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>

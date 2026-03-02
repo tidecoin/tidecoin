@@ -286,7 +286,7 @@ struct AddrinfoRequestHandler : BaseRequestHandler {
         if (!reply["error"].isNull()) return reply;
         const std::vector<UniValue>& nodes{reply["result"].getValues()};
         if (!nodes.empty() && nodes.at(0)["network"].isNull()) {
-            throw std::runtime_error("-addrinfo requires tidecoind server to be running v22.0 and up");
+            throw std::runtime_error("-addrinfo requires tidecoind server with getnodeaddresses network metadata support");
         }
         // Count the number of peers known to our node, by network.
         std::array<uint64_t, NETWORKS.size()> counts{{}};
@@ -506,9 +506,6 @@ public:
         if (!batch[ID_NETWORKINFO]["error"].isNull()) return batch[ID_NETWORKINFO];
 
         const UniValue& networkinfo{batch[ID_NETWORKINFO]["result"]};
-        if (networkinfo["version"].getInt<int>() < 209900) {
-            throw std::runtime_error("-netinfo requires tidecoind server to be running v0.21.0 and up");
-        }
         const int64_t time_now{TicksSinceEpoch<std::chrono::seconds>(CliClock::now())};
 
         // Count peer connection totals, and if DetailsRequested(), store peer data in a vector of structs.
@@ -546,8 +543,8 @@ public:
                 const std::string sub_version{peer["subver"].get_str()};
                 const std::string transport{peer["transport_protocol_type"].isNull() ? "v1" : peer["transport_protocol_type"].get_str()};
                 const bool is_addr_relay_enabled{peer["addr_relay_enabled"].isNull() ? false : peer["addr_relay_enabled"].get_bool()};
-                const bool is_bip152_hb_from{peer["bip152_hb_from"].get_bool()};
-                const bool is_bip152_hb_to{peer["bip152_hb_to"].get_bool()};
+                const bool is_bip152_hb_from{peer["bip152_hb_from"].isNull() ? false : peer["bip152_hb_from"].get_bool()};
+                const bool is_bip152_hb_to{peer["bip152_hb_to"].isNull() ? false : peer["bip152_hb_to"].get_bool()};
                 m_peers.push_back({addr, sub_version, conn_type, NETWORK_SHORT_NAMES[network_id], age, services, transport, min_ping, ping, addr_processed, addr_rate_limited, last_blck, last_recv, last_send, last_trxn, peer_id, mapped_as, version, is_addr_relay_enabled, is_bip152_hb_from, is_bip152_hb_to, is_outbound, is_tx_relay});
                 m_max_addr_length = std::max(addr.length() + 1, m_max_addr_length);
                 m_max_addr_processed_length = std::max(ToString(addr_processed).length(), m_max_addr_processed_length);
@@ -725,7 +722,7 @@ public:
         "           peer selection (only displayed if the -asmap config option is set)\n"
         "  id       Peer index, in increasing order of peer connections since node startup\n"
         "  address  IP address and port of the peer\n"
-        "  version  Peer version and subversion concatenated, e.g. \"70016/Satoshi:21.0.0/\"\n\n"
+        "  version  Peer version and subversion concatenated, e.g. \"70016/Tidecoin:1.0.0/\"\n\n"
         "* The peer counts table displays the number of peers for each reachable network as well as\n"
         "  the number of block relay peers and manual peers.\n\n"
         "* The local addresses table lists each local address broadcast by the node, the port, and the score.\n\n"

@@ -1598,7 +1598,7 @@ If you are receiving this error you should request the merchant provide a BIP21 
         <translation type="unfinished">‫محفظة افتراضية‬</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
         <translation type="unfinished">-paytxfee منسوخ شده و در نسخه 31.0 به طور کامل حذف خواهد شد.</translation>
     </message>
     <message>

@@ -30,18 +30,8 @@ runs:
         restore-keys: |
           depends-built-${{ env.CONTAINER_NAME }}-
 
-    - name: Restore previous releases cache
-      id: previous-releases
-      uses: cirruslabs/cache/restore@v4
-      with:
-        path: ${{ env.PREVIOUS_RELEASES_DIR }}
-        key: previous-releases-${{ env.CONTAINER_NAME }}-${{ env.PREVIOUS_RELEASES_HASH }}
-        restore-keys: |
-          previous-releases-${{ env.CONTAINER_NAME }}-
-
     - name: export cache hits
       shell: bash
       run: |
         echo "depends-sources-cache-hit=${{ steps.depends-sources.outputs.cache-hit }}" >> $GITHUB_ENV
         echo "depends-built-cache-hit=${{ steps.depends-built.outputs.cache-hit }}" >> $GITHUB_ENV
-        echo "previous-releases-cache-hit=${{ steps.previous-releases.outputs.cache-hit }}" >> $GITHUB_ENV

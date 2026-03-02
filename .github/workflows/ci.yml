@@ -444,14 +444,6 @@ jobs:
           (Get-Content "test/config.ini") -replace '(?<=^SRCDIR=).*', '${{ github.workspace }}' -replace '(?<=^BUILDDIR=).*', '${{ github.workspace }}' -replace '(?<=^RPCAUTH=).*', '${{ github.workspace }}/share/rpcauth/rpcauth.py' | Set-Content "test/config.ini"
           Get-Content "test/config.ini"
 
-      - name: Set previous release directory
-        run: |
-          echo "PREVIOUS_RELEASES_DIR=${{ runner.temp }}/previous_releases" >> "$GITHUB_ENV"
-
-      - name: Get previous releases
-        working-directory: test
-        run: ./get_previous_releases.py --target-dir $PREVIOUS_RELEASES_DIR
-
       - name: Run functional tests
         env:
           EXCLUDE: '--exclude wallet_multiwallet.py'
@@ -510,11 +502,11 @@ jobs:
             timeout-minutes: 240
             file-env: './ci/test/00_setup_env_native_fuzz.sh'
 
-          - name: 'previous releases, depends DEBUG'
+          - name: 'extended coverage, depends DEBUG'
             cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md'
             fallback-runner: 'ubuntu-24.04'
             timeout-minutes: 120
-            file-env: './ci/test/00_setup_env_native_previous_releases.sh'
+            file-env: './ci/test/00_setup_env_native_extended_debug.sh'
 
           - name: 'CentOS, depends, gui'
             cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-lg'

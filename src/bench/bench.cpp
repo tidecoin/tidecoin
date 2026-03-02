@@ -48,6 +48,9 @@ const std::function<std::string()> G_TEST_GET_FULL_NAME = []() {
     return g_running_benchmark_name;
 };
 
+/** Enabled by the bench runner when -slow-wallet-bench is set. */
+static bool g_run_slow_wallet_bench{false};
+
 namespace {
 
 void GenerateTemplateResults(const std::vector<ankerl::nanobench::Result>& benchmarkResults, const fs::path& file, const char* tpl)
@@ -68,6 +71,11 @@ void GenerateTemplateResults(const std::vector<ankerl::nanobench::Result>& bench
 } // namespace
 
 namespace benchmark {
+
+bool ShouldRunSlowWalletBench()
+{
+    return g_run_slow_wallet_bench;
+}
 
 // map a label to one or multiple priority levels
 std::map<std::string, uint8_t> map_label_priority = {
@@ -107,6 +115,8 @@ void BenchRunner::RunAll(const Args& args)
     std::regex reFilter(args.regex_filter);
     std::smatch baseMatch;
 
+    g_run_slow_wallet_bench = args.slow_wallet_bench;
+
     if (args.sanity_check) {
         std::cout << "Running with -sanity-check option, output is being suppressed as benchmark results will be useless." << std::endl;
     }
@@ -133,6 +143,12 @@ void BenchRunner::RunAll(const Args& args)
 
         if (args.is_list_only) {
             std::cout << name << std::endl;
+            continue;
+        }
+
+        // Wallet benchmarks are significantly slower with PQ key material and are
+        // excluded by default to keep sanity checks and CI bench jobs practical.
+        if (!args.slow_wallet_bench && name.starts_with("Wallet")) {
             continue;
         }
 

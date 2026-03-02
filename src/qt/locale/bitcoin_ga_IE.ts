@@ -4427,7 +4427,7 @@ Ní féidir cúltaca an sparán a chur ar ais.</translation>
         <translation type="unfinished">ní féidir ceangaltán bán a úsáid ach amháin le haghaidh naisc isteach (ritheadh ​​​​"amach")</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
         <translation type="unfinished">Tá -paytxfee imithe i léig agus bainfear go hiomlán é i leagan 31.0.</translation>
     </message>
     <message>

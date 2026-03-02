@@ -2822,7 +2822,7 @@ Unable to restore backup of wallet.</source>
         <translation type="unfinished">Параметр "whitebind" может использоваться только для входящих соединений (был передан параметр "out").</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
         <translation type="unfinished">-paytxfee устарел и будет полностью удален в версии 31.0.</translation>
     </message>
     <message>

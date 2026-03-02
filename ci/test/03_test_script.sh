@@ -106,9 +106,6 @@ if [ -z "$NO_DEPENDS" ]; then
   fi
   bash -c "$SHELL_OPTS make $MAKEJOBS -C depends HOST=$HOST $DEP_OPTS LOG=1"
 fi
-if [ "$DOWNLOAD_PREVIOUS_RELEASES" = "true" ]; then
-  test/get_previous_releases.py --target-dir "$PREVIOUS_RELEASES_DIR"
-fi
 
 BITCOIN_CONFIG_ALL="-DBUILD_BENCH=ON -DBUILD_FUZZ_BINARY=ON"
 if [ -z "$NO_DEPENDS" ]; then
@@ -153,7 +150,6 @@ if [ "$CI" = "true" ]; then
   fi
 fi
 du -sh "${DEPENDS_DIR}"/*/
-du -sh "${PREVIOUS_RELEASES_DIR}"
 
 if [ -n "${CI_LIMIT_STACK_SIZE}" ]; then
   ulimit -s 512

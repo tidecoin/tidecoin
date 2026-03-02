@@ -14,7 +14,6 @@ import os
 import platform
 import pdb
 import random
-import re
 import shlex
 import shutil
 import subprocess
@@ -70,7 +69,7 @@ class Binaries:
             the config file.
         bin_dir: An optional string containing a directory path to look for
             binaries, which takes precedence over the paths above, if specified.
-            This is used by tests calling binaries from previous releases.
+            This is used by tests that need explicit binary-path overrides.
     """
     def __init__(self, paths, bin_dir):
         self.paths = paths
@@ -105,7 +104,7 @@ class Binaries:
         """Return argv array that should be used to invoke the command. It
         either uses the bitcoin wrapper executable (if BITCOIN_CMD is set or
         need_ipc is True), or the direct binary path (tidecoind, etc). When
-        bin_dir is set (by tests calling binaries from previous releases) it
+        bin_dir is set by the caller, it
         always uses the direct path."""
         if self.bin_dir is not None:
             return [os.path.join(self.bin_dir, os.path.basename(bin_path))]
@@ -219,7 +218,6 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             self.log.info(f"Method '{method_name}' executed successfully.")
 
     def parse_args(self, test_file):
-        previous_releases_path = os.getenv("PREVIOUS_RELEASES_DIR") or os.getcwd() + "/releases"
         parser = argparse.ArgumentParser(usage="%(prog)s [options]")
         parser.add_argument("--nocleanup", dest="nocleanup", default=False, action="store_true",
                             help="Leave tidecoinds and test.* datadir on exit or error")
@@ -232,9 +230,6 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                             help="Print out all RPC calls as they are made")
         parser.add_argument("--portseed", dest="port_seed", default=os.getpid(), type=int,
                             help="The seed to use for assigning port numbers (default: current process id)")
-        parser.add_argument("--previous-releases", dest="prev_releases", action="store_true",
-                            default=os.path.isdir(previous_releases_path) and bool(os.listdir(previous_releases_path)),
-                            help="Force test of previous releases (default: %(default)s)")
         parser.add_argument("--coveragedir", dest="coveragedir",
                             help="Write tested RPC commands into this directory")
         parser.add_argument("--configfile", dest="configfile",
@@ -247,7 +242,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         parser.add_argument("--perf", dest="perf", default=False, action="store_true",
                             help="profile running nodes with perf for the duration of the test")
         parser.add_argument("--valgrind", dest="valgrind", default=False, action="store_true",
-                            help="run nodes under the valgrind memory error detector: expect at least a ~10x slowdown. valgrind 3.14 or later required. Does not apply to previous release binaries.")
+                            help="run nodes under the valgrind memory error detector: expect at least a ~10x slowdown. valgrind 3.14 or later required.")
         parser.add_argument("--randomseed", type=int,
                             help="set a random seed for deterministically reproducing a previous test run")
         parser.add_argument("--timeout-factor", dest="timeout_factor", type=float, help="adjust test timeouts by a factor. Setting it to 0 disables all timeouts")
@@ -267,7 +262,6 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         if self.options.timeout_factor == 0:
             self.options.timeout_factor = 999
         self.options.timeout_factor = self.options.timeout_factor or (4 if self.options.valgrind else 1)
-        self.options.previous_releases_path = previous_releases_path
 
         self.config = configparser.ConfigParser()
         self.config.read_file(open(self.options.configfile))
@@ -505,33 +499,11 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
     # Public helper methods. These can be accessed by the subclass test scripts.
 
-    def add_nodes(self, num_nodes: int, extra_args=None, *, rpchost=None, versions=None):
+    def add_nodes(self, num_nodes: int, extra_args=None, *, rpchost=None):
         """Instantiate TestNode objects.
 
         Should only be called once after the nodes have been specified in
         set_test_params()."""
-        def bin_dir_from_version(version):
-            if not version:
-                return None
-            if version > 219999:
-                # Starting at client version 220000 the first two digits represent
-                # the major version, e.g. v22.0 instead of v0.22.0.
-                version *= 100
-            return os.path.join(
-                self.options.previous_releases_path,
-                re.sub(
-                    r'\.0$' if version <= 219999 else r'(\.0){1,2}$',
-                    '', # Remove trailing dot for point releases, after 22.0 also remove double trailing dot.
-                    'v{}.{}.{}.{}'.format(
-                        (version % 100000000) // 1000000,
-                        (version % 1000000) // 10000,
-                        (version % 10000) // 100,
-                        (version % 100) // 1,
-                    ),
-                ),
-                'bin',
-            )
-
         if self.bind_to_localhost_only:
             extra_confs = [["bind=127.0.0.1"]] * num_nodes
         else:
@@ -542,31 +514,18 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         if self.noban_tx_relay:
             for i in range(len(extra_args)):
                 extra_args[i] = extra_args[i] + ["-whitelist=noban,in,out@127.0.0.1"]
-        if versions is None:
-            versions = [None] * num_nodes
-        bin_dirs = []
-        for v in versions:
-            bin_dir = bin_dir_from_version(v)
 
-            # Fail test if any of the needed release binaries is missing
-            for bin_path in (argv[0] for binaries in (self.get_binaries(bin_dir),)
-                                     for argv in (binaries.node_argv(), binaries.rpc_argv())):
-
-                if shutil.which(bin_path) is None:
-                    self.log.error(f"Binary not found: {bin_path}")
-                    if v is None:
-                        raise AssertionError("At least one binary is missing, did you compile?")
-                    raise AssertionError("At least one release binary is missing. "
-                                         "Previous releases binaries can be downloaded via `test/get_previous_releases.py`.")
-
-            bin_dirs.append(bin_dir)
+        # Fail test if required binaries are missing.
+        for bin_path in (argv[0] for binaries in (self.get_binaries(),)
+                                 for argv in (binaries.node_argv(), binaries.rpc_argv())):
+            if shutil.which(bin_path) is None:
+                self.log.error(f"Binary not found: {bin_path}")
+                raise AssertionError("At least one binary is missing, did you compile?")
 
         extra_init = [{}] * num_nodes if self.extra_init is None else self.extra_init # type: ignore[var-annotated]
         assert_equal(len(extra_init), num_nodes)
         assert_equal(len(extra_confs), num_nodes)
         assert_equal(len(extra_args), num_nodes)
-        assert_equal(len(versions), num_nodes)
-        assert_equal(len(bin_dirs), num_nodes)
         for i in range(num_nodes):
             args = list(extra_args[i])
             init = dict(
@@ -574,8 +533,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                 rpchost=rpchost,
                 timewait=self.rpc_timeout,
                 timeout_factor=self.options.timeout_factor,
-                binaries=self.get_binaries(bin_dirs[i]),
-                version=versions[i],
+                binaries=self.get_binaries(),
+                version=None,
                 coverage_dir=self.options.coveragedir,
                 cwd=self.options.tmpdir,
                 extra_conf=extra_confs[i],
@@ -592,9 +551,6 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                 get_datadir_path(self.options.tmpdir, i),
                 **init)
             self.nodes.append(test_node_i)
-            if not test_node_i.version_is_at_least(170000):
-                # adjust conf for pre 17
-                test_node_i.replace_in_config([('[regtest]', '')])
 
     def start_node(self, i, *args, **kwargs):
         """Start a tidecoind"""
@@ -1075,19 +1031,6 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         """Skip the running test if ipc is not compiled."""
         if not self.is_ipc_compiled():
             raise SkipTest("ipc has not been compiled.")
-
-    def skip_if_no_previous_releases(self):
-        """Skip the running test if previous releases are not available."""
-        if not self.has_previous_releases():
-            raise SkipTest("previous releases not available or disabled")
-
-    def has_previous_releases(self):
-        """Checks whether previous releases are present and enabled."""
-        if not os.path.isdir(self.options.previous_releases_path):
-            if self.options.prev_releases:
-                raise AssertionError("Force test of previous releases but releases missing: {}".format(
-                    self.options.previous_releases_path))
-        return self.options.prev_releases
 
     def skip_if_no_external_signer(self):
         """Skip the running test if external signer support has not been compiled."""

@@ -4090,8 +4090,8 @@ Unable to restore backup of wallet.</source>
 无法还原钱包备份</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
-        <translation type="unfinished">“-paytxfee”已弃用，并将在 v31.0 中完全移除。 </translation>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
+        <translation type="unfinished">“-paytxfee”已弃用，并将在 v2.0 中完全移除。 </translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>

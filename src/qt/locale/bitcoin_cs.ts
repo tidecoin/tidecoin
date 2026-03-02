@@ -4362,7 +4362,7 @@ Nelze obnovit zálohu peněženky.</translation>
         <translation type="unfinished">whitebind může být použit pouze pro příchozí spojení (odchozí byla schválena)</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
         <translation type="unfinished"> Volba -paytxfee je zastaralá a bude ve verzi 31.0 úplně odstraněna.</translation>
     </message>
     <message>

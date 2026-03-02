@@ -521,6 +521,8 @@ BOOST_FIXTURE_TEST_CASE(updatecoins_simulation_test, UpdateTest)
 
 BOOST_AUTO_TEST_CASE(ccoins_serialization)
 {
+    const unsigned int special_scripts = ScriptCompression::nSpecialScripts;
+
     // Good example
     DataStream ss1{"97f23c835800816115944e077fe7c803cfa57f29b36bf87c1d35"_hex};
     Coin cc1;
@@ -540,7 +542,8 @@ BOOST_AUTO_TEST_CASE(ccoins_serialization)
     BOOST_CHECK_EQUAL(HexStr(cc2.out.scriptPubKey), HexStr(GetScriptForDestination(PKHash(uint160("8c988f1a4a4de2161e0f50aac7f17e7f9555caa4"_hex_u8)))));
 
     // Smallest possible example
-    DataStream ss3{"000006"_hex};
+    DataStream ss3{};
+    ss3 << VARINT(uint32_t{0}) << VARINT(uint64_t{0}) << VARINT(special_scripts);
     Coin cc3;
     ss3 >> cc3;
     BOOST_CHECK_EQUAL(cc3.fCoinBase, false);
@@ -549,7 +552,8 @@ BOOST_AUTO_TEST_CASE(ccoins_serialization)
     BOOST_CHECK_EQUAL(cc3.out.scriptPubKey.size(), 0U);
 
     // scriptPubKey that ends beyond the end of the stream
-    DataStream ss4{"000007"_hex};
+    DataStream ss4{};
+    ss4 << VARINT(uint32_t{0}) << VARINT(uint64_t{0}) << VARINT(special_scripts + 1);
     try {
         Coin cc4;
         ss4 >> cc4;
@@ -558,11 +562,9 @@ BOOST_AUTO_TEST_CASE(ccoins_serialization)
     }
 
     // Very large scriptPubKey (3*10^9 bytes) past the end of the stream
-    DataStream tmp{};
-    uint64_t x = 3000000000ULL;
-    tmp << VARINT(x);
-    BOOST_CHECK_EQUAL(HexStr(tmp), "8a95c0bb00");
-    DataStream ss5{"00008a95c0bb00"_hex};
+    const uint64_t x = 3000000000ULL + special_scripts;
+    DataStream ss5{};
+    ss5 << VARINT(uint32_t{0}) << VARINT(uint64_t{0}) << VARINT(x);
     try {
         Coin cc5;
         ss5 >> cc5;

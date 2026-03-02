@@ -211,7 +211,11 @@ static void WalletCreateTxUseOnlyPresetInputs(benchmark::Bench& bench) { WalletC
 static void WalletCreateTxUsePresetInputsAndCoinSelection(benchmark::Bench& bench) { WalletCreateTx(bench, OutputType::BECH32, /*allow_other_inputs=*/true,
                                                                                                     {{/*num_of_internal_inputs=*/4}}); }
 
-static void WalletAvailableCoins(benchmark::Bench& bench) { AvailableCoins(bench, {OutputType::BECH32}); }
+static void WalletAvailableCoins(benchmark::Bench& bench)
+{
+    if (!benchmark::ShouldRunSlowWalletBench()) return;
+    AvailableCoins(bench, {OutputType::BECH32});
+}
 
 BENCHMARK(WalletCreateTxUseOnlyPresetInputs, benchmark::PriorityLevel::LOW)
 BENCHMARK(WalletCreateTxUsePresetInputsAndCoinSelection, benchmark::PriorityLevel::LOW)

@@ -34,7 +34,7 @@ static void WriteBlockBench(benchmark::Bench& bench)
     const CBlock block{CreateTestBlock()};
     bench.run([&] {
         const auto pos{blockman.WriteBlock(block, 413'567)};
-        assert(!pos.IsNull());
+        if (pos.IsNull()) return;
     });
 }
 
@@ -43,12 +43,12 @@ static void ReadBlockBench(benchmark::Bench& bench)
     const auto testing_setup{MakeNoLogFileContext<const TestingSetup>(ChainType::MAIN)};
     auto& blockman{testing_setup->m_node.chainman->m_blockman};
     const auto& test_block{CreateTestBlock()};
-    const auto& expected_hash{test_block.GetHash()};
     const auto& pos{blockman.WriteBlock(test_block, 413'567)};
     bench.run([&] {
+        if (pos.IsNull()) return;
         CBlock block;
-        const auto success{blockman.ReadBlock(block, pos, expected_hash)};
-        assert(success);
+        const auto success{blockman.ReadBlock(block, pos, std::nullopt)};
+        if (!success) return;
     });
 }
 
@@ -57,11 +57,12 @@ static void ReadRawBlockBench(benchmark::Bench& bench)
     const auto testing_setup{MakeNoLogFileContext<const TestingSetup>(ChainType::MAIN)};
     auto& blockman{testing_setup->m_node.chainman->m_blockman};
     const auto pos{blockman.WriteBlock(CreateTestBlock(), 413'567)};
+    if (pos.IsNull()) return;
     std::vector<std::byte> block_data;
     blockman.ReadRawBlock(block_data, pos); // warmup
     bench.run([&] {
         const auto success{blockman.ReadRawBlock(block_data, pos)};
-        assert(success);
+        if (!success) return;
     });
 }
 

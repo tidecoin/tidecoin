@@ -4368,8 +4368,8 @@ Nie można przywrócić kopii zapasowej portfela.</translation>
         <translation type="unfinished">whitebind może być używane tylko do połączeń przychodzących (przekazano "out")</translation>
     </message>
     <message>
-        <source>-paytxfee is deprecated and will be fully removed in v31.0.</source>
-        <translation type="unfinished">Opcja -paytxfee jest przestarzała i zostanie całkowicie usunięta w wersji v31.0.</translation>
+        <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
+        <translation type="unfinished">Opcja -paytxfee jest przestarzała i zostanie całkowicie usunięta w wersji v2.0.</translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>
