@@ -1,0 +1,29 @@
+{
+  "source": "oldtidecoin v0.18.3",
+  "generation_mode": "daemon startup autocreate (no RPC interaction)",
+  "network": "main (offline)",
+  "datadir_used": "/tmp/tide_fixture_seed0183",
+  "rpc_port_used": 28955,
+  "p2p_port_used": 28956,
+  "known_issue": "oldtidecoin regtest/testnet RPC warmup hangs on this toolchain; fixtures generated via startup-autocreated wallets",
+  "wallets": [
+    {
+      "name": "legacy_0_18_3_bdb_autocreated_a",
+      "original_wallet_arg": "legacy0183_autocreated_a.dat",
+      "encrypted": false,
+      "keypool": 1
+    },
+    {
+      "name": "legacy_0_18_3_bdb_autocreated_b",
+      "original_wallet_arg": "legacy0183_autocreated_b.dat",
+      "encrypted": false,
+      "keypool": 1
+    },
+    {
+      "name": "legacy_0_18_3_bdb_encrypted",
+      "source_wallet_arg": "legacy0183_encrypted_min.dat",
+      "encrypted": true,
+      "passphrase": "fixture-passphrase"
+    }
+  ]
+}

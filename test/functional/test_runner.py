@@ -186,6 +186,7 @@ BASE_SCRIPTS = [
     'p2p_block_sync.py --v2transport',
     'wallet_createwallet.py --usecli',
     'wallet_createwallet.py',
+    'wallet_migration_fixtures.py',
     'wallet_reindex.py',
     'wallet_reorgsrestore.py',
     'interface_http.py',
