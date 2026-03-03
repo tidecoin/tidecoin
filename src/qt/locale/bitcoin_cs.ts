@@ -4363,7 +4363,7 @@ Nelze obnovit zálohu peněženky.</translation>
     </message>
     <message>
         <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
-        <translation type="unfinished"> Volba -paytxfee je zastaralá a bude ve verzi 31.0 úplně odstraněna.</translation>
+        <translation type="unfinished"> Volba -paytxfee je zastaralá a bude ve verzi v2.0 úplně odstraněna.</translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>

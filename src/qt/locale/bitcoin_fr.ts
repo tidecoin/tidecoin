@@ -4348,7 +4348,7 @@ Impossible de restaurer la sauvegarde du portefeuille</translation>
     </message>
     <message>
         <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
-        <translation type="unfinished">« -paytxfee » est obsolète et sera complètement supprimé dans la version 31.0.</translation>
+        <translation type="unfinished">« -paytxfee » est obsolète et sera complètement supprimé dans la version v2.0.</translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>

@@ -1599,7 +1599,7 @@ If you are receiving this error you should request the merchant provide a BIP21 
     </message>
     <message>
         <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
-        <translation type="unfinished">-paytxfee منسوخ شده و در نسخه 31.0 به طور کامل حذف خواهد شد.</translation>
+        <translation type="unfinished">-paytxfee منسوخ شده و در نسخه v2.0 به طور کامل حذف خواهد شد.</translation>
     </message>
     <message>
         <source>Config setting for %s only applied on %s network when in [%s] section.</source>

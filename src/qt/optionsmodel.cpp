@@ -56,25 +56,9 @@ static const char* SettingName(OptionsModel::OptionID option)
     }
 }
 
-/** Call node.updateRwSetting() with Bitcoin 22.x workaround. */
 static void UpdateRwSetting(interfaces::Node& node, OptionsModel::OptionID option, const std::string& suffix, const common::SettingsValue& value)
 {
-    if (value.isNum() &&
-        (option == OptionsModel::DatabaseCache ||
-         option == OptionsModel::ThreadsScriptVerif ||
-         option == OptionsModel::Prune ||
-         option == OptionsModel::PruneSize)) {
-        // Write certain old settings as strings, even though they are numbers,
-        // because Bitcoin 22.x releases try to read these specific settings as
-        // strings in addOverriddenOption() calls at startup, triggering
-        // uncaught exceptions in UniValue::get_str(). These errors were fixed
-        // in later releases by https://github.com/bitcoin/bitcoin/pull/24498.
-        // If new numeric settings are added, they can be written as numbers
-        // instead of strings, because bitcoin 22.x will not try to read these.
-        node.updateRwSetting(SettingName(option) + suffix, value.getValStr());
-    } else {
-        node.updateRwSetting(SettingName(option) + suffix, value);
-    }
+    node.updateRwSetting(SettingName(option) + suffix, value);    
 }
 
 //! Convert enabled/size values to bitcoin -prune setting.

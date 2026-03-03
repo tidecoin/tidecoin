@@ -4091,7 +4091,7 @@ Kan mislukte migratie niet opschonen</translation>
     </message>
     <message>
         <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
-        <translation type="unfinished">-paytxfee is verouderd en zal volledig worden verwijderd in versie 31.0.</translation>
+        <translation type="unfinished">-paytxfee is verouderd en zal volledig worden verwijderd in versie v2.0.</translation>
     </message>
     <message>
         <source>Block verification was interrupted</source>

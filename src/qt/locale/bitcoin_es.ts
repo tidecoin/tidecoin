@@ -4347,7 +4347,7 @@ No se puede restaurar la copia de seguridad del monedero.</translation>
     </message>
     <message>
         <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
-        <translation type="unfinished">-paytxfee está obsoleto y se eliminará por completo en la versión 31.0.</translation>
+        <translation type="unfinished">-paytxfee está obsoleto y se eliminará por completo en la versión v2.0.</translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>

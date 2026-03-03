@@ -2823,7 +2823,7 @@ Unable to restore backup of wallet.</source>
     </message>
     <message>
         <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
-        <translation type="unfinished">-paytxfee устарел и будет полностью удален в версии 31.0.</translation>
+        <translation type="unfinished">-paytxfee устарел и будет полностью удален в версии v2.0.</translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>

@@ -4428,7 +4428,7 @@ Ní féidir cúltaca an sparán a chur ar ais.</translation>
     </message>
     <message>
         <source>-paytxfee is deprecated and will be fully removed in v2.0.</source>
-        <translation type="unfinished">Tá -paytxfee imithe i léig agus bainfear go hiomlán é i leagan 31.0.</translation>
+        <translation type="unfinished">Tá -paytxfee imithe i léig agus bainfear go hiomlán é i leagan v2.0.</translation>
     </message>
     <message>
         <source>A fatal internal error occurred, see debug.log for details: </source>

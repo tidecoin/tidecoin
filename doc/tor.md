@@ -3,13 +3,6 @@
 It is possible to run Tidecoin as a Tor onion service, and connect to such services.
 
 The following directions assume you have a Tor proxy running on port 9050. Many distributions default to having a SOCKS proxy listening on port 9050, but others may not. In particular, the Tor Browser Bundle defaults to listening on port 9150.
-## Compatibility
-
-- Starting with version 22.0, Tidecoin only supports Tor version 3 hidden
-  services (Tor v3). Tor v2 addresses are ignored by Tidecoin and neither
-  relayed nor stored.
-
-- Tor removed v2 support beginning with version 0.4.6.
 
 ## Security reporting
 
