@@ -6,7 +6,7 @@
 #define BITCOIN_QT_OPTIONSMODEL_H
 
 #include <cstdint>
-#include <qt/bitcoinunits.h>
+#include <qt/tidecoinunits.h>
 #include <qt/guiconstants.h>
 
 #include <QAbstractListModel>

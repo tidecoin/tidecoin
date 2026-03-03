@@ -11,7 +11,7 @@
 #include <qt/walletmodel.h>
 
 #include <common/signmessage.h>
-#include <bitcoin-build-config.h> // IWYU pragma: keep
+#include <tidecoin-build-config.h> // IWYU pragma: keep
 #include <key_io.h>
 #include <wallet/wallet.h>
 

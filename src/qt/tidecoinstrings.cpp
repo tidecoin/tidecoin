@@ -8,7 +8,7 @@
 #define UNUSED
 #endif
 
-static const char UNUSED *bitcoin_strings[] = {
+static const char UNUSED *tidecoin_strings[] = {
 QT_TRANSLATE_NOOP("bitcoin-core", "%s failed to validate the -assumeutxo snapshot state. This indicates a hardware problem, or a bug in the software, or a bad software modification that allowed an invalid snapshot to be loaded. As a result of this, the node will shut down and stop using any state that was built on the snapshot, resetting the chain height from %d to %d. On the next restart, the node will resume syncing from %d without using any snapshot data. Please report this incident to %s, including how you obtained the snapshot. The invalid snapshot chainstate will be left on disk in case it is helpful in diagnosing the issue that caused this error."),
 QT_TRANSLATE_NOOP("bitcoin-core", "%s is set very high!"),
 QT_TRANSLATE_NOOP("bitcoin-core", "%s is set very high! Fees this large could be paid on a single transaction."),

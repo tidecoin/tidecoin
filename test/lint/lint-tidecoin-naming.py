@@ -12,6 +12,8 @@ import sys
 
 
 ACTIVE_PATHS = (
+    "src",
+    "ci",
     "contrib",
     "doc",
     "share",
@@ -22,19 +24,23 @@ ACTIVE_PATHS = (
 )
 
 EXCLUDE_PATHSPECS = (
+    # Translation catalogs intentionally preserve upstream source text fragments.
+    ":(exclude)src/qt/locale/**",
     ":(exclude)doc/release-notes/**",
 )
 
 FORBIDDEN_PATTERNS = (
     (re.compile(r"\bbitcoin\.conf\b"), "Use tidecoin.conf"),
-    (re.compile(r"\bbitcoind\b"), "Use tidecoind"),
+    # Avoid flagging source file references like src/tidecoind.cpp.
+    (re.compile(r"\bbitcoind\b(?!\.cpp\b)"), "Use tidecoind"),
     (re.compile(r"\bbitcoin-cli\b"), "Use tidecoin-cli"),
     (re.compile(r"\bbitcoin-qt\b"), "Use tidecoin-qt"),
     (re.compile(r"\bbitcoin-tx\b"), "Use tidecoin-tx"),
     (re.compile(r"\bbitcoin-wallet\b"), "Use tidecoin-wallet"),
     (re.compile(r"\bbitcoin-util\b"), "Use tidecoin-util"),
     (re.compile(r"\bbitcoin-chainstate\b"), "Use tidecoin-chainstate"),
-    (re.compile(r"\.bitcoin\b"), "Use Tidecoin datadir naming"),
+    # Match datadir path segment ".bitcoin" but ignore hostnames like en.bitcoin.it.
+    (re.compile(r"(?<![A-Za-z0-9])\.bitcoin\b"), "Use Tidecoin datadir naming"),
     (re.compile(r"/etc/bitcoin\b"), "Use /etc/tidecoin"),
     (re.compile(r"/var/lib/bitcoind\b"), "Use /var/lib/tidecoind"),
     (re.compile(r"org\.bitcoin(?:\.bitcoind)?\b"), "Use org.tidecoin.* identifiers"),

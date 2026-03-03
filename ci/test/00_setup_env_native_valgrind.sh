@@ -16,6 +16,6 @@ export NO_DEPENDS=1
 export TEST_RUNNER_EXTRA="--exclude rpc_bind,feature_bind_extra"
 export GOAL="install"
 # TODO enable GUI
-export BITCOIN_CONFIG="\
+export TIDECOIN_CONFIG="\
  -DWITH_ZMQ=ON -DBUILD_GUI=OFF \
 "

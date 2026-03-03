@@ -2,7 +2,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://opensource.org/license/mit/.
 
-add_library(bitcoin_quantum STATIC EXCLUDE_FROM_ALL
+add_library(tidecoin_quantum STATIC EXCLUDE_FROM_ALL
   fips202.c
   randombytes.cpp
   falcon512.c
@@ -63,13 +63,13 @@ add_library(bitcoin_quantum STATIC EXCLUDE_FROM_ALL
   ml-kem-512/verify.c
 )
 
-target_link_libraries(bitcoin_quantum
+target_link_libraries(tidecoin_quantum
   PRIVATE
     core_interface
-    bitcoin_util
+    tidecoin_util
 )
 
-target_include_directories(bitcoin_quantum
+target_include_directories(tidecoin_quantum
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )

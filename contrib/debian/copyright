@@ -1,14 +1,15 @@
 Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: Bitcoin
-Upstream-Contact: Satoshi Nakamoto <satoshin@gmx.com>
- irc://#bitcoin-core-dev@libera.chat
-Source: https://github.com/bitcoin/bitcoin
+Upstream-Name: Tidecoin
+Upstream-Contact: The Tidecoin developers
+ https://github.com/tidecoin/tidecoin/issues
+Source: https://github.com/tidecoin/tidecoin
 
 Files: *
 Copyright: 2009-2025, Bitcoin Core Developers
+           2020-2026, The Tidecoin developers
 License: Expat
-Comment: The Bitcoin Core Developers encompasses all contributors to the
-         project, listed in the release notes or the git log.
+Comment: Copyright includes upstream Bitcoin Core-era contributors and
+         Tidecoin-era contributors, listed in the release notes or the git log.
 
 Files: debian/*
 Copyright: 2010-2011, Jonas Smedegaard <dr@jones.dk>
@@ -67,9 +68,9 @@ Copyright: Stephen Hutchings, Jonas Schnelli
 License: Expat
 Comment: Modifications of Stephen Hutchings' Typicons
 
-Files: src/qt/res/icons/bitcoin.*
-       share/pixmaps/bitcoin*
-       src/qt/res/src/bitcoin.svg
+Files: src/qt/res/icons/tidecoin.*
+       share/pixmaps/tidecoin*
+       src/qt/res/src/tidecoin.svg
 Copyright: Bitboy, Jonas Schnelli
 License: public-domain
 Comment: Site: https://bitcointalk.org/?topic=1756.0

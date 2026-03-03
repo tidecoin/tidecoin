@@ -16,7 +16,7 @@ import os
 
 EXCLUDE = [
     # auto generated:
-    'src/qt/bitcoinstrings.cpp',
+    'src/qt/tidecoinstrings.cpp',
     'src/chainparamsseeds.h',
     # other external copyrights:
     'src/test/fuzz/FuzzedDataProvider.h',

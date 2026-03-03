@@ -12,10 +12,10 @@ export CI_BASE_PACKAGES="gcc-c++ glibc-devel libstdc++-devel ccache make ninja-b
 export PIP_PACKAGES="pyzmq pycapnp"
 export DEP_OPTS="DEBUG=1"
 export GOAL="install"
-export BITCOIN_CONFIG="\
+export TIDECOIN_CONFIG="\
  -DWITH_ZMQ=ON \
  -DBUILD_GUI=ON \
  -DREDUCE_EXPORTS=ON \
  -DCMAKE_BUILD_TYPE=Debug \
 "
-export BITCOIN_CMD="bitcoin -m" # Used in functional tests
+export TIDECOIN_CMD="tidecoin -m" # Used in functional tests

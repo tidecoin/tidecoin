@@ -22,18 +22,17 @@ The Transifex mapping used by this repository is defined in [`.tx/config`](/.tx/
 We use automated scripts to extract translations in both Qt and non-Qt source
 files. It is rarely necessary to manually edit files in `src/qt/locale/`.
 
-Locale filenames in this repository currently use the upstream-compatible
-`bitcoin_*` namespace, for example:
-`bitcoin_xx_YY.ts or bitcoin_xx.ts`
+Locale filenames in this repository use the Tidecoin namespace, for example:
+`tidecoin_xx_YY.ts or tidecoin_xx.ts`
 
-`src/qt/locale/bitcoin_en.ts` is treated specially as the source language file.
+`src/qt/locale/tidecoin_en.ts` is treated specially as the source language file.
 When source strings change, this file must be refreshed. The `translate` build
 target uses `gettext`, `lupdate`, and `lconvert` to regenerate:
-- `src/qt/bitcoinstrings.cpp`
-- `src/qt/locale/bitcoin_en.ts`
-- `src/qt/locale/bitcoin_en.xlf`
+- `src/qt/tidecoinstrings.cpp`
+- `src/qt/locale/tidecoin_en.ts`
+- `src/qt/locale/tidecoin_en.xlf`
 
-To automatically regenerate the `bitcoin_en.ts` file, run the following commands:
+To automatically regenerate the `tidecoin_en.ts` file, run the following commands:
 ```sh
 cmake -B build
 cmake --build build --target translate
@@ -54,7 +53,7 @@ After processing, the strings appear as untranslated in the Transifex web UI.
 
 For translation refresh PRs, stage the actual changed files, for example:
 ```
-git add src/qt/bitcoinstrings.cpp src/qt/locale/*.ts src/qt/locale/bitcoin_en.xlf
+git add src/qt/tidecoinstrings.cpp src/qt/locale/*.ts src/qt/locale/tidecoin_en.xlf
 git commit
 ```
 
@@ -91,7 +90,7 @@ use the configured CLI workflow so changes are reproducible and reviewable.
 ### Handling Plurals (in source files)
 When new plurals are added to the source file, it's important to do the following steps:
 
-1. Open `bitcoin_en.ts` in Qt Linguist (included in the Qt SDK)
+1. Open `tidecoin_en.ts` in Qt Linguist (included in the Qt SDK)
 2. Search for `%n`, which will take you to the parts in the translation that use plurals
 3. Look for empty `English Translation (Singular)` and `English Translation (Plural)` fields
 4. Add the appropriate strings for the singular and plural form of the base string
@@ -100,11 +99,11 @@ When new plurals are added to the source file, it's important to do the followin
 7. Save the source file
 
 ### Translating a new language
-To create a new language template, you will need to edit the languages manifest file `src/qt/bitcoin_locale.qrc` and add a new entry. Below is an example of the English language entry.
+To create a new language template, you will need to edit the languages manifest file `src/qt/tidecoin_locale.qrc` and add a new entry. Below is an example of the English language entry.
 
 ```xml
 <qresource prefix="/translations">
-    <file alias="en">locale/bitcoin_en.qm</file>
+    <file alias="en">locale/tidecoin_en.qm</file>
     ...
 </qresource>
 ```

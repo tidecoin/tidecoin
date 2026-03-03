@@ -12,7 +12,7 @@
 #include <node/psbt.h>
 #include <node/types.h>
 #include <policy/policy.h>
-#include <qt/bitcoinunits.h>
+#include <qt/tidecoinunits.h>
 #include <qt/forms/ui_psbtoperationsdialog.h>
 #include <qt/guiutil.h>
 #include <qt/optionsmodel.h>

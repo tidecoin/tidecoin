@@ -4,12 +4,12 @@
 
 include(GNUInstallDirs)
 
-# TODO: libbitcoinkernel is a work in progress consensus engine
+# TODO: libtidecoinkernel is a work in progress consensus engine
 #       library, as more and more modules are decoupled from the
 #       consensus engine, this list will shrink to only those
 #       which are absolutely necessary.
-add_library(bitcoinkernel
-  bitcoinkernel.cpp
+add_library(tidecoinkernel
+  tidecoinkernel.cpp
   chain.cpp
   checks.cpp
   chainparams.cpp
@@ -80,44 +80,42 @@ add_library(bitcoinkernel
   ../validation.cpp
   ../validationinterface.cpp
   ../versionbits.cpp
-  $<TARGET_OBJECTS:bitcoin_clientversion>
-  $<TARGET_OBJECTS:bitcoin_crypto>
+  $<TARGET_OBJECTS:tidecoin_clientversion>
+  $<TARGET_OBJECTS:tidecoin_crypto>
   $<TARGET_OBJECTS:leveldb>
   $<TARGET_OBJECTS:crc32c>
 )
-target_link_libraries(bitcoinkernel
+target_link_libraries(tidecoinkernel
   PRIVATE
     core_interface
-    bitcoin_quantum
+    tidecoin_quantum
     $<$<PLATFORM_ID:Windows>:bcrypt>
     $<TARGET_NAME_IF_EXISTS:USDT::headers>
   PUBLIC
     Boost::headers
 )
 
-target_include_directories(bitcoinkernel PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/leveldb/include>)
+target_include_directories(tidecoinkernel PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/leveldb/include>)
 
-# libbitcoinkernel requires default symbol visibility, explicitly
+# libtidecoinkernel requires default symbol visibility, explicitly
 # specify that here so that things still work even when user
 # configures with -DREDUCE_EXPORTS=ON
 #
 # Note this is a quick hack that will be removed as we
 # incrementally define what to export from the library.
-set_target_properties(bitcoinkernel PROPERTIES
+set_target_properties(tidecoinkernel PROPERTIES
   CXX_VISIBILITY_PRESET default
   OUTPUT_NAME tidecoinkernel
 )
 
 # Add convenience targets for building the kernel library.
 add_custom_target(libtidecoinkernel)
-add_dependencies(libtidecoinkernel bitcoinkernel)
-add_custom_target(libbitcoinkernel)
-add_dependencies(libbitcoinkernel bitcoinkernel)
+add_dependencies(libtidecoinkernel tidecoinkernel)
 
 configure_file(${PROJECT_SOURCE_DIR}/libtidecoinkernel.pc.in ${PROJECT_BINARY_DIR}/libtidecoinkernel.pc @ONLY)
 install(FILES ${PROJECT_BINARY_DIR}/libtidecoinkernel.pc DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig" COMPONENT libtidecoinkernel)
 
-install(TARGETS bitcoinkernel
+install(TARGETS tidecoinkernel
   RUNTIME
     DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT libtidecoinkernel

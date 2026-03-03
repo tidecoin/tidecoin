@@ -736,7 +736,7 @@ and its `cs_KeyStore` lock for example).
 
 ## Threads
 
-- [Main thread (`tidecoind`)](../src/bitcoind.cpp)
+- [Main thread (`tidecoind`)](../src/tidecoind.cpp)
   : Started from `main()` in `tidecoind.cpp`. Responsible for starting up and
   shutting down the application.
 

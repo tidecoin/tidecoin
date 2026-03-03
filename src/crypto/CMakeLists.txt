@@ -2,7 +2,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://opensource.org/license/mit/.
 
-add_library(bitcoin_crypto STATIC EXCLUDE_FROM_ALL
+add_library(tidecoin_crypto STATIC EXCLUDE_FROM_ALL
   aes.cpp
   chacha20.cpp
   chacha20poly1305.cpp
@@ -26,46 +26,46 @@ add_library(bitcoin_crypto STATIC EXCLUDE_FROM_ALL
   ../support/cleanse.cpp
 )
 
-target_link_libraries(bitcoin_crypto
+target_link_libraries(tidecoin_crypto
   PRIVATE
     core_interface
 )
 
 if(HAVE_SSE2)
-  target_compile_definitions(bitcoin_crypto PRIVATE USE_SSE2)
-  target_sources(bitcoin_crypto PRIVATE scrypt-sse2.cpp)
+  target_compile_definitions(tidecoin_crypto PRIVATE USE_SSE2)
+  target_sources(tidecoin_crypto PRIVATE scrypt-sse2.cpp)
   set_property(SOURCE scrypt-sse2.cpp PROPERTY
     COMPILE_OPTIONS ${SSE2_CXXFLAGS}
   )
 endif()
 
 if(HAVE_SSE41)
-  target_compile_definitions(bitcoin_crypto PRIVATE ENABLE_SSE41)
-  target_sources(bitcoin_crypto PRIVATE sha256_sse41.cpp)
+  target_compile_definitions(tidecoin_crypto PRIVATE ENABLE_SSE41)
+  target_sources(tidecoin_crypto PRIVATE sha256_sse41.cpp)
   set_property(SOURCE sha256_sse41.cpp PROPERTY
     COMPILE_OPTIONS ${SSE41_CXXFLAGS}
   )
 endif()
 
 if(HAVE_AVX2)
-  target_compile_definitions(bitcoin_crypto PRIVATE ENABLE_AVX2)
-  target_sources(bitcoin_crypto PRIVATE sha256_avx2.cpp)
+  target_compile_definitions(tidecoin_crypto PRIVATE ENABLE_AVX2)
+  target_sources(tidecoin_crypto PRIVATE sha256_avx2.cpp)
   set_property(SOURCE sha256_avx2.cpp PROPERTY
     COMPILE_OPTIONS ${AVX2_CXXFLAGS}
   )
 endif()
 
 if(HAVE_SSE41 AND HAVE_X86_SHANI)
-  target_compile_definitions(bitcoin_crypto PRIVATE ENABLE_SSE41 ENABLE_X86_SHANI)
-  target_sources(bitcoin_crypto PRIVATE sha256_x86_shani.cpp)
+  target_compile_definitions(tidecoin_crypto PRIVATE ENABLE_SSE41 ENABLE_X86_SHANI)
+  target_sources(tidecoin_crypto PRIVATE sha256_x86_shani.cpp)
   set_property(SOURCE sha256_x86_shani.cpp PROPERTY
     COMPILE_OPTIONS ${SSE41_CXXFLAGS} ${X86_SHANI_CXXFLAGS}
   )
 endif()
 
 if(HAVE_ARM_SHANI)
-  target_compile_definitions(bitcoin_crypto PRIVATE ENABLE_ARM_SHANI)
-  target_sources(bitcoin_crypto PRIVATE sha256_arm_shani.cpp)
+  target_compile_definitions(tidecoin_crypto PRIVATE ENABLE_ARM_SHANI)
+  target_sources(tidecoin_crypto PRIVATE sha256_arm_shani.cpp)
   set_property(SOURCE sha256_arm_shani.cpp PROPERTY
     COMPILE_OPTIONS ${ARM_SHANI_CXXFLAGS}
   )

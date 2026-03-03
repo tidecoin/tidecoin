@@ -62,7 +62,7 @@
 #include <validation.h>
 #include <validationinterface.h>
 
-#include <bitcoin-build-config.h> // IWYU pragma: keep
+#include <tidecoin-build-config.h> // IWYU pragma: keep
 
 #include <any>
 #include <memory>

@@ -6,7 +6,7 @@ sense to simply use this framework rather than require developers to
 configure some other framework (we want as few impediments to creating
 unit tests as possible).
 
-The build system is set up to compile a CMake target named `test_bitcoin`
+The build system is set up to compile a CMake target named `test_tidecoin`
 that produces an executable named `test_tidecoin`
 that runs all of the unit tests. The main source file for the test library is found in
 `util/setup_common.cpp`.
@@ -27,7 +27,7 @@ Run `build/bin/test_tidecoin --list_content` for the full list of tests.
 
 To run the unit tests manually, launch `build/bin/test_tidecoin`. To recompile
 after a test file was modified, run `cmake --build build` and then run the test again. If you
-modify a non-test file, use `cmake --build build --target test_bitcoin` to recompile only what's needed
+modify a non-test file, use `cmake --build build --target test_tidecoin` to recompile only what's needed
 to run the unit tests.
 
 To add more unit tests, add `BOOST_AUTO_TEST_CASE` functions to the existing

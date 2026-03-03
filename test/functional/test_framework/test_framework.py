@@ -50,7 +50,7 @@ TEST_EXIT_PASSED = 0
 TEST_EXIT_FAILED = 1
 TEST_EXIT_SKIPPED = 77
 
-TMPDIR_PREFIX = "bitcoin_func_test_"
+TMPDIR_PREFIX = "tidecoin_func_test_"
 
 
 class SkipTest(Exception):
@@ -77,42 +77,42 @@ class Binaries:
 
     def node_argv(self, **kwargs):
         "Return argv array that should be used to invoke tidecoind"
-        return self._argv("node", self.paths.bitcoind, **kwargs)
+        return self._argv("node", self.paths.tidecoind, **kwargs)
 
     def rpc_argv(self):
         "Return argv array that should be used to invoke tidecoin-cli"
-        # Add -nonamed because "bitcoin rpc" enables -named by default, but tidecoin-cli doesn't
-        return self._argv("rpc", self.paths.bitcoincli) + ["-nonamed"]
+        # Add -nonamed because "tidecoin rpc" enables -named by default, but tidecoin-cli doesn't
+        return self._argv("rpc", self.paths.tidecoincli) + ["-nonamed"]
 
     def tx_argv(self):
         "Return argv array that should be used to invoke tidecoin-tx"
-        return self._argv("tx", self.paths.bitcointx)
+        return self._argv("tx", self.paths.tidecointx)
 
     def util_argv(self):
         "Return argv array that should be used to invoke tidecoin-util"
-        return self._argv("util", self.paths.bitcoinutil)
+        return self._argv("util", self.paths.tidecoinutil)
 
     def wallet_argv(self):
         "Return argv array that should be used to invoke tidecoin-wallet"
-        return self._argv("wallet", self.paths.bitcoinwallet)
+        return self._argv("wallet", self.paths.tidecoinwallet)
 
     def chainstate_argv(self):
         "Return argv array that should be used to invoke tidecoin-chainstate"
-        return self._argv("chainstate", self.paths.bitcoinchainstate)
+        return self._argv("chainstate", self.paths.tidecoinchainstate)
 
     def _argv(self, command, bin_path, need_ipc=False):
         """Return argv array that should be used to invoke the command. It
-        either uses the bitcoin wrapper executable (if BITCOIN_CMD is set or
+        either uses the tidecoin wrapper executable (if TIDECOIN_CMD is set or
         need_ipc is True), or the direct binary path (tidecoind, etc). When
         bin_dir is set by the caller, it
         always uses the direct path."""
         if self.bin_dir is not None:
             return [os.path.join(self.bin_dir, os.path.basename(bin_path))]
-        elif self.paths.bitcoin_cmd is not None or need_ipc:
-            # If the current test needs IPC functionality, use the bitcoin
+        elif self.paths.tidecoin_cmd is not None or need_ipc:
+            # If the current test needs IPC functionality, use the tidecoin
             # wrapper binary and append -m so it calls multiprocess binaries.
-            bitcoin_cmd = self.paths.bitcoin_cmd or [self.paths.bitcoin_bin]
-            return bitcoin_cmd + (["-m"] if need_ipc else []) + [command]
+            tidecoin_cmd = self.paths.tidecoin_cmd or [self.paths.tidecoin_bin]
+            return tidecoin_cmd + (["-m"] if need_ipc else []) + [command]
         else:
             return [bin_path]
 
@@ -275,27 +275,27 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         """Get paths of all binaries from environment variables or their default values"""
 
         paths = types.SimpleNamespace()
-        binaries = {
-            "tidecoin": "BITCOIN_BIN",
-            "tidecoind": "BITCOIND",
-            "tidecoin-cli": "BITCOINCLI",
-            "tidecoin-util": "BITCOINUTIL",
-            "tidecoin-tx": "BITCOINTX",
-            "tidecoin-chainstate": "BITCOINCHAINSTATE",
-            "tidecoin-wallet": "BITCOINWALLET",
-        }
+        binaries = [
+            ("tidecoin_bin", "tidecoin", "TIDECOIN_BIN"),
+            ("tidecoind", "tidecoind", "TIDECOIND"),
+            ("tidecoincli", "tidecoin-cli", "TIDECOINCLI"),
+            ("tidecoinutil", "tidecoin-util", "TIDECOINUTIL"),
+            ("tidecointx", "tidecoin-tx", "TIDECOINTX"),
+            ("tidecoinchainstate", "tidecoin-chainstate", "TIDECOINCHAINSTATE"),
+            ("tidecoinwallet", "tidecoin-wallet", "TIDECOINWALLET"),
+        ]
         # Set paths to Tidecoin binaries allowing overrides with environment
         # variables.
-        for binary, env_variable_name in binaries.items():
+        for attr_name, binary, env_variable_name in binaries:
             default_filename = os.path.join(
                 self.config["environment"]["BUILDDIR"],
                 "bin",
                 binary + self.config["environment"]["EXEEXT"],
             )
-            setattr(paths, env_variable_name.lower(), os.getenv(env_variable_name, default=default_filename))
-        # BITCOIN_CMD environment variable can be specified to invoke tidecoin
+            setattr(paths, attr_name, os.getenv(env_variable_name, default=default_filename))
+        # TIDECOIN_CMD environment variable can be specified to invoke tidecoin
         # wrapper binary instead of other executables.
-        paths.bitcoin_cmd = shlex.split(os.getenv("BITCOIN_CMD", "")) or None
+        paths.tidecoin_cmd = shlex.split(os.getenv("TIDECOIN_CMD", "")) or None
         return paths
 
     def get_binaries(self, bin_dir=None):
@@ -1060,15 +1060,15 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
     def is_tidecoin_tx_compiled(self):
         """Checks whether tidecoin-tx was compiled."""
-        return self.config["components"].getboolean("BUILD_BITCOIN_TX")
+        return self.config["components"].getboolean("BUILD_TIDECOIN_TX")
 
     def is_tidecoin_util_compiled(self):
         """Checks whether tidecoin-util was compiled."""
-        return self.config["components"].getboolean("ENABLE_BITCOIN_UTIL")
+        return self.config["components"].getboolean("ENABLE_TIDECOIN_UTIL")
 
     def is_tidecoin_chainstate_compiled(self):
         """Checks whether tidecoin-chainstate was compiled."""
-        return self.config["components"].getboolean("ENABLE_BITCOIN_CHAINSTATE")
+        return self.config["components"].getboolean("ENABLE_TIDECOIN_CHAINSTATE")
 
     def is_zmq_compiled(self):
         """Checks whether the zmq module was compiled."""

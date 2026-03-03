@@ -4,7 +4,7 @@
 
 include(AddWindowsResources)
 
-configure_file(${PROJECT_SOURCE_DIR}/cmake/bitcoin-build-config.h.in bitcoin-build-config.h USE_SOURCE_PERMISSIONS @ONLY)
+configure_file(${PROJECT_SOURCE_DIR}/cmake/tidecoin-build-config.h.in tidecoin-build-config.h USE_SOURCE_PERMISSIONS @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 
 #=============================
@@ -36,19 +36,19 @@ if(NOT CMAKE_ARCHIVE_OUTPUT_DIRECTORY)
 endif()
 
 add_custom_target(generate_build_info
-  BYPRODUCTS ${PROJECT_BINARY_DIR}/src/bitcoin-build-info.h
-  COMMAND ${CMAKE_COMMAND} -DBUILD_INFO_HEADER_PATH=${PROJECT_BINARY_DIR}/src/bitcoin-build-info.h -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P ${PROJECT_SOURCE_DIR}/cmake/script/GenerateBuildInfo.cmake
-  COMMENT "Generating bitcoin-build-info.h"
+  BYPRODUCTS ${PROJECT_BINARY_DIR}/src/tidecoin-build-info.h
+  COMMAND ${CMAKE_COMMAND} -DBUILD_INFO_HEADER_PATH=${PROJECT_BINARY_DIR}/src/tidecoin-build-info.h -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P ${PROJECT_SOURCE_DIR}/cmake/script/GenerateBuildInfo.cmake
+  COMMENT "Generating tidecoin-build-info.h"
   VERBATIM
 )
-add_library(bitcoin_clientversion STATIC EXCLUDE_FROM_ALL
+add_library(tidecoin_clientversion STATIC EXCLUDE_FROM_ALL
   clientversion.cpp
 )
-target_link_libraries(bitcoin_clientversion
+target_link_libraries(tidecoin_clientversion
   PRIVATE
     core_interface
 )
-add_dependencies(bitcoin_clientversion generate_build_info)
+add_dependencies(tidecoin_clientversion generate_build_info)
 
 add_subdirectory(crypto)
 add_subdirectory(util)
@@ -57,7 +57,7 @@ if(ENABLE_IPC)
   add_subdirectory(ipc)
 endif()
 
-add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
+add_library(tidecoin_consensus STATIC EXCLUDE_FROM_ALL
   arith_uint256.cpp
   consensus/merkle.cpp
   consensus/tx_check.cpp
@@ -71,12 +71,12 @@ add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   script/script_error.cpp
   uint256.cpp
 )
-target_link_libraries(bitcoin_consensus
+target_link_libraries(tidecoin_consensus
   PRIVATE
     core_interface
-    bitcoin_crypto
+    tidecoin_crypto
   PUBLIC
-    bitcoin_quantum
+    tidecoin_quantum
 )
 
 if(WITH_ZMQ)
@@ -84,8 +84,8 @@ if(WITH_ZMQ)
 endif()
 
 # Home for common functionality shared by different executables and libraries.
-# Similar to `bitcoin_util` library, but higher-level.
-add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
+# Similar to `tidecoin_util` library, but higher-level.
+add_library(tidecoin_common STATIC EXCLUDE_FROM_ALL
   addresstype.cpp
   auxpow.cpp
   base58.cpp
@@ -141,18 +141,18 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   script/signingprovider.cpp
   script/solver.cpp
 )
-target_link_libraries(bitcoin_common
+target_link_libraries(tidecoin_common
   PRIVATE
     core_interface
-    bitcoin_consensus
-    bitcoin_crypto
-    bitcoin_util
+    tidecoin_consensus
+    tidecoin_crypto
+    tidecoin_util
     univalue
     Boost::headers
     $<TARGET_NAME_IF_EXISTS:USDT::headers>
     $<$<PLATFORM_ID:Windows>:ws2_32>
   PUBLIC
-    bitcoin_quantum
+    tidecoin_quantum
 )
 
 include(InstallBinaryComponent)
@@ -161,29 +161,29 @@ if(ENABLE_WALLET)
   add_subdirectory(wallet)
 
   if(BUILD_WALLET_TOOL)
-    add_executable(bitcoin-wallet
-      bitcoin-wallet.cpp
-      init/bitcoin-wallet.cpp
+    add_executable(tidecoin-wallet
+      tidecoin-wallet.cpp
+      init/tidecoin-wallet.cpp
       wallet/wallettool.cpp
     )
-    set_target_properties(bitcoin-wallet PROPERTIES OUTPUT_NAME tidecoin-wallet)
-    add_windows_resources(bitcoin-wallet bitcoin-wallet-res.rc)
-    add_windows_application_manifest(bitcoin-wallet)
-    target_link_libraries(bitcoin-wallet
+    set_target_properties(tidecoin-wallet PROPERTIES OUTPUT_NAME tidecoin-wallet)
+    add_windows_resources(tidecoin-wallet tidecoin-wallet-res.rc)
+    add_windows_application_manifest(tidecoin-wallet)
+    target_link_libraries(tidecoin-wallet
       core_interface
-      bitcoin_wallet
-      bitcoin_node
-      bitcoin_common
-      bitcoin_util
+      tidecoin_wallet
+      tidecoin_node
+      tidecoin_common
+      tidecoin_util
       Boost::headers
     )
-    install_binary_component(bitcoin-wallet HAS_MANPAGE)
+    install_binary_component(tidecoin-wallet HAS_MANPAGE)
   endif()
 endif()
 
 
-# P2P and RPC server functionality used by `bitcoind` and `bitcoin-qt` executables.
-add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
+# P2P and RPC server functionality used by `tidecoind` and `tidecoin-qt` executables.
+add_library(tidecoin_node STATIC EXCLUDE_FROM_ALL
   addrdb.cpp
   addrman.cpp
   banman.cpp
@@ -276,15 +276,15 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   validation.cpp
   validationinterface.cpp
   versionbits.cpp
-  $<$<TARGET_EXISTS:bitcoin_wallet>:wallet/init.cpp>
-  $<$<NOT:$<TARGET_EXISTS:bitcoin_wallet>>:dummywallet.cpp>
+  $<$<TARGET_EXISTS:tidecoin_wallet>:wallet/init.cpp>
+  $<$<NOT:$<TARGET_EXISTS:tidecoin_wallet>>:dummywallet.cpp>
 )
-target_link_libraries(bitcoin_node
+target_link_libraries(tidecoin_node
   PRIVATE
     core_interface
-    bitcoin_common
-    bitcoin_util
-    $<TARGET_NAME_IF_EXISTS:bitcoin_zmq>
+    tidecoin_common
+    tidecoin_util
+    $<TARGET_NAME_IF_EXISTS:tidecoin_zmq>
     leveldb
     minisketch
     univalue
@@ -296,68 +296,68 @@ target_link_libraries(bitcoin_node
 )
 
 # Bitcoin wrapper executable that can call other executables.
-if(BUILD_BITCOIN_BIN)
-  add_executable(bitcoin bitcoin.cpp)
-  set_target_properties(bitcoin PROPERTIES OUTPUT_NAME tidecoin)
-  add_windows_resources(bitcoin bitcoin-res.rc)
-  add_windows_application_manifest(bitcoin)
-  target_link_libraries(bitcoin core_interface bitcoin_util)
-  install_binary_component(bitcoin HAS_MANPAGE)
+if(BUILD_TIDECOIN_BIN)
+  add_executable(tidecoin tidecoin.cpp)
+  set_target_properties(tidecoin PROPERTIES OUTPUT_NAME tidecoin)
+  add_windows_resources(tidecoin tidecoin-res.rc)
+  add_windows_application_manifest(tidecoin)
+  target_link_libraries(tidecoin core_interface tidecoin_util)
+  install_binary_component(tidecoin HAS_MANPAGE)
 endif()
 
-# Bitcoin Core bitcoind.
+# Tidecoin daemon.
 if(BUILD_DAEMON)
-  add_executable(bitcoind
-    bitcoind.cpp
-    init/bitcoind.cpp
+  add_executable(tidecoind
+    tidecoind.cpp
+    init/tidecoind.cpp
   )
-  set_target_properties(bitcoind PROPERTIES OUTPUT_NAME tidecoind)
-  add_windows_resources(bitcoind bitcoind-res.rc)
-  add_windows_application_manifest(bitcoind)
-  target_link_libraries(bitcoind
+  set_target_properties(tidecoind PROPERTIES OUTPUT_NAME tidecoind)
+  add_windows_resources(tidecoind tidecoind-res.rc)
+  add_windows_application_manifest(tidecoind)
+  target_link_libraries(tidecoind
     core_interface
-    bitcoin_node
-    $<TARGET_NAME_IF_EXISTS:bitcoin_wallet>
+    tidecoin_node
+    $<TARGET_NAME_IF_EXISTS:tidecoin_wallet>
   )
-  install_binary_component(bitcoind HAS_MANPAGE)
+  install_binary_component(tidecoind HAS_MANPAGE)
 endif()
 if(ENABLE_IPC AND BUILD_DAEMON)
-  add_executable(bitcoin-node
-    bitcoind.cpp
-    init/bitcoin-node.cpp
+  add_executable(tidecoin-node
+    tidecoind.cpp
+    init/tidecoin-node.cpp
   )
-  set_target_properties(bitcoin-node PROPERTIES OUTPUT_NAME tidecoin-node)
-  target_link_libraries(bitcoin-node
+  set_target_properties(tidecoin-node PROPERTIES OUTPUT_NAME tidecoin-node)
+  target_link_libraries(tidecoin-node
     core_interface
-    bitcoin_node
-    bitcoin_ipc
-    $<TARGET_NAME_IF_EXISTS:bitcoin_wallet>
+    tidecoin_node
+    tidecoin_ipc
+    $<TARGET_NAME_IF_EXISTS:tidecoin_wallet>
   )
-  install_binary_component(bitcoin-node INTERNAL)
+  install_binary_component(tidecoin-node INTERNAL)
 endif()
 
 if(ENABLE_IPC AND BUILD_TESTS)
-    # bitcoin_ipc_test library target is defined here in src/CMakeLists.txt
+    # tidecoin_ipc_test library target is defined here in src/CMakeLists.txt
     # instead of src/test/CMakeLists.txt so capnp files in src/test/ are able to
     # reference capnp files in src/ipc/capnp/ by relative path. The Cap'n Proto
     # compiler only allows importing by relative path when the importing and
     # imported files are underneath the same compilation source prefix, so the
     # source prefix must be src/, not src/test/
-    add_library(bitcoin_ipc_test STATIC EXCLUDE_FROM_ALL
+    add_library(tidecoin_ipc_test STATIC EXCLUDE_FROM_ALL
       test/ipc_test.cpp
     )
-    target_capnp_sources(bitcoin_ipc_test ${PROJECT_SOURCE_DIR}
+    target_capnp_sources(tidecoin_ipc_test ${PROJECT_SOURCE_DIR}
       test/ipc_test.capnp
     )
-    add_dependencies(bitcoin_ipc_test bitcoin_ipc_headers)
+    add_dependencies(tidecoin_ipc_test tidecoin_ipc_headers)
 endif()
 
 
-add_library(bitcoin_cli STATIC EXCLUDE_FROM_ALL
+add_library(tidecoin_cli STATIC EXCLUDE_FROM_ALL
   compat/stdin.cpp
   rpc/client.cpp
 )
-target_link_libraries(bitcoin_cli
+target_link_libraries(tidecoin_cli
   PUBLIC
     core_interface
     univalue
@@ -366,48 +366,48 @@ target_link_libraries(bitcoin_cli
 
 # Bitcoin Core RPC client
 if(BUILD_CLI)
-  add_executable(bitcoin-cli bitcoin-cli.cpp)
-  set_target_properties(bitcoin-cli PROPERTIES OUTPUT_NAME tidecoin-cli)
-  add_windows_resources(bitcoin-cli bitcoin-cli-res.rc)
-  add_windows_application_manifest(bitcoin-cli)
-  target_link_libraries(bitcoin-cli
+  add_executable(tidecoin-cli tidecoin-cli.cpp)
+  set_target_properties(tidecoin-cli PROPERTIES OUTPUT_NAME tidecoin-cli)
+  add_windows_resources(tidecoin-cli tidecoin-cli-res.rc)
+  add_windows_application_manifest(tidecoin-cli)
+  target_link_libraries(tidecoin-cli
     core_interface
-    bitcoin_cli
-    bitcoin_common
-    bitcoin_util
+    tidecoin_cli
+    tidecoin_common
+    tidecoin_util
     libevent::core
     libevent::extra
   )
-  install_binary_component(bitcoin-cli HAS_MANPAGE)
+  install_binary_component(tidecoin-cli HAS_MANPAGE)
 endif()
 
 
 if(BUILD_TX)
-  add_executable(bitcoin-tx bitcoin-tx.cpp)
-  set_target_properties(bitcoin-tx PROPERTIES OUTPUT_NAME tidecoin-tx)
-  add_windows_resources(bitcoin-tx bitcoin-tx-res.rc)
-  add_windows_application_manifest(bitcoin-tx)
-  target_link_libraries(bitcoin-tx
+  add_executable(tidecoin-tx tidecoin-tx.cpp)
+  set_target_properties(tidecoin-tx PROPERTIES OUTPUT_NAME tidecoin-tx)
+  add_windows_resources(tidecoin-tx tidecoin-tx-res.rc)
+  add_windows_application_manifest(tidecoin-tx)
+  target_link_libraries(tidecoin-tx
     core_interface
-    bitcoin_common
-    bitcoin_util
+    tidecoin_common
+    tidecoin_util
     univalue
   )
-  install_binary_component(bitcoin-tx HAS_MANPAGE)
+  install_binary_component(tidecoin-tx HAS_MANPAGE)
 endif()
 
 
 if(BUILD_UTIL)
-  add_executable(bitcoin-util bitcoin-util.cpp)
-  set_target_properties(bitcoin-util PROPERTIES OUTPUT_NAME tidecoin-util)
-  add_windows_resources(bitcoin-util bitcoin-util-res.rc)
-  add_windows_application_manifest(bitcoin-util)
-  target_link_libraries(bitcoin-util
+  add_executable(tidecoin-util tidecoin-util.cpp)
+  set_target_properties(tidecoin-util PROPERTIES OUTPUT_NAME tidecoin-util)
+  add_windows_resources(tidecoin-util tidecoin-util-res.rc)
+  add_windows_application_manifest(tidecoin-util)
+  target_link_libraries(tidecoin-util
     core_interface
-    bitcoin_common
-    bitcoin_util
+    tidecoin_common
+    tidecoin_util
   )
-  install_binary_component(bitcoin-util HAS_MANPAGE)
+  install_binary_component(tidecoin-util HAS_MANPAGE)
 endif()
 
 
@@ -421,25 +421,25 @@ if(BUILD_KERNEL_LIB)
 endif()
 
 if(BUILD_UTIL_CHAINSTATE)
-  add_executable(bitcoin-chainstate
-    bitcoin-chainstate.cpp
+  add_executable(tidecoin-chainstate
+    tidecoin-chainstate.cpp
   )
-  set_target_properties(bitcoin-chainstate PROPERTIES OUTPUT_NAME tidecoin-chainstate)
+  set_target_properties(tidecoin-chainstate PROPERTIES OUTPUT_NAME tidecoin-chainstate)
   # TODO: The `SKIP_BUILD_RPATH` property setting can be deleted
   #       in the future after reordering Guix script commands to
   #       perform binary checks after the installation step.
   # Relevant discussions:
   # - https://github.com/hebasto/bitcoin/pull/236#issuecomment-2183120953
   # - https://github.com/bitcoin/bitcoin/pull/30312#issuecomment-2191235833
-  set_target_properties(bitcoin-chainstate PROPERTIES
+  set_target_properties(tidecoin-chainstate PROPERTIES
     SKIP_BUILD_RPATH OFF
   )
-  target_link_libraries(bitcoin-chainstate
+  target_link_libraries(tidecoin-chainstate
     PRIVATE
       core_interface
-      bitcoinkernel
+      tidecoinkernel
   )
-  install_binary_component(bitcoin-chainstate INTERNAL)
+  install_binary_component(tidecoin-chainstate INTERNAL)
 endif()
 
 

@@ -166,11 +166,11 @@ BASE_SCRIPTS = [
     'interface_zmq.py',
     'rpc_invalid_address_message.py',
     'rpc_validateaddress.py',
-    'interface_bitcoin_cli.py',
+    'interface_tidecoin_cli.py',
     'feature_bind_extra.py',
     'mempool_resurrect.py',
     'wallet_txn_doublespend.py --mineblock',
-    'tool_bitcoin_chainstate.py',
+    'tool_tidecoin_chainstate.py',
     'tool_wallet.py',
     'tool_utils.py',
     'wallet_txn_clone.py',
@@ -449,9 +449,9 @@ def main():
         assert results_filepath.parent.exists(), "Results file parent directory does not exist"
         logging.debug("Test results will be written to " + str(results_filepath))
 
-    enable_bitcoind = config["components"].getboolean("ENABLE_BITCOIND")
+    enable_tidecoind = config["components"].getboolean("ENABLE_TIDECOIND")
 
-    if not enable_bitcoind:
+    if not enable_tidecoind:
         print("No functional tests to run.")
         print("Re-compile with the -DBUILD_DAEMON=ON build option")
         sys.exit(1)

@@ -32,14 +32,14 @@ To run:
 
 - Functional tests used to ensure proper functionality of the GUI. Significant changes to the GUI code normally require new or updated tests.
 
-#### bitcoingui.(h/cpp)
+#### tidecoingui.(h/cpp)
 
 - Represents the main window of the Tidecoin UI.
 
 #### \*model.(h/cpp)
 
 - The model. When it has a corresponding controller, it generally inherits from  [QAbstractTableModel](https://doc.qt.io/qt-5/qabstracttablemodel.html). Models that are used by controllers as helpers inherit from other Qt classes like [QValidator](https://doc.qt.io/qt-5/qvalidator.html).
-- ClientModel is used by the main application `bitcoingui` and several models like `peertablemodel`.
+- ClientModel is used by the main application `tidecoingui` and several models like `peertablemodel`.
 
 #### \*page.(h/cpp)
 
@@ -60,8 +60,8 @@ To run:
 #### Other .h/cpp files
 
 * UI elements like BitcoinAmountField, which inherit from QWidget.
-* `bitcoinstrings.cpp`: automatically generated
-* `bitcoinunits.(h/cpp)`: TDC / tides / etc. handling
+* `tidecoinstrings.cpp`: automatically generated
+* `tidecoinunits.(h/cpp)`: TDC / tides / etc. handling
 * `callback.h`
 * `guiconstants.h`: UI colors, app name, etc.
 * `guiutil.h`: several helper functions
@@ -72,7 +72,7 @@ To run:
 
 See [CONTRIBUTING.md](/CONTRIBUTING.md) for general guidelines.
 
-**Note:** Do not change `local/bitcoin_en.ts`. It is updated [automatically](/doc/translation_process.md#writing-code-with-translations).
+**Note:** Do not change `locale/tidecoin_en.ts`. It is updated [automatically](/doc/translation_process.md#writing-code-with-translations).
 
 ## Using Qt Creator as an IDE
 

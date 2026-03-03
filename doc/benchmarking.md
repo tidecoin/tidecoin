@@ -9,14 +9,14 @@ Running
 ---------------------
 
 For benchmarking, you only need to enable benchmark builds and compile the
-`bench_bitcoin` CMake target (it produces the `bench_tidecoin` executable). The
+`bench_tidecoin` CMake target (it produces the `bench_tidecoin` executable). The
 bench runner
 warns if you configure with `-DCMAKE_BUILD_TYPE=Debug`, but consider if building without
 it will impact the benchmark(s) you are interested in by unlatching log printers
 and lock analysis.
 
     cmake -B build -DBUILD_BENCH=ON
-    cmake --build build --target bench_bitcoin
+    cmake --build build --target bench_tidecoin
 
 After compiling Tidecoin, the benchmarks can be run with:
 
@@ -51,9 +51,8 @@ Help
 To print the various options, like listing the benchmarks without running them
 or using a regex filter to only run certain benchmarks.
 
-Note: the help banner currently says `bench_bitcoin` even when invoked as
-`bench_tidecoin`. This is expected and comes from internal benchmark code
-strings.
+Note: the help banner should display `bench_tidecoin`. If it diverges from the
+binary name, treat it as a benchmark help-text consistency bug.
 
 Notes
 ---------------------

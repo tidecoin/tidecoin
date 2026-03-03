@@ -3,7 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <bitcoin-build-config.h> // IWYU pragma: keep
+#include <tidecoin-build-config.h> // IWYU pragma: keep
 
 #include <chainparams.h>
 #include <clientversion.h>
@@ -113,7 +113,7 @@ int fork_daemon(bool nochdir, bool noclose, TokenPipeEnd& endpoint)
 static bool ParseArgs(NodeContext& node, int argc, char* argv[])
 {
     ArgsManager& args{*Assert(node.args)};
-    // If Qt is used, parameters/tidecoin.conf are parsed in qt/bitcoin.cpp's main()
+    // If Qt is used, parameters/tidecoin.conf are parsed in qt/tidecoin.cpp's main()
     SetupServerArgs(args, node.init->canListenIpc());
     std::string error;
     if (!args.ParseParameters(argc, argv, error)) {

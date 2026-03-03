@@ -57,7 +57,7 @@ Release Process
     - Tidecoin currently uses a stable resource configured in [`.tx/config`](/.tx/config):
       `o:tidecoin:p:tidecoin:r:qt-translation`.
     - Do not rotate the resource slug per release unless there is a deliberate Transifex migration.
-    - Ensure the source file in Transifex matches `src/qt/locale/bitcoin_en.xlf`.
+    - Ensure the source file in Transifex matches `src/qt/locale/tidecoin_en.xlf`.
 
 #### After branch-off (on the major release branch)
 
@@ -68,7 +68,7 @@ Release Process
   `doc/release-notes.md`.
 - Translations on Transifex
     - If you run branch-specific translation sync, point the Transifex source URL to the release branch:
-      `https://raw.githubusercontent.com/tidecoin/tidecoin/<branch>/src/qt/locale/bitcoin_en.xlf`.
+      `https://raw.githubusercontent.com/tidecoin/tidecoin/<branch>/src/qt/locale/tidecoin_en.xlf`.
 
 #### Before final release
 

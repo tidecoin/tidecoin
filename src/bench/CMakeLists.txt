@@ -2,8 +2,8 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://opensource.org/license/mit/.
 
-add_executable(bench_bitcoin
-  bench_bitcoin.cpp
+add_executable(bench_tidecoin
+  bench_tidecoin.cpp
   bench.cpp
   nanobench.cpp
 # Benchmarks:
@@ -53,22 +53,22 @@ add_executable(bench_bitcoin
   util_time.cpp
   verify_script.cpp
 )
-set_target_properties(bench_bitcoin PROPERTIES OUTPUT_NAME bench_tidecoin)
+set_target_properties(bench_tidecoin PROPERTIES OUTPUT_NAME bench_tidecoin)
 
 include(TargetDataSources)
-target_raw_data_sources(bench_bitcoin NAMESPACE benchmark::data
+target_raw_data_sources(bench_tidecoin NAMESPACE benchmark::data
   data/block413567.raw
 )
 
-target_link_libraries(bench_bitcoin
+target_link_libraries(bench_tidecoin
   core_interface
   test_util
-  bitcoin_node
+  tidecoin_node
   Boost::headers
 )
 
 if(ENABLE_WALLET)
-  target_sources(bench_bitcoin
+  target_sources(bench_tidecoin
     PRIVATE
       coin_selection.cpp
       wallet_balance.cpp
@@ -78,11 +78,11 @@ if(ENABLE_WALLET)
       wallet_ismine.cpp
       wallet_migration.cpp
   )
-  target_link_libraries(bench_bitcoin bitcoin_wallet)
+  target_link_libraries(bench_tidecoin tidecoin_wallet)
 endif()
 
 add_test(NAME bench_sanity_check
-  COMMAND bench_bitcoin -sanity-check
+  COMMAND bench_tidecoin -sanity-check
 )
 
-install_binary_component(bench_bitcoin INTERNAL)
+install_binary_component(bench_tidecoin INTERNAL)

@@ -63,7 +63,7 @@
         <string/>
        </property>
        <property name="icon">
-        <iconset resource="../bitcoin.qrc">
+        <iconset resource="../tidecoin.qrc">
          <normaloff>:/icons/address-book</normaloff>:/icons/address-book</iconset>
        </property>
        <property name="iconSize">
@@ -86,7 +86,7 @@
         <string/>
        </property>
        <property name="icon">
-        <iconset resource="../bitcoin.qrc">
+        <iconset resource="../tidecoin.qrc">
          <normaloff>:/icons/editpaste</normaloff>:/icons/editpaste</iconset>
        </property>
        <property name="iconSize">
@@ -109,7 +109,7 @@
         <string/>
        </property>
        <property name="icon">
-        <iconset resource="../bitcoin.qrc">
+        <iconset resource="../tidecoin.qrc">
          <normaloff>:/icons/remove</normaloff>:/icons/remove</iconset>
        </property>
        <property name="iconSize">
@@ -224,7 +224,7 @@
   <customwidget>
    <class>BitcoinAmountField</class>
    <extends>QWidget</extends>
-   <header>qt/bitcoinamountfield.h</header>
+   <header>qt/tidecoinamountfield.h</header>
    <container>1</container>
   </customwidget>
  </customwidgets>
@@ -237,7 +237,7 @@
   <tabstop>payAmount</tabstop>
  </tabstops>
  <resources>
-  <include location="../bitcoin.qrc"/>
+  <include location="../tidecoin.qrc"/>
  </resources>
  <connections/>
 </ui>

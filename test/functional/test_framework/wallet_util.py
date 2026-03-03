@@ -49,7 +49,7 @@ def set_keygen_node(node):
     global _testkeys_path
     # Derive tool path from the node's binary location if available.
     try:
-        tidecoind_path = node.binaries.paths.bitcoind
+        tidecoind_path = node.binaries.paths.tidecoind
         _testkeys_path = os.path.join(os.path.dirname(tidecoind_path), "tidecoin-testkeys")
     except Exception:
         pass

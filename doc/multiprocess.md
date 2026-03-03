@@ -26,10 +26,10 @@ HOST_PLATFORM="x86_64-pc-linux-gnu"
 cmake -B build --toolchain=depends/$HOST_PLATFORM/toolchain.cmake
 cmake --build build
 build/bin/tidecoin -m node -regtest -printtoconsole -debug=ipc
-BITCOIN_CMD="tidecoin -m" build/test/functional/test_runner.py
+TIDECOIN_CMD="tidecoin -m" build/test/functional/test_runner.py
 ```
 
-`BITCOIN_CMD` is the expected (historical) functional test framework environment variable name.
+`TIDECOIN_CMD` is the functional test framework environment variable for invoking the Tidecoin wrapper in multiprocess mode.
 
 The `cmake` build will pick up settings and library locations from the depends directory, so there is no need to pass `-DENABLE_IPC=ON` as a separate flag when using the depends system (it's controlled by the `NO_IPC=1` option).
 

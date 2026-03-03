@@ -135,7 +135,7 @@ def main():
                     no_sha1 = False
 
 
-        os.environ['BITCOIN_VERIFY_COMMITS_ALLOW_SHA1'] = "0" if no_sha1 else "1"
+        os.environ['TIDECOIN_VERIFY_COMMITS_ALLOW_SHA1'] = "0" if no_sha1 else "1"
         allow_revsig = current_commit in revsig_allowed
 
         # Check that the commit (and parents) was signed with a trusted key
