@@ -60,7 +60,7 @@ function(extract_strings output)
 static const char UNUSED *tidecoin_strings[] = {
 ]])
 
-  set(prefix "QT_TRANSLATE_NOOP(\"bitcoin-core\", \"")
+  set(prefix "QT_TRANSLATE_NOOP(\"tidecoin-core\", \"")
   set(suffix "\"),\n")
 
   list(SORT messages)

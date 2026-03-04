@@ -32,7 +32,7 @@ std::optional<ConfigError> InitConfig(ArgsManager& args, SettingsAbortFn setting
         // parse error, and specifying a datadir= location containing another
         // tidecoin.conf file just ignores the other file.)
         const fs::path orig_datadir_path{args.GetDataDirBase()};
-        const fs::path orig_config_path{AbsPathForConfigVal(args, args.GetPathArg("-conf", BITCOIN_CONF_FILENAME), /*net_specific=*/false)};
+        const fs::path orig_config_path{AbsPathForConfigVal(args, args.GetPathArg("-conf", TIDECOIN_CONF_FILENAME), /*net_specific=*/false)};
 
         std::string error;
         if (!args.ReadConfigFiles(error, true)) {
@@ -64,13 +64,13 @@ std::optional<ConfigError> InitConfig(ArgsManager& args, SettingsAbortFn setting
 
         // Show an error or warn/log if there is a tidecoin.conf file in the
         // datadir that is being ignored.
-        const fs::path base_config_path = base_path / BITCOIN_CONF_FILENAME;
+        const fs::path base_config_path = base_path / TIDECOIN_CONF_FILENAME;
         if (fs::exists(base_config_path)) {
             if (orig_config_path.empty()) {
                 LogInfo(
                     "Data directory %s contains a %s file which is explicitly ignored using -noconf.",
                     fs::quoted(fs::PathToString(base_path)),
-                    fs::quoted(BITCOIN_CONF_FILENAME));
+                    fs::quoted(TIDECOIN_CONF_FILENAME));
             } else if (!fs::equivalent(orig_config_path, base_config_path)) {
                 const std::string cli_config_path = args.GetArg("-conf", "");
                 const std::string config_source = cli_config_path.empty()
@@ -83,7 +83,7 @@ std::optional<ConfigError> InitConfig(ArgsManager& args, SettingsAbortFn setting
                     "- Change datadir= or conf= options to specify one configuration file, not two, and use "
                     "includeconf= to include any other configuration files.",
                     fs::quoted(fs::PathToString(base_path)),
-                    fs::quoted(BITCOIN_CONF_FILENAME),
+                    fs::quoted(TIDECOIN_CONF_FILENAME),
                     fs::quoted(fs::PathToString(orig_config_path)),
                     config_source);
                 if (args.GetBoolArg("-allowignoredconf", false)) {

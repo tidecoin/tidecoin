@@ -184,29 +184,29 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <context-group purpose="location"><context context-type="linenumber">124</context></context-group>
       </trans-unit>
       <trans-unit id="_msg41">
+        <source xml:space="preserve">Remember that encrypting your wallet cannot fully protect your bitcoins from being stolen by malware infecting your computer.</source>
+        <context-group purpose="location"><context context-type="linenumber">116</context></context-group>
+      </trans-unit>
+      <trans-unit id="_msg42">
         <source xml:space="preserve">Wallet encrypted</source>
         <context-group purpose="location"><context context-type="linenumber">136</context></context-group>
         <context-group purpose="location"><context context-type="linenumber">194</context></context-group>
       </trans-unit>
-      <trans-unit id="_msg42">
+      <trans-unit id="_msg43">
         <source xml:space="preserve">Enter the new passphrase for the wallet.&lt;br/&gt;Please use a passphrase of &lt;b&gt;ten or more random characters&lt;/b&gt;, or &lt;b&gt;eight or more words&lt;/b&gt;.</source>
         <context-group purpose="location"><context context-type="linenumber">42</context></context-group>
       </trans-unit>
-      <trans-unit id="_msg43">
+      <trans-unit id="_msg44">
         <source xml:space="preserve">Enter the old passphrase and new passphrase for the wallet.</source>
         <context-group purpose="location"><context context-type="linenumber">58</context></context-group>
       </trans-unit>
-      <trans-unit id="_msg44">
+      <trans-unit id="_msg45">
         <source xml:space="preserve">Continue</source>
         <context-group purpose="location"><context context-type="linenumber">108</context></context-group>
       </trans-unit>
-      <trans-unit id="_msg45">
+      <trans-unit id="_msg46">
         <source xml:space="preserve">Back</source>
         <context-group purpose="location"><context context-type="linenumber">109</context></context-group>
-      </trans-unit>
-      <trans-unit id="_msg46">
-        <source xml:space="preserve">Remember that encrypting your wallet cannot fully protect your bitcoins from being stolen by malware infecting your computer.</source>
-        <context-group purpose="location"><context context-type="linenumber">116</context></context-group>
       </trans-unit>
       <trans-unit id="_msg47">
         <source xml:space="preserve">Wallet to be encrypted</source>
@@ -932,7 +932,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <context-group purpose="location"><context context-type="linenumber">413</context></context-group>
       </trans-unit>
       <trans-unit id="_msg212">
-        <source xml:space="preserve">Can vary +/- %1 satoshi(s) per input.</source>
+        <source xml:space="preserve">Can vary +/- %1 tideoshi(s) per input.</source>
         <context-group purpose="location"><context context-type="linenumber">560</context></context-group>
       </trans-unit>
       <trans-unit id="_msg213">
@@ -1408,7 +1408,7 @@ The migration process will create a backup of the wallet before migrating. This 
         <context-group purpose="location"><context context-type="linenumber">14</context></context-group>
       </trans-unit>
       <trans-unit id="_msg309">
-        <source xml:space="preserve">Attempting to spend bitcoins that are affected by not-yet-displayed transactions will not be accepted by the network.</source>
+        <source xml:space="preserve">Attempting to spend tidecoins that are affected by not-yet-displayed transactions will not be accepted by the network.</source>
         <context-group purpose="location"><context context-type="linenumber">152</context></context-group>
       </trans-unit>
       <trans-unit id="_msg310">
@@ -1481,7 +1481,7 @@ The migration process will create a backup of the wallet before migrating. This 
   <file original="../forms/openuridialog.ui" datatype="x-trolltech-designer-ui" source-language="en"><body>
     <group restype="x-trolltech-linguist-context" resname="OpenURIDialog">
       <trans-unit id="_msg324">
-        <source xml:space="preserve">Open bitcoin URI</source>
+        <source xml:space="preserve">Open tidecoin URI</source>
         <context-group purpose="location"><context context-type="linenumber">14</context></context-group>
       </trans-unit>
       <trans-unit id="_msg325">
@@ -3348,53 +3348,53 @@ For more information on using this console, type %6.
         <context-group purpose="location"><context context-type="linenumber">800</context></context-group>
       </trans-unit>
       <trans-unit id="_msg723">
-        <source xml:space="preserve">per kilobyte</source>
-        <context-group purpose="location"><context context-type="linenumber">882</context></context-group>
-      </trans-unit>
-      <trans-unit id="_msg724">
-        <source xml:space="preserve">Hide</source>
-        <context-group purpose="location"><context context-type="linenumber">829</context></context-group>
-      </trans-unit>
-      <trans-unit id="_msg725">
-        <source xml:space="preserve">Recommended:</source>
-        <context-group purpose="location"><context context-type="linenumber">941</context></context-group>
-      </trans-unit>
-      <trans-unit id="_msg726">
-        <source xml:space="preserve">Custom:</source>
-        <context-group purpose="location"><context context-type="linenumber">971</context></context-group>
-      </trans-unit>
-      <trans-unit id="_msg727">
-        <source xml:space="preserve">Send to multiple recipients at once</source>
-        <context-group purpose="location"><context context-type="linenumber">1186</context></context-group>
-      </trans-unit>
-      <trans-unit id="_msg728">
-        <source xml:space="preserve">Add &amp;Recipient</source>
-        <context-group purpose="location"><context context-type="linenumber">1189</context></context-group>
-      </trans-unit>
-      <trans-unit id="_msg729">
-        <source xml:space="preserve">Clear all fields of the form.</source>
-        <context-group purpose="location"><context context-type="linenumber">1169</context></context-group>
-      </trans-unit>
-      <trans-unit id="_msg730">
-        <source xml:space="preserve">Inputs…</source>
-        <context-group purpose="location"><context context-type="linenumber">110</context></context-group>
-      </trans-unit>
-      <trans-unit id="_msg731">
-        <source xml:space="preserve">Choose…</source>
-        <context-group purpose="location"><context context-type="linenumber">767</context></context-group>
-      </trans-unit>
-      <trans-unit id="_msg732">
-        <source xml:space="preserve">Hide transaction fee settings</source>
-        <context-group purpose="location"><context context-type="linenumber">826</context></context-group>
-      </trans-unit>
-      <trans-unit id="_msg733">
         <source xml:space="preserve">Specify a custom fee per kB (1,000 bytes) of the transaction&apos;s virtual size.
 
 Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 satoshis per kvB&quot; for a transaction size of 500 virtual bytes (half of 1 kvB) would ultimately yield a fee of only 50 satoshis.</source>
         <context-group purpose="location"><context context-type="linenumber">877</context></context-group>
       </trans-unit>
+      <trans-unit id="_msg724">
+        <source xml:space="preserve">per kilobyte</source>
+        <context-group purpose="location"><context context-type="linenumber">882</context></context-group>
+      </trans-unit>
+      <trans-unit id="_msg725">
+        <source xml:space="preserve">Hide</source>
+        <context-group purpose="location"><context context-type="linenumber">829</context></context-group>
+      </trans-unit>
+      <trans-unit id="_msg726">
+        <source xml:space="preserve">Recommended:</source>
+        <context-group purpose="location"><context context-type="linenumber">941</context></context-group>
+      </trans-unit>
+      <trans-unit id="_msg727">
+        <source xml:space="preserve">Custom:</source>
+        <context-group purpose="location"><context context-type="linenumber">971</context></context-group>
+      </trans-unit>
+      <trans-unit id="_msg728">
+        <source xml:space="preserve">Send to multiple recipients at once</source>
+        <context-group purpose="location"><context context-type="linenumber">1186</context></context-group>
+      </trans-unit>
+      <trans-unit id="_msg729">
+        <source xml:space="preserve">Add &amp;Recipient</source>
+        <context-group purpose="location"><context context-type="linenumber">1189</context></context-group>
+      </trans-unit>
+      <trans-unit id="_msg730">
+        <source xml:space="preserve">Clear all fields of the form.</source>
+        <context-group purpose="location"><context context-type="linenumber">1169</context></context-group>
+      </trans-unit>
+      <trans-unit id="_msg731">
+        <source xml:space="preserve">Inputs…</source>
+        <context-group purpose="location"><context context-type="linenumber">110</context></context-group>
+      </trans-unit>
+      <trans-unit id="_msg732">
+        <source xml:space="preserve">Choose…</source>
+        <context-group purpose="location"><context context-type="linenumber">767</context></context-group>
+      </trans-unit>
+      <trans-unit id="_msg733">
+        <source xml:space="preserve">Hide transaction fee settings</source>
+        <context-group purpose="location"><context context-type="linenumber">826</context></context-group>
+      </trans-unit>
       <trans-unit id="_msg734">
-        <source xml:space="preserve">When there is less transaction volume than space in the blocks, miners as well as relaying nodes may enforce a minimum fee. Paying only this minimum fee is just fine, but be aware that this can result in a never confirming transaction once there is more demand for bitcoin transactions than the network can process.</source>
+        <source xml:space="preserve">When there is less transaction volume than space in the blocks, miners as well as relaying nodes may enforce a minimum fee. Paying only this minimum fee is just fine, but be aware that this can result in a never confirming transaction once there is more demand for tidecoin transactions than the network can process.</source>
         <context-group purpose="location"><context context-type="linenumber">912</context></context-group>
       </trans-unit>
       <trans-unit id="_msg735">
@@ -3706,7 +3706,7 @@ Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 
         <context-group purpose="location"><context context-type="linenumber">166</context></context-group>
       </trans-unit>
       <trans-unit id="_msg805">
-        <source xml:space="preserve">The fee will be deducted from the amount being sent. The recipient will receive less bitcoins than you enter in the amount field. If multiple recipients are selected, the fee is split equally.</source>
+        <source xml:space="preserve">The fee will be deducted from the amount being sent. The recipient will receive less tidecoins than you enter in the amount field. If multiple recipients are selected, the fee is split equally.</source>
         <context-group purpose="location"><context context-type="linenumber">173</context></context-group>
       </trans-unit>
       <trans-unit id="_msg806">
@@ -3755,7 +3755,7 @@ Note:  Since the fee is calculated on a per-byte basis, a fee rate of &quot;100 
         <context-group purpose="location"><context context-type="linenumber">27</context></context-group>
       </trans-unit>
       <trans-unit id="_msg815">
-        <source xml:space="preserve">You can sign messages/agreements with your legacy (P2PKH) addresses to prove you can receive bitcoins sent to them. Be careful not to sign anything vague or random, as phishing attacks may try to trick you into signing your identity over to them. Only sign fully-detailed statements you agree to.</source>
+        <source xml:space="preserve">You can sign messages/agreements with your legacy (P2PKH) addresses to prove you can receive tidecoins sent to them. Be careful not to sign anything vague or random, as phishing attacks may try to trick you into signing your identity over to them. Only sign fully-detailed statements you agree to.</source>
         <context-group purpose="location"><context context-type="linenumber">33</context></context-group>
       </trans-unit>
       <trans-unit id="_msg816">
@@ -4526,7 +4526,7 @@ Go to File &gt; Open Wallet to load a wallet.
     </group>
   </body></file>
   <file original="../tidecoinstrings.cpp" datatype="cpp" source-language="en"><body>
-    <group restype="x-trolltech-linguist-context" resname="bitcoin-core">
+    <group restype="x-trolltech-linguist-context" resname="tidecoin-core">
       <trans-unit id="_msg985">
         <source xml:space="preserve">The %s developers</source>
         <context-group purpose="location"><context context-type="linenumber">212</context></context-group>

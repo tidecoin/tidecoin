@@ -19,7 +19,7 @@ find_package(CapnProto 0.7 QUIET NO_MODULE)
      "Cap'n Proto is required but was not found.\n"
      "To resolve, choose one of the following:\n"
      "  - Install Cap'n Proto (version 1.0+ recommended)\n"
-     "  - For Bitcoin Core compilation build with -DENABLE_IPC=OFF to disable multiprocess support\n"
+     "  - For Tidecoin Core compilation build with -DENABLE_IPC=OFF to disable multiprocess support\n"
    )
  endif()
 

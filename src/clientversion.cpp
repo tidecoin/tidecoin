@@ -76,7 +76,7 @@ std::string CopyrightHolders(const std::string& strPrefix)
 
     // Make sure Bitcoin Core copyright is not removed by accident
     if (copyright_devs.find("Bitcoin Core") == std::string::npos) {
-        strCopyrightHolders += "\n" + "Copyright (C) 2009-2026 The Bitcoin Core developers";
+        strCopyrightHolders += "\nCopyright (C) 2009-2026 The Bitcoin Core developers";
     }
     return strCopyrightHolders;
 }

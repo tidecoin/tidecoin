@@ -54,11 +54,11 @@
         <translation type="unfinished">C&amp;אויסקלײַבן</translation>
     </message>
     <message>
-        <source>These are your Bitcoin addresses for sending payments. Always check the amount and the receiving address before sending coins.</source>
+        <source>These are your Tidecoin addresses for sending payments. Always check the amount and the receiving address before sending coins.</source>
         <translation type="unfinished">דאס זיינע אייער ביטקוין אדרעסן צו שיקן צאלונגען. אלעמאל איבערקוקן די סומעאון די באקומער אדרעס איידער איר שיקט די מאָנעס.</translation>
     </message>
     <message>
-        <source>These are your Bitcoin addresses for receiving payments. Use the 'Create new receiving address' button in the receive tab to create new addresses.
+        <source>These are your Tidecoin addresses for receiving payments. Use the 'Create new receiving address' button in the receive tab to create new addresses.
 Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">די זענען אייער ביטקאָין־אַדרעסן פֿאַר באקומען צאָלונגען. ניצט דעם קנעפּל „שאַפֿן אַ נײַע באקומען־אַדרעס“ 
 אין די „באקומען“־טעב, צו שאַפֿן נײַעאַדרעסן.אונterschרייבן איז בלויז מעגלעך מיט אַדרעסן פון דעם טיפּ „לעגאַסי“.</translation>
@@ -188,7 +188,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">צוריק</translation>
     </message>
     <message>
-        <source>Remember that encrypting your wallet cannot fully protect your bitcoins from being stolen by malware infecting your computer.</source>
+        <source>Remember that encrypting your wallet cannot fully protect your tidecoins from being stolen by malware infecting your computer.</source>
         <translation type="unfinished">געדענקט אַז ענקריפּטינג דיין בייַטל טוט נישט גאָר באַשיצן דיין ביטקאָינס פון סטאָלען דורך מאַלוואַרע ינפעקטינג דיין קאָמפּיוטער.</translation>
     </message>
     <message>
@@ -387,7 +387,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         </translation>
     </message>
     <message numerus="yes">
-        <source>%n active connection(s) to Bitcoin network.</source>
+        <source>%n active connection(s) to Tidecoin network.</source>
         <extracomment>A substring of the tooltip.</extracomment>
         <translation type="unfinished">
             <numerusform />
@@ -531,7 +531,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
     </message>
     </context>
 <context>
-    <name>bitcoin-core</name>
+    <name>tidecoin-core</name>
     <message>
         <source>Your computer's date and time appear to be more than %d minutes out of sync with the network, this may lead to consensus failure. After you've confirmed your computer's clock, this message should no longer appear when you restart your node. Without a restart, it should stop showing automatically after you've connected to a sufficient number of new outbound peers, which may take some time. You can inspect the `timeoffset` field of the `getpeerinfo` and `getnetworkinfo` RPC methods to get more info.</source>
         <translation type="unfinished"> די דאט און צייט פון אייער קאמפיוטער זענען מסתבר מער ווי %d מינוט ארויס פון טעמפו מיטן נעצווערק, וואס קען פירן צו א פאל פון קאנצעסוס. נאך וואס איר האט באשטעטיקט די קלאק פון אייער קאמפיוטער, זאָל דער היינטיקער מעלדונג נישט מער אויסקומען ווען איר רעבוטן אייער נוד. אן א רעבוט, וועט עס אָפּשטיין אוטאָמאַטיש נאך וואס איר וועט זיך פאַרבינדן מיט גענוג ניי אאוטבאונד פיערס, וואס קען נעמען א ביסל צייט. איר קענען אָפּשאַצן דעם timeoffset פעלד פון די getpeerinfo און getnetworkinfo RPC מעטאדן פאר מער אינפֿאָרמאַציע.</translation>

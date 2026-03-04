@@ -77,8 +77,8 @@
         <translation type="unfinished">Upphædd</translation>
     </message>
     <message>
-        <source>Enter a Bitcoin address (e.g. %1)</source>
-        <translation type="unfinished">Inntøppa eina Bitcoin adressu (t.d. %1)</translation>
+        <source>Enter a Tidecoin address (e.g. %1)</source>
+        <translation type="unfinished">Inntøppa eina Tidecoin adressu (t.d. %1)</translation>
     </message>
     <message>
         <source>Ctrl+W</source>
@@ -189,8 +189,8 @@
         <translation type="unfinished">&amp;Undirrita  boð</translation>
     </message>
     <message>
-        <source>Sign messages with your Bitcoin addresses to prove you own them</source>
-        <translation type="unfinished">Undirrita boðini við tíni Bitcoin-adressu fyri at prógva at tey eru tíni</translation>
+        <source>Sign messages with your Tidecoin addresses to prove you own them</source>
+        <translation type="unfinished">Undirrita boðini við tíni Tidecoin-adressu fyri at prógva at tey eru tíni</translation>
     </message>
     <message>
         <source>&amp;File</source>
@@ -240,11 +240,11 @@
         <translation type="unfinished">%1 viðskiftari</translation>
     </message>
     <message numerus="yes">
-        <source>%n active connection(s) to Bitcoin network.</source>
+        <source>%n active connection(s) to Tidecoin network.</source>
         <extracomment>A substring of the tooltip.</extracomment>
         <translation type="unfinished">
-            <numerusform>%n virkið samband til Bitcoin netið.</numerusform>
-            <numerusform>%n virkin sambond til Bitcoin netið.</numerusform>
+            <numerusform>%n virkið samband til Tidecoin netið.</numerusform>
+            <numerusform>%n virkin sambond til Tidecoin netið.</numerusform>
         </translation>
     </message>
     <message>
@@ -333,8 +333,8 @@
         <translation type="unfinished">Avrita vekslipening</translation>
     </message>
     <message>
-        <source>Can vary +/- %1 satoshi(s) per input.</source>
-        <translation type="unfinished">Kann vera ymiskt +/- %1 satoshi fyri hvørt ískoyti.</translation>
+        <source>Can vary +/- %1 tideoshi(s) per input.</source>
+        <translation type="unfinished">Kann vera ymiskt +/- %1 tideoshi fyri hvørt ískoyti.</translation>
     </message>
     <message>
         <source>(no label)</source>
@@ -951,8 +951,8 @@
         </translation>
     </message>
     <message>
-        <source>Warning: Invalid Bitcoin address</source>
-        <translation type="unfinished">Ávaring: Ógildig Bitcoin adressa</translation>
+        <source>Warning: Invalid Tidecoin address</source>
+        <translation type="unfinished">Ávaring: Ógildig Tidecoin adressa</translation>
     </message>
     <message>
         <source>Warning: Unknown change address</source>
@@ -1001,8 +1001,8 @@
         <translation type="unfinished">&amp;Undirrita Boð</translation>
     </message>
     <message>
-        <source>The Bitcoin address to sign the message with</source>
-        <translation type="unfinished">Bitcoin adressan at undirskriva boðini við</translation>
+        <source>The Tidecoin address to sign the message with</source>
+        <translation type="unfinished">Tidecoin adressan at undirskriva boðini við</translation>
     </message>
     <message>
         <source>Choose previously used address</source>
@@ -1025,8 +1025,8 @@
         <translation type="unfinished">Undirskrift</translation>
     </message>
     <message>
-        <source>Sign the message to prove you own this Bitcoin address</source>
-        <translation type="unfinished">Undirskriva boðini fyri at prógva at Bitcoin-adressan er tín</translation>
+        <source>Sign the message to prove you own this Tidecoin address</source>
+        <translation type="unfinished">Undirskriva boðini fyri at prógva at Tidecoin-adressan er tín</translation>
     </message>
     <message>
         <source>Sign &amp;Message</source>
@@ -1037,8 +1037,8 @@
         <translation type="unfinished">Tómstilla &amp;alt</translation>
     </message>
     <message>
-        <source>The Bitcoin address the message was signed with</source>
-        <translation type="unfinished">Bitcoin-adressan ið undirskrivaði boðini</translation>
+        <source>The Tidecoin address the message was signed with</source>
+        <translation type="unfinished">Tidecoin-adressan ið undirskrivaði boðini</translation>
     </message>
     <message>
         <source>The signed message to verify</source>
@@ -1251,7 +1251,7 @@
     </message>
 </context>
 <context>
-    <name>bitcoin-core</name>
+    <name>tidecoin-core</name>
     <message>
         <source>The %s developers</source>
         <translation type="unfinished">%smennararnir</translation>

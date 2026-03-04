@@ -32,8 +32,8 @@
 #include <QStringList>
 #include <QUrlQuery>
 
-const int BITCOIN_IPC_CONNECT_TIMEOUT = 1000; // milliseconds
-const QString BITCOIN_IPC_PREFIX("tidecoin:");
+const int TIDECOIN_IPC_CONNECT_TIMEOUT = 1000; // milliseconds
+const QString TIDECOIN_IPC_PREFIX("tidecoin:");
 
 //
 // Create a name that is unique for:
@@ -76,7 +76,7 @@ void PaymentServer::ipcParseCommandLine(int argc, char* argv[])
         QString arg(argv[i]);
         if (arg.startsWith("-")) continue;
 
-        if (arg.startsWith(BITCOIN_IPC_PREFIX, Qt::CaseInsensitive)) // tidecoin: URI
+        if (arg.startsWith(TIDECOIN_IPC_PREFIX, Qt::CaseInsensitive)) // tidecoin: URI
         {
             savedPaymentRequests.insert(arg);
         }
@@ -96,7 +96,7 @@ bool PaymentServer::ipcSendCommandLine()
     {
         QLocalSocket* socket = new QLocalSocket();
         socket->connectToServer(ipcServerName(), QIODevice::WriteOnly);
-        if (!socket->waitForConnected(BITCOIN_IPC_CONNECT_TIMEOUT))
+        if (!socket->waitForConnected(TIDECOIN_IPC_CONNECT_TIMEOUT))
         {
             delete socket;
             socket = nullptr;
@@ -111,7 +111,7 @@ bool PaymentServer::ipcSendCommandLine()
 
         socket->write(block);
         socket->flush();
-        socket->waitForBytesWritten(BITCOIN_IPC_CONNECT_TIMEOUT);
+        socket->waitForBytesWritten(TIDECOIN_IPC_CONNECT_TIMEOUT);
         socket->disconnectFromServer();
 
         delete socket;
@@ -194,7 +194,7 @@ void PaymentServer::handleURIOrFile(const QString& s)
         Q_EMIT message(tr("URI handling"), tr("'tidecoin://' is not a valid URI. Use 'tidecoin:' instead."),
             CClientUIInterface::MSG_ERROR);
     }
-    else if (s.startsWith(BITCOIN_IPC_PREFIX, Qt::CaseInsensitive)) // tidecoin: URI
+    else if (s.startsWith(TIDECOIN_IPC_PREFIX, Qt::CaseInsensitive)) // tidecoin: URI
     {
         QUrlQuery uri((QUrl(s)));
         // normal URI

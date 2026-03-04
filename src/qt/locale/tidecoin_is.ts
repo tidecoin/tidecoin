@@ -54,13 +54,13 @@
         <translation type="unfinished">&amp;Veldu</translation>
     </message>
     <message>
-        <source>These are your Bitcoin addresses for sending payments. Always check the amount and the receiving address before sending coins.</source>
-        <translation type="unfinished">Þetta eru Bitcoin veskin sem senda greiðslur. Skoðið ævinlega vel upphæðina og veskin sem þiggja greiðslur áður en rafmynt er send.</translation>
+        <source>These are your Tidecoin addresses for sending payments. Always check the amount and the receiving address before sending coins.</source>
+        <translation type="unfinished">Þetta eru Tidecoin veskin sem senda greiðslur. Skoðið ævinlega vel upphæðina og veskin sem þiggja greiðslur áður en rafmynt er send.</translation>
     </message>
     <message>
-        <source>These are your Bitcoin addresses for receiving payments. Use the 'Create new receiving address' button in the receive tab to create new addresses.
+        <source>These are your Tidecoin addresses for receiving payments. Use the 'Create new receiving address' button in the receive tab to create new addresses.
 Signing is only possible with addresses of the type 'legacy'.</source>
-        <translation type="unfinished">Þetta eru Bitcoin heimilisföngin þín til að taka á móti greiðslum. Notaðu hnappinn „Búa til nýtt móttökuheimilisfang“ á móttökuflipanum til að búa til ný heimilisföng. Undirskrift er aðeins möguleg með heimilisföngum af gerðinni „arfleifð“.</translation>
+        <translation type="unfinished">Þetta eru Tidecoin heimilisföngin þín til að taka á móti greiðslum. Notaðu hnappinn „Búa til nýtt móttökuheimilisfang“ á móttökuflipanum til að búa til ný heimilisföng. Undirskrift er aðeins möguleg með heimilisföngum af gerðinni „arfleifð“.</translation>
     </message>
     <message>
         <source>&amp;Copy Address</source>
@@ -174,8 +174,8 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">Sláðu inn gamla lykilorðið og nýja lykilorðið fyrir veskið.</translation>
     </message>
     <message>
-        <source>Remember that encrypting your wallet cannot fully protect your bitcoins from being stolen by malware infecting your computer.</source>
-        <translation type="unfinished">Mundu að dulkóðun vesksins þíns getur ekki verndað bitcoins þína að fullu gegn því að vera stolið af spilliforritum sem sýkja tölvuna þína.</translation>
+        <source>Remember that encrypting your wallet cannot fully protect your tidecoins from being stolen by malware infecting your computer.</source>
+        <translation type="unfinished">Mundu að dulkóðun vesksins þíns getur ekki verndað tidecoins þína að fullu gegn því að vera stolið af spilliforritum sem sýkja tölvuna þína.</translation>
     </message>
     <message>
         <source>Wallet to be encrypted</source>
@@ -403,8 +403,8 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">Umboð er virkt: %1</translation>
     </message>
     <message>
-        <source>Send coins to a Bitcoin address</source>
-        <translation type="unfinished">Senda mynt í Bitcoin færslugildi</translation>
+        <source>Send coins to a Tidecoin address</source>
+        <translation type="unfinished">Senda mynt í Tidecoin færslugildi</translation>
     </message>
     <message>
         <source>Backup wallet to another location</source>
@@ -447,16 +447,16 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">Skrifaðu undir &amp;skilaboð...</translation>
     </message>
     <message>
-        <source>Sign messages with your Bitcoin addresses to prove you own them</source>
-        <translation type="unfinished">Kvitta undir skilaboð með Bitcoin færslugildunum þínum til að sanna að þú eigir þau</translation>
+        <source>Sign messages with your Tidecoin addresses to prove you own them</source>
+        <translation type="unfinished">Kvitta undir skilaboð með Tidecoin færslugildunum þínum til að sanna að þú eigir þau</translation>
     </message>
     <message>
         <source>&amp;Verify message…</source>
         <translation type="unfinished">&amp;Staðfestu skilaboð...</translation>
     </message>
     <message>
-        <source>Verify messages to ensure they were signed with specified Bitcoin addresses</source>
-        <translation type="unfinished">Yfirfara skilaboð til að tryggja að kvittað hafi verið fyrir þau með tilteknum Bitcoin færslugildum</translation>
+        <source>Verify messages to ensure they were signed with specified Tidecoin addresses</source>
+        <translation type="unfinished">Yfirfara skilaboð til að tryggja að kvittað hafi verið fyrir þau með tilteknum Tidecoin færslugildum</translation>
     </message>
     <message>
         <source>&amp;Load PSBT from file…</source>
@@ -515,8 +515,8 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">Tengist jafnöldrum...</translation>
     </message>
     <message>
-        <source>Request payments (generates QR codes and bitcoin: URIs)</source>
-        <translation type="unfinished">Óska eftir greiðslum (býr til QR kóða og bitcoin: URI)</translation>
+        <source>Request payments (generates QR codes and tidecoin: URIs)</source>
+        <translation type="unfinished">Óska eftir greiðslum (býr til QR kóða og tidecoin: URI)</translation>
     </message>
     <message>
         <source>Show the list of used sending addresses and labels</source>
@@ -566,15 +566,15 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">Uppfært</translation>
     </message>
     <message>
-        <source>Show the %1 help message to get a list with possible Bitcoin command-line options</source>
-        <translation type="unfinished">Sýna %1 hjálparskilaboðin til að fá lista yfir valkosti Bitcoin aðgerðir í skipanalínu</translation>
+        <source>Show the %1 help message to get a list with possible Tidecoin command-line options</source>
+        <translation type="unfinished">Sýna %1 hjálparskilaboðin til að fá lista yfir valkosti Tidecoin aðgerðir í skipanalínu</translation>
     </message>
     <message>
         <source>%1 client</source>
         <translation type="unfinished">%1 biðlarar</translation>
     </message>
     <message numerus="yes">
-        <source>%n active connection(s) to Bitcoin network.</source>
+        <source>%n active connection(s) to Tidecoin network.</source>
         <extracomment>A substring of the tooltip.</extracomment>
         <translation type="unfinished">
             <numerusform />
@@ -765,8 +765,8 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">Breyta sendingarfærslugildi</translation>
     </message>
     <message>
-        <source>The entered address "%1" is not a valid Bitcoin address.</source>
-        <translation type="unfinished">Færslugildið sem slegið var inn "%1" er ekki leyfilegt Bitcoin færslugildi.</translation>
+        <source>The entered address "%1" is not a valid Tidecoin address.</source>
+        <translation type="unfinished">Færslugildið sem slegið var inn "%1" er ekki leyfilegt Tidecoin færslugildi.</translation>
     </message>
     <message>
         <source>Address "%1" already exists as a receiving address with label "%2" and so cannot be added as a sending address.</source>
@@ -866,8 +866,8 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">&amp;Ytri undirskriftarslóð</translation>
     </message>
     <message>
-        <source>Connect to the Bitcoin network through a SOCKS5 proxy.</source>
-        <translation type="unfinished">Tengstu Bitcoin netinu í gegnum SOCKS5 umboð.</translation>
+        <source>Connect to the Tidecoin network through a SOCKS5 proxy.</source>
+        <translation type="unfinished">Tengstu Tidecoin netinu í gegnum SOCKS5 umboð.</translation>
     </message>
     <message>
         <source>&amp;Connect through SOCKS5 proxy (default proxy):</source>
@@ -886,8 +886,8 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">Vefslóðir þriðja aðila (t.d. blokkkönnuður) sem birtast á færsluflipanum sem samhengisvalmyndaratriði. %s í vefslóðinni er skipt út fyrir færsluhash. Margar vefslóðir eru aðskildar með lóðréttri strik |.</translation>
     </message>
     <message>
-        <source>Connect to the Bitcoin network through a separate SOCKS5 proxy for Tor onion services.</source>
-        <translation type="unfinished">Tengstu Bitcoin netinu í gegnum sérstakt SOCKS5 umboð fyrir Tor laukþjónustu.</translation>
+        <source>Connect to the Tidecoin network through a separate SOCKS5 proxy for Tor onion services.</source>
+        <translation type="unfinished">Tengstu Tidecoin netinu í gegnum sérstakt SOCKS5 umboð fyrir Tor laukþjónustu.</translation>
     </message>
     <message>
         <source>Use separate SOCKS&amp;5 proxy to reach peers via Tor onion services:</source>
@@ -1193,7 +1193,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
     </message>
     </context>
 <context>
-    <name>bitcoin-core</name>
+    <name>tidecoin-core</name>
     <message>
         <source>%s failed to validate the -assumeutxo snapshot state. This indicates a hardware problem, or a bug in the software, or a bad software modification that allowed an invalid snapshot to be loaded. As a result of this, the node will shut down and stop using any state that was built on the snapshot, resetting the chain height from %d to %d. On the next restart, the node will resume syncing from %d without using any snapshot data. Please report this incident to %s, including how you obtained the snapshot. The invalid snapshot chainstate will be left on disk in case it is helpful in diagnosing the issue that caused this error.</source>
         <translation type="unfinished">%s tókst ekki að staðfesta -assumeutxo skyndimyndastöðu. Þetta gefur til kynna vélbúnaðarvandamál, eða villu í hugbúnaðinum, eða slæma hugbúnaðarbreytingu sem gerði kleift að hlaða ógildri skyndimynd. Sem afleiðing af þessu mun hnúturinn lokast og hætta að nota hvaða ástand sem var byggt á skyndimyndinni og endurstilla keðjuhæðina úr %d í %d. Við næstu endurræsingu mun hnúturinn halda áfram samstillingu frá %d án þess að nota nokkur skyndimyndagögn. Vinsamlegast tilkynntu þetta atvik til %s, þar á meðal hvernig þú náðir myndinni. Ógilt skyndimynd chainstate verður skilið eftir á disknum ef það er gagnlegt við að greina vandamálið sem olli þessari villu.</translation>

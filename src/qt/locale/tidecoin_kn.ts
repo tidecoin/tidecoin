@@ -54,11 +54,11 @@
         <translation type="unfinished">&amp;ಕೆಳಗೆ</translation>
     </message>
     <message>
-        <source>These are your Bitcoin addresses for sending payments. Always check the amount and the receiving address before sending coins.</source>
+        <source>These are your Tidecoin addresses for sending payments. Always check the amount and the receiving address before sending coins.</source>
         <translation type="unfinished">ಕಾಣಿಕೆಗಳು ಕಳುಹಿಸಲು ನೀವು ಬಳಸಬಹುದಿರುವ ಬಿಟ್‌ಕಾಯಿನ್ ವಿಳಾಸಗಳು ಇವು. ನಾಣ್ಯದ ಹಣವನ್ನು ಕಳುಹಿಸುವ ಮುಂದೆ ಹಣದ ಮೊತ್ತವನ್ನು ಮತ್ತು ಪ್ರಾಪ್ತಿ ವಿಳಾಸವನ್ನು ಯಾವಾಗಲೂ ಪರಿಶೀಲಿಸಿ.</translation>
     </message>
     <message>
-        <source>These are your Bitcoin addresses for receiving payments. Use the 'Create new receiving address' button in the receive tab to create new addresses.
+        <source>These are your Tidecoin addresses for receiving payments. Use the 'Create new receiving address' button in the receive tab to create new addresses.
 Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">ನೀವು ಪಡೆಯಲು ಬಯಸುವ ಪಾವತಿಗಳನ್ನು ಸೇರಿಸಲು ನಿಮ್ಮ ಬಿಟ್‌ಕಾಯಿನ್ ವಿಳಾಸಗಳು ಇವು. ಹೊಸ ವಿಳಾಸಗಳನ್ನು ರಚಿಸಲು ಪಡೆಯುವ ಉಪಕರಣವಾಗಿ 'ಪಡೆಯುವ' ಟ್ಯಾಬ್ ನಲ್ಲಿರುವ 'ಹೊಸ ಪಾವತಿಯನ್ನು ರಚಿಸಿ' ಬಟನ್ ಅನ್ನು ಬಳಸಿ. ಸಹಿ ಮಾಡುವುದು ಕೇವಲ 'ಲೆಗೆಸಿ' ವಿಳಾಸಗಳ ವರ್ಗಕ್ಕೆ ಸೇರಿದ ವಿಳಾಸಗಳೊಂದಿಗೆ ಮಾತ್ರ ಸಾಧ್ಯ.</translation>
     </message>
@@ -180,7 +180,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">ವಾಲೆಟ್‌ಗಾಗಿ ಹಳೆಯ ಪಾಸ್‌ಫ್ರೇಸ್ ಮತ್ತು ಹೊಸ ಪಾಸ್‌ಫ್ರೇಸ್ ಅನ್ನು ನಮೂದಿಸಿ.</translation>
     </message>
     <message>
-        <source>Remember that encrypting your wallet cannot fully protect your bitcoins from being stolen by malware infecting your computer.</source>
+        <source>Remember that encrypting your wallet cannot fully protect your tidecoins from being stolen by malware infecting your computer.</source>
         <translation type="unfinished">ನಿಮ್ಮ ವಾಲೆಟ್ ಎನ್ಕ್ರಿಪ್ಟ್ ಮಾಡುವುದರಿಂದ ನಿಮ್ಮ ಕಂಪ್ಯೂಟರ್ ಸೋಕಿದ ಮಲ್ವೇರ್ ನೋಂದಣಿಗೆ ಬಲಗೊಳಿಸುವ ಕಾದಂಬರಿಗೆ ನಿಮ್ಮ ಬಿಟ್‌ಕಾಯಿನ್ ಪೂರ್ತಿಯಾಗಿ ಸುರಕ್ಷಿತವಾಗುವುದಿಲ್ಲವೆಂದು ನೆನಪಿಡಿ.</translation>
     </message>
     <message>
@@ -405,7 +405,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">ಪ್ರಾಕ್ಸಿಯನ್ನು &lt;b&gt; ಸಕ್ರಿಯಗೊಳಿಸಲಾಗಿದೆ&lt;/b&gt;: %1</translation>
     </message>
     <message>
-        <source>Send coins to a Bitcoin address</source>
+        <source>Send coins to a Tidecoin address</source>
         <translation type="unfinished">ಬಿಟ್‌ಕಾಯಿನ್ ವಿಳಾಸಕ್ಕೆ ನಾಣ್ಯಗಳನ್ನು ಕಳುಹಿಸಿ</translation>
     </message>
     <message>
@@ -449,7 +449,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">ಸಹಿ &amp;ಸಂದೇಶ...</translation>
     </message>
     <message>
-        <source>Sign messages with your Bitcoin addresses to prove you own them</source>
+        <source>Sign messages with your Tidecoin addresses to prove you own them</source>
         <translation type="unfinished">ನೀವು ಅವುಗಳನ್ನು ಹೊಂದಿದ್ದೀರಿ ಎಂದು ಸಾಬೀತುಪಡಿಸಲು ನಿಮ್ಮ ಬಿಟ್‌ಕಾಯಿನ್ ವಿಳಾಸಗಳೊಂದಿಗೆ ಸಂದೇಶಗಳಿಗೆ ಸಹಿ ಮಾಡಿ</translation>
     </message>
     <message>
@@ -457,7 +457,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">&amp;ಸಂದೇಶವನ್ನು ಪರಿಶೀಲಿಸಿ...</translation>
     </message>
     <message>
-        <source>Verify messages to ensure they were signed with specified Bitcoin addresses</source>
+        <source>Verify messages to ensure they were signed with specified Tidecoin addresses</source>
         <translation type="unfinished">ನಿರ್ದಿಷ್ಟಪಡಿಸಿದ ಬಿಟ್‌ಕಾಯಿನ್ ವಿಳಾಸಗಳೊಂದಿಗೆ ಸಹಿ ಮಾಡಿರುವುದನ್ನು ಖಚಿತಪಡಿಸಿಕೊಳ್ಳಲು ಸಂದೇಶಗಳನ್ನು ಪರಿಶೀಲಿಸಿ</translation>
     </message>
     <message>
@@ -517,7 +517,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">ಗೆಳೆಯರೊಂದಿಗೆ ಸಂಪರ್ಕಿಸಲಾಗುತ್ತಿದೆ...</translation>
     </message>
     <message>
-        <source>Request payments (generates QR codes and bitcoin: URIs)</source>
+        <source>Request payments (generates QR codes and tidecoin: URIs)</source>
         <translation type="unfinished">ಪಾವತಿಗಳನ್ನು ವಿನಂತಿಸಿ (QR ಕೋಡ್‌ಗಳು ಮತ್ತು ಬಿಟ್‌ಕಾಯಿನ್‌ಗಳನ್ನು ಉತ್ಪಾದಿಸುತ್ತದೆ: URI ಗಳು)</translation>
     </message>
     <message>
@@ -532,11 +532,11 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         </translation>
     </message>
     <message numerus="yes">
-        <source>%n active connection(s) to Bitcoin network.</source>
+        <source>%n active connection(s) to Tidecoin network.</source>
         <extracomment>A substring of the tooltip.</extracomment>
         <translation type="unfinished">
-            <numerusform>%n active connection(s) to Bitcoin network.</numerusform>
-            <numerusform>%n active connection(s) to Bitcoin network.</numerusform>
+            <numerusform>%n active connection(s) to Tidecoin network.</numerusform>
+            <numerusform>%n active connection(s) to Tidecoin network.</numerusform>
         </translation>
     </message>
     <message>
@@ -683,7 +683,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
     </message>
     </context>
 <context>
-    <name>bitcoin-core</name>
+    <name>tidecoin-core</name>
     <message>
         <source>The block database contains a block which appears to be from the future. This may be due to your computer's date and time being set incorrectly. Only rebuild the block database if you are sure that your computer's date and time are correct</source>
         <translation type="unfinished">ಬ್ಲಾಕ್ ಡೇಟಾಬೇಸ್ ಭವಿಷ್ಯದಿಂದ ಬಂದಿರುವ ಬ್ಲಾಕ್ ಹೊಂದಿದೆ ಎಂದು ತೋರುತ್ತದೆ. ಇದು ನಿಮ್ಮ ಕಂಪ್ಯೂಟರ್ನ ದಿನಾಂಕ ಮತ್ತು ಸಮಯವು ತಪ್ಪಾಗಿರಬಹುದು. ನಿಮ್ಮ ಕಂಪ್ಯೂಟರ್ನ ದಿನಾಂಕ ಮತ್ತು ಸಮಯ ಸರಿಯಾಗಿದ್ದರೆ, ಬ್ಲಾಕ್ ಡೇಟಾಬೇಸ್ ಮಾತ್ರವೇ ಪುನಃ ನಿರ್ಮಿಸಬೇಕು.</translation>

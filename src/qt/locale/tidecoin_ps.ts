@@ -54,11 +54,11 @@
         <translation type="unfinished">خوښول</translation>
     </message>
     <message>
-        <source>These are your Bitcoin addresses for sending payments. Always check the amount and the receiving address before sending coins.</source>
-        <translation type="unfinished">دا ستاسو د Bitcoin پتې دي د تادیاتو لپاره. تل د سکې لیږلو مخکې اندازه او د ترلاسه کوونکي پته وګورئ.</translation>
+        <source>These are your Tidecoin addresses for sending payments. Always check the amount and the receiving address before sending coins.</source>
+        <translation type="unfinished">دا ستاسو د Tidecoin پتې دي د تادیاتو لپاره. تل د سکې لیږلو مخکې اندازه او د ترلاسه کوونکي پته وګورئ.</translation>
     </message>
     <message>
-        <source>These are your Bitcoin addresses for receiving payments. Use the 'Create new receiving address' button in the receive tab to create new addresses.
+        <source>These are your Tidecoin addresses for receiving payments. Use the 'Create new receiving address' button in the receive tab to create new addresses.
 Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">دا ستاسو د بټکوین پته ده د تادیاتو ترلاسه کولو لپاره. د 'نوې ترلاسه کولو پته جوړه کړئ' تڼۍ په ترلاسه کولو ټب کې وکاروئ ترڅو نوي پته جوړ کړئ.
 لاسلیک یوازې د 'لیګسي' ډول پتو سره ممکن دی.</translation>
@@ -188,7 +188,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">بېرته</translation>
     </message>
     <message>
-        <source>Remember that encrypting your wallet cannot fully protect your bitcoins from being stolen by malware infecting your computer.</source>
+        <source>Remember that encrypting your wallet cannot fully protect your tidecoins from being stolen by malware infecting your computer.</source>
         <translation type="unfinished">یاد ولرئ چې ستاسو د والټ رمز جوړول بشپړ ساتنه نه شي کولای.ستاسو بټ کوینونه د مالویر له لارې د غلا څخه خوندي کول
  ستاسو کمپیوټ</translation>
     </message>
@@ -429,7 +429,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">پروکسي دی &lt;b&gt;فعال&lt;/b&gt;: %1</translation>
     </message>
     <message>
-        <source>Send coins to a Bitcoin address</source>
+        <source>Send coins to a Tidecoin address</source>
         <translation type="unfinished">سکې د بټ کوین پته ته واستوئ</translation>
     </message>
     <message>
@@ -473,7 +473,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">لاسلیک او پیغام…</translation>
     </message>
     <message>
-        <source>Sign messages with your Bitcoin addresses to prove you own them</source>
+        <source>Sign messages with your Tidecoin addresses to prove you own them</source>
         <translation type="unfinished">د خپلو بټ کوین پتې سره پیغامونه لاسلیک کړئ ترڅو دا ثابت کړئ چې تاسو یې لرئ</translation>
     </message>
     <message>
@@ -481,7 +481,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">&amp;پیغام تایید کړئ…</translation>
     </message>
     <message>
-        <source>Verify messages to ensure they were signed with specified Bitcoin addresses</source>
+        <source>Verify messages to ensure they were signed with specified Tidecoin addresses</source>
         <translation type="unfinished">پیغامونه تصدیق کړئ ترڅو ډاډ ترلاسه کړئ چې دوی د ټاکل شوو بټ کوین پته سره لاسلیک شوي دي</translation>
     </message>
     <message>
@@ -541,7 +541,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">د همکارانو سره نښلول…</translation>
     </message>
     <message>
-        <source>Request payments (generates QR codes and bitcoin: URIs)</source>
+        <source>Request payments (generates QR codes and tidecoin: URIs)</source>
         <translation type="unfinished">د تادیاتو غوښتنه کول (QR کوډونه او بټ کوین: URI جوړوي</translation>
     </message>
     <message>
@@ -600,7 +600,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">کنټرول + Q</translation>
     </message>
     <message>
-        <source>Load Partially Signed Bitcoin Transaction</source>
+        <source>Load Partially Signed Tidecoin Transaction</source>
         <translation type="unfinished">جزوي لاسلیک شوی بټ کوین معامله پورته کړئ</translation>
     </message>
     <message>
@@ -608,7 +608,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">PSBT له &amp; څخه بار کړئ</translation>
     </message>
     <message>
-        <source>Load Partially Signed Bitcoin Transaction from clipboard</source>
+        <source>Load Partially Signed Tidecoin Transaction from clipboard</source>
         <translation type="unfinished">د کلیپ بورډ څخه نیمګړی لاسلیک شوی بټ کوین معامله پورته کړئ</translation>
     </message>
     <message>
@@ -628,7 +628,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">او د ترلاسه کولو پته</translation>
     </message>
     <message>
-        <source>Open a bitcoin: URI</source>
+        <source>Open a tidecoin: URI</source>
         <translation type="unfinished">یو بټ کوین: URI پرانیزئ</translation>
     </message>
     <message>
@@ -666,7 +666,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">والټ لېږدول</translation>
     </message>
     <message>
-        <source>Show the %1 help message to get a list with possible Bitcoin command-line options</source>
+        <source>Show the %1 help message to get a list with possible Tidecoin command-line options</source>
         <translation type="unfinished">%1 مرسته پیغام وښایه ترڅو د ممکنه بټ کوین کمانډ لاین اختیارونو سره لیست ترلاسه کړئ"</translation>
     </message>
     <message>
@@ -730,7 +730,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">"ښودل</translation>
     </message>
     <message numerus="yes">
-        <source>%n active connection(s) to Bitcoin network.</source>
+        <source>%n active connection(s) to Tidecoin network.</source>
         <extracomment>A substring of the tooltip.</extracomment>
         <translation type="unfinished">
             <numerusform />
@@ -964,7 +964,7 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation type="unfinished">%1 بند شوی)</translation>
     </message>
     <message>
-        <source>Can vary +/- %1 satoshi(s) per input.</source>
+        <source>Can vary +/- %1 tideoshi(s) per input.</source>
         <translation type="unfinished">کېدای شي توپیر ولري +/- %1 ساتوشي(ګانې) پر هره ننوتنه.</translation>
     </message>
     <message>
@@ -1244,7 +1244,7 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation type="unfinished">د لېږلو پته سمول</translation>
     </message>
     <message>
-        <source>The entered address "%1" is not a valid Bitcoin address.</source>
+        <source>The entered address "%1" is not a valid Tidecoin address.</source>
         <translation type="unfinished">د داخل شوي پته "%1"دا د بټ کوین صحيح پته نه ده</translation>
     </message>
     <message>
@@ -1361,7 +1361,7 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation type="unfinished">یو دودیز د معلوماتو ډایرکټري وکاروئ</translation>
     </message>
     <message>
-        <source>Bitcoin</source>
+        <source>Tidecoin</source>
         <translation type="unfinished">ٹ کوائن</translation>
     </message>
     <message numerus="yes">
@@ -1406,7 +1406,7 @@ The migration process will create a backup of the wallet before migrating. This 
         </translation>
     </message>
     <message>
-        <source>%1 will download and store a copy of the Bitcoin block chain.</source>
+        <source>%1 will download and store a copy of the Tidecoin block chain.</source>
         <translation type="unfinished">به د بیتکوین بلاک چین کاپي ډاونلوډ کړي او ذخیره کړي.%1</translation>
     </message>
     <message>
@@ -1480,7 +1480,7 @@ The migration process will create a backup of the wallet before migrating. This 
 <context>
     <name>OpenURIDialog</name>
     <message>
-        <source>Open bitcoin URI</source>
+        <source>Open tidecoin URI</source>
         <translation type="unfinished">بټ کوین URI پرانیزئ</translation>
     </message>
     <message>
