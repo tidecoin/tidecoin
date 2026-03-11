@@ -733,6 +733,28 @@ BOOST_AUTO_TEST_CASE(PQHDOnDemandDescriptorCreationCommitFailureRollsBack)
     BOOST_CHECK(db_ptr->CountDBKeys(DBKeys::WALLETDESCRIPTOR) > descriptor_records_before);
 }
 
+BOOST_AUTO_TEST_CASE(PQHDOnDemandDescriptorCreationPreAuxpowDoesNotThrow)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
+
+    CWallet wallet(chain.get(), "", CreateMockableWalletDatabase());
+    LOCK(wallet.cs_wallet);
+    wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+    wallet.SetupDescriptorScriptPubKeyMans();
+
+    const int target_height = wallet.GetTargetHeightForOutputs();
+    const Consensus::Params& params = Params().GetConsensus();
+    if (target_height >= params.nAuxpowStartHeight) return;
+
+    BOOST_CHECK_NO_THROW(wallet.GetScriptPubKeyMan(OutputType::BECH32PQ, /*internal=*/false, static_cast<uint8_t>(pq::SchemeId::FALCON_512)));
+    BOOST_CHECK(!wallet.GetScriptPubKeyMan(OutputType::BECH32PQ, /*internal=*/false, static_cast<uint8_t>(pq::SchemeId::FALCON_512)));
+
+    auto new_dest = wallet.GetNewDestination(OutputType::BECH32PQ, "");
+    BOOST_CHECK(!new_dest);
+    BOOST_CHECK(util::ErrorString(new_dest).original.find("Output type bech32pq is not allowed before auxpow activation") != std::string::npos);
+}
+
 BOOST_AUTO_TEST_CASE(PQHDCryptedSeedDecryptRejectsSeedIdMismatch)
 {
     REQUIRE_WALLET_TESTS_ENABLED();

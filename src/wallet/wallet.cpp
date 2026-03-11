@@ -4150,6 +4150,8 @@ ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool intern
 ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool internal, std::optional<uint8_t> scheme_override)
 {
     AssertLockHeld(cs_wallet);
+    const int target_height = GetTargetHeightForOutputs();
+
     if (!scheme_override) {
         // For descriptor wallets with PQHD policy, default address/change generation
         // should track current policy (scheme + seed), not stale active SPKM bindings.
@@ -4168,12 +4170,17 @@ ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool intern
         return nullptr;
     }
 
+    // Keep auxpow-gated output types on the regular wallet error path instead of
+    // falling through to descriptor generation, which uses exceptions for setup failures.
+    if (OutputTypePolicyError(type, Params().GetConsensus(), target_height)) {
+        return nullptr;
+    }
+
     const auto* scheme = pq::SchemeFromPrefix(*scheme_override);
     if (scheme == nullptr) {
         return nullptr;
     }
 
-    const int target_height = GetTargetHeightForOutputs();
     if (!pq::IsSchemeAllowedAtHeight(scheme->id, Params().GetConsensus(), target_height)) {
         return nullptr;
     }

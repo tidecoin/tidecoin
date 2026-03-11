@@ -175,7 +175,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <context-group purpose="location"><context context-type="linenumber">105</context></context-group>
       </trans-unit>
       <trans-unit id="_msg39">
-        <source xml:space="preserve">Warning: If you encrypt your wallet and lose your passphrase, you will &lt;b&gt;LOSE ALL OF YOUR BITCOINS&lt;/b&gt;!</source>
+        <source xml:space="preserve">Warning: If you encrypt your wallet and lose your passphrase, you will &lt;b&gt;LOSE ALL OF YOUR TIDECOINS&lt;/b&gt;!</source>
         <context-group purpose="location"><context context-type="linenumber">106</context></context-group>
       </trans-unit>
       <trans-unit id="_msg40">
@@ -184,7 +184,7 @@ Signing is only possible with addresses of the type &apos;legacy&apos;.</source>
         <context-group purpose="location"><context context-type="linenumber">124</context></context-group>
       </trans-unit>
       <trans-unit id="_msg41">
-        <source xml:space="preserve">Remember that encrypting your wallet cannot fully protect your bitcoins from being stolen by malware infecting your computer.</source>
+        <source xml:space="preserve">Remember that encrypting your wallet cannot fully protect your tidecoins from being stolen by malware infecting your computer.</source>
         <context-group purpose="location"><context context-type="linenumber">116</context></context-group>
       </trans-unit>
       <trans-unit id="_msg42">
