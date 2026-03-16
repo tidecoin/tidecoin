@@ -29,6 +29,13 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
+namespace {
+bool ProgressCanBeCanceled(const QString& title)
+{
+    return title.endsWith(WalletView::tr("Rescanning…"));
+}
+} // namespace
+
 WalletView::WalletView(WalletModel* wallet_model, const PlatformStyle* _platformStyle, QWidget* parent)
     : QStackedWidget(parent),
       walletModel(wallet_model),
@@ -260,7 +267,8 @@ void WalletView::usedReceivingAddresses()
 void WalletView::showProgress(const QString &title, int nProgress)
 {
     if (nProgress == 0) {
-        progressDialog = new QProgressDialog(title, tr("Cancel"), 0, 100);
+        progressDialogCanCancel = ProgressCanBeCanceled(title);
+        progressDialog = new QProgressDialog(title, progressDialogCanCancel ? tr("Cancel") : QString(), 0, 100);
         GUIUtil::PolishProgressDialog(progressDialog);
         progressDialog->setWindowModality(Qt::ApplicationModal);
         progressDialog->setAutoClose(false);
@@ -271,8 +279,9 @@ void WalletView::showProgress(const QString &title, int nProgress)
             progressDialog->deleteLater();
             progressDialog = nullptr;
         }
+        progressDialogCanCancel = false;
     } else if (progressDialog) {
-        if (progressDialog->wasCanceled()) {
+        if (progressDialogCanCancel && progressDialog->wasCanceled()) {
             getWalletModel()->wallet().abortRescan();
         } else {
             progressDialog->setValue(nProgress);

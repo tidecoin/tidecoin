@@ -115,10 +115,11 @@ void CWallet::StartWalletCreationProgress(uint64_t total_steps, const std::strin
     m_wallet_creation_progress_done.store(0);
     m_wallet_creation_progress_last_percent.store(-1);
     m_wallet_creation_progress_active.store(true, std::memory_order_release);
-    if (HaveChain()) {
+    const bool report_globally = m_wallet_creation_progress_title == WalletCreationProgressTitle();
+    if (HaveChain() && report_globally) {
         chain().showProgress(m_wallet_creation_progress_title, 0, /*resume_possible=*/false);
     }
-    if (m_wallet_creation_progress_title != WalletCreationProgressTitle()) {
+    if (!report_globally) {
         ShowProgress(m_wallet_creation_progress_title, 0);
     }
 }
@@ -128,10 +129,11 @@ void CWallet::FinishWalletCreationProgress()
     const bool was_active = m_wallet_creation_progress_active.exchange(false, std::memory_order_release);
     if (!was_active) return;
 
-    if (HaveChain()) {
+    const bool report_globally = m_wallet_creation_progress_title == WalletCreationProgressTitle();
+    if (HaveChain() && report_globally) {
         chain().showProgress(m_wallet_creation_progress_title, 100, /*resume_possible=*/false);
     }
-    if (m_wallet_creation_progress_title != WalletCreationProgressTitle()) {
+    if (!report_globally) {
         ShowProgress(m_wallet_creation_progress_title, 100);
     }
 
@@ -156,10 +158,11 @@ void CWallet::WalletCreationProgressStep()
     const int last = m_wallet_creation_progress_last_percent.load();
     if (percent == last) return;
     m_wallet_creation_progress_last_percent.store(percent);
-    if (HaveChain()) {
+    const bool report_globally = m_wallet_creation_progress_title == WalletCreationProgressTitle();
+    if (HaveChain() && report_globally) {
         chain().showProgress(m_wallet_creation_progress_title, percent, /*resume_possible=*/false);
     }
-    if (m_wallet_creation_progress_title != WalletCreationProgressTitle()) {
+    if (!report_globally) {
         ShowProgress(m_wallet_creation_progress_title, percent);
     }
 }

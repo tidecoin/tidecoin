@@ -68,6 +68,7 @@ private:
     TransactionView *transactionView;
 
     QProgressDialog* progressDialog{nullptr};
+    bool progressDialogCanCancel{false};
     const PlatformStyle *platformStyle;
 
 public Q_SLOTS:
