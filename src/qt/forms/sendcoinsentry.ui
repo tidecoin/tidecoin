@@ -159,30 +159,79 @@
     </widget>
    </item>
    <item row="2" column="1">
-    <layout class="QHBoxLayout" name="horizontalLayoutAmount" stretch="0,1,0">
+   <layout class="QVBoxLayout" name="verticalLayoutAmount">
+     <property name="spacing">
+      <number>6</number>
+     </property>
      <item>
-      <widget class="BitcoinAmountField" name="payAmount" native="true">
-       <property name="toolTip">
-        <string>The amount to send in the selected unit</string>
-       </property>
-      </widget>
+      <layout class="QHBoxLayout" name="horizontalLayoutAmountField">
+       <item>
+        <widget class="BitcoinAmountField" name="payAmount" native="true">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="minimumSize">
+          <size>
+           <width>260</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="toolTip">
+          <string>The amount to send in the selected unit</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="useAvailableBalanceButton">
+         <property name="text">
+          <string>Use available balance</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="horizontalSpacerAmountField">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>40</width>
+           <height>20</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
      </item>
      <item>
-      <widget class="QCheckBox" name="checkboxSubtractFeeFromAmount">
-       <property name="toolTip">
-        <string>The fee will be deducted from the amount being sent. The recipient will receive less tidecoins than you enter in the amount field. If multiple recipients are selected, the fee is split equally.</string>
-       </property>
-       <property name="text">
-        <string>S&amp;ubtract fee from amount</string>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QPushButton" name="useAvailableBalanceButton">
-       <property name="text">
-        <string>Use available balance</string>
-       </property>
-      </widget>
+      <layout class="QHBoxLayout" name="horizontalLayoutAmountActions">
+       <item>
+        <widget class="QCheckBox" name="checkboxSubtractFeeFromAmount">
+         <property name="toolTip">
+          <string>The fee will be deducted from the amount being sent. The recipient will receive less tidecoins than you enter in the amount field. If multiple recipients are selected, the fee is split equally.</string>
+         </property>
+         <property name="text">
+          <string>S&amp;ubtract fee from amount</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="horizontalSpacerAmountActions">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>40</width>
+           <height>20</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
      </item>
     </layout>
    </item>

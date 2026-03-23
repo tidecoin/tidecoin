@@ -1027,13 +1027,23 @@ BOOST_AUTO_TEST_CASE(util_ReadWriteSettings)
     TestArgsManager args1;
     args1.ForceSetArg("-datadir", fs::PathToString(m_path_root));
     args1.LockSettings([&](common::Settings& settings) { settings.rw_settings["name"] = "value"; });
-    args1.WriteSettingsFile();
+    BOOST_CHECK(args1.WriteSettingsFile());
 
     // Test reading setting.
     TestArgsManager args2;
     args2.ForceSetArg("-datadir", fs::PathToString(m_path_root));
-    args2.ReadSettingsFile();
+    BOOST_CHECK(args2.ReadSettingsFile());
     args2.LockSettings([&](common::Settings& settings) { BOOST_CHECK_EQUAL(settings.rw_settings["name"].get_str(), "value"); });
+
+    // Test overwriting an existing settings file, which is the same path used
+    // when wallet startup state updates the settings.json wallet list.
+    args1.LockSettings([&](common::Settings& settings) { settings.rw_settings["name"] = "new_value"; });
+    BOOST_CHECK(args1.WriteSettingsFile());
+
+    TestArgsManager args3;
+    args3.ForceSetArg("-datadir", fs::PathToString(m_path_root));
+    BOOST_CHECK(args3.ReadSettingsFile());
+    args3.LockSettings([&](common::Settings& settings) { BOOST_CHECK_EQUAL(settings.rw_settings["name"].get_str(), "new_value"); });
 
     // Test error logging, and remove previously written setting.
     {
