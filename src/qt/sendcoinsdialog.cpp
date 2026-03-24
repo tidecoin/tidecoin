@@ -67,11 +67,21 @@ constexpr std::array<const pq::SchemeInfo*, 5> kSchemeOptions{
     &pq::kMLDSA87Info,
 };
 
-void PopulateChangeSchemeCombo(QComboBox* combo)
+QString WalletDefaultSchemeLabel(std::optional<uint8_t> scheme_prefix)
+{
+    if (scheme_prefix) {
+        if (const auto* scheme = pq::SchemeFromPrefix(*scheme_prefix)) {
+            return QObject::tr("Wallet default (%1)").arg(QString::fromLatin1(scheme->name));
+        }
+    }
+    return QObject::tr("Wallet default");
+}
+
+void PopulateChangeSchemeCombo(QComboBox* combo, std::optional<uint8_t> default_scheme = std::nullopt)
 {
     if (!combo) return;
     combo->clear();
-    combo->addItem(QObject::tr("Wallet default"), QVariant());
+    combo->addItem(WalletDefaultSchemeLabel(default_scheme), QVariant());
     for (const auto* scheme : kSchemeOptions) {
         combo->addItem(QString::fromLatin1(scheme->name), static_cast<int>(scheme->prefix));
     }
@@ -209,6 +219,11 @@ void SendCoinsDialog::setModel(WalletModel *_model)
 
     if(_model && _model->getOptionsModel())
     {
+        const auto policy = _model->getPQHDPolicy();
+        const std::optional<uint8_t> default_change_scheme =
+            policy ? std::optional<uint8_t>{policy->default_change_scheme} : std::nullopt;
+        PopulateChangeSchemeCombo(ui->comboBoxCoinControlChangeScheme, default_change_scheme);
+
         for(int i = 0; i < ui->entries->count(); ++i)
         {
             SendCoinsEntry *entry = qobject_cast<SendCoinsEntry*>(ui->entries->itemAt(i)->widget());

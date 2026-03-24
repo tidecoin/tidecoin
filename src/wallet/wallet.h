@@ -1022,6 +1022,9 @@ public:
     std::unique_ptr<SigningProvider> GetSolvingProvider(const CScript& script) const;
     std::unique_ptr<SigningProvider> GetSolvingProvider(const CScript& script, SignatureData& sigdata) const;
 
+    //! Resolve a unique PQ scheme prefix for a wallet-owned address if known.
+    std::optional<uint8_t> GetAddressSchemePrefix(const CTxDestination& dest) const;
+
     //! Get the wallet descriptors for a script.
     std::vector<WalletDescriptor> GetWalletDescriptors(const CScript& script) const;
 

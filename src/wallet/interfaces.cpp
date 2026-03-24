@@ -13,6 +13,7 @@
 #include <primitives/transaction.h>
 #include <rpc/server.h>
 #include <scheduler.h>
+#include <script/signingprovider.h>
 #include <support/allocators/secure.h>
 #include <sync.h>
 #include <uint256.h>
@@ -24,6 +25,7 @@
 #include <wallet/feebumper.h>
 #include <wallet/fees.h>
 #include <wallet/load.h>
+#include <pq/pq_scheme.h>
 #include <wallet/receive.h>
 #include <wallet/rpc/wallet.h>
 #include <wallet/spend.h>
@@ -208,6 +210,15 @@ public:
             *purpose = entry->purpose.value_or(m_wallet->IsMine(dest) ? AddressPurpose::RECEIVE : AddressPurpose::SEND);
         }
         return true;
+    }
+    std::optional<std::string> getAddressScheme(const CTxDestination& dest) override
+    {
+        LOCK(m_wallet->cs_wallet);
+        const std::optional<uint8_t> scheme_prefix = m_wallet->GetAddressSchemePrefix(dest);
+        if (!scheme_prefix) return std::nullopt;
+        const auto* scheme = pq::SchemeFromPrefix(*scheme_prefix);
+        if (scheme == nullptr) return std::nullopt;
+        return scheme->name;
     }
     std::vector<WalletAddress> getAddresses() override
     {

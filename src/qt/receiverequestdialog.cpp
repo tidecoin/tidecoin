@@ -11,6 +11,8 @@
 #include <qt/qrimagewidget.h>
 #include <qt/walletmodel.h>
 
+#include <key_io.h>
+
 #include <QDialog>
 #include <QString>
 
@@ -59,6 +61,23 @@ void ReceiveRequestDialog::setInfo(const SendCoinsRecipient &_info)
 
     ui->uri_content->setText("<a href=\"" + uri + "\">" + GUIUtil::HtmlEscape(uri) + "</a>");
     ui->address_content->setText(info.address);
+
+    QString address_scheme;
+    if (model) {
+        std::string error;
+        const CTxDestination dest = DecodeDestination(info.address.toStdString(), error);
+        if (IsValidDestination(dest)) {
+            if (const auto scheme = model->wallet().getAddressScheme(dest)) {
+                address_scheme = QString::fromStdString(*scheme);
+            }
+        }
+    }
+    if (!address_scheme.isEmpty()) {
+        ui->scheme_content->setText(address_scheme);
+    } else {
+        ui->scheme_tag->hide();
+        ui->scheme_content->hide();
+    }
 
     if (!info.amount) {
         ui->amount_tag->hide();

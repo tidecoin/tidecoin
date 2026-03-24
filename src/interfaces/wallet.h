@@ -126,6 +126,9 @@ public:
         std::string* name,
         wallet::AddressPurpose* purpose) = 0;
 
+    //! Resolve PQ scheme name for a wallet-owned address if known.
+    virtual std::optional<std::string> getAddressScheme(const CTxDestination& dest) = 0;
+
     //! Get wallet address list.
     virtual std::vector<WalletAddress> getAddresses() = 0;
 

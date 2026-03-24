@@ -336,6 +336,9 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CWallet>& wallet)
             address = receiveRequestDialog->QObject::findChild<QLabel*>("address_content")->text();
             QVERIFY(!address.isEmpty());
 
+            QCOMPARE(receiveRequestDialog->QObject::findChild<QLabel*>("scheme_tag")->text(), QString("Scheme:"));
+            QCOMPARE(receiveRequestDialog->QObject::findChild<QLabel*>("scheme_content")->text(), QString("Falcon-512"));
+
             QCOMPARE(uri.count("amount=0.00000001"), 2);
             QCOMPARE(receiveRequestDialog->QObject::findChild<QLabel*>("amount_tag")->text(), QString("Amount:"));
             const BitcoinUnit display_unit = walletModel.getOptionsModel()->getDisplayUnit();

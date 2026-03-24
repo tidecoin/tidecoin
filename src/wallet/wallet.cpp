@@ -4212,13 +4212,14 @@ ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool intern
     const uint64_t total_steps = static_cast<uint64_t>(std::max<int64_t>(m_keypool_size, 1));
     StartWalletCreationProgress(total_steps, progress_title);
     try {
+        constexpr const char* func_name = __func__;
         WalletBatch batch(GetDatabase());
         if (!batch.TxnBegin()) {
-            throw std::runtime_error(std::string(__func__) + ": cannot create db transaction for PQHD descriptor creation");
+            throw std::runtime_error(std::string(func_name) + ": cannot create db transaction for PQHD descriptor creation");
         }
         const auto rollback_and_throw = [&](const std::string& message) {
             (void)batch.TxnAbort();
-            throw std::runtime_error(std::string(__func__) + ": " + message);
+            throw std::runtime_error(std::string(func_name) + ": " + message);
         };
         auto create_result = CreatePQHDDescriptorForPathWithDb(batch, type, internal, seed_id, *scheme_override, target_height);
         if (!create_result) {
@@ -4277,8 +4278,69 @@ std::unique_ptr<SigningProvider> CWallet::GetSolvingProvider(const CScript& scri
     return nullptr;
 }
 
+std::optional<uint8_t> CWallet::GetAddressSchemePrefix(const CTxDestination& dest) const
+{
+    AssertLockHeld(cs_wallet);
+
+    const CScript script = GetScriptForDestination(dest);
+    std::optional<uint8_t> scheme_prefix;
+    std::set<ScriptPubKeyMan*> checked_spk_mans;
+
+    const auto assign_scheme = [&](uint8_t prefix) -> bool {
+        if (pq::SchemeFromPrefix(prefix) == nullptr) return true;
+        if (scheme_prefix && *scheme_prefix != prefix) return false;
+        scheme_prefix = prefix;
+        return true;
+    };
+
+    const auto inspect_spk_man = [&](ScriptPubKeyMan& spk_man) -> bool {
+        checked_spk_mans.insert(&spk_man);
+
+        if (const auto meta = spk_man.GetMetadata(dest)) {
+            if (meta->has_pqhd_origin && meta->pqhd_path.size() > 2) {
+                const uint32_t scheme_in_path = meta->pqhd_path[2] & 0x7FFFFFFFU;
+                if (scheme_in_path <= std::numeric_limits<uint8_t>::max()) {
+                    if (!assign_scheme(static_cast<uint8_t>(scheme_in_path))) return false;
+                }
+            }
+        }
+
+        std::unique_ptr<SigningProvider> provider = spk_man.GetSolvingProvider(script);
+        if (!provider) return true;
+
+        const auto infer_from_keyid = [&](const CKeyID& keyid) -> bool {
+            CPubKey pubkey;
+            if (provider->GetPubKey(keyid, pubkey) && pubkey.IsValid() && pubkey.size() > 0) {
+                return assign_scheme(pubkey[0]);
+            }
+            return true;
+        };
+
+        if (const auto* pkhash = std::get_if<PKHash>(&dest)) {
+            return infer_from_keyid(ToKeyID(*pkhash));
+        }
+        if (const auto* wpkh = std::get_if<WitnessV0KeyHash>(&dest)) {
+            return infer_from_keyid(ToKeyID(*wpkh));
+        }
+        return true;
+    };
+
+    for (const auto spk_man : GetScriptPubKeyMans(script)) {
+        if (!inspect_spk_man(*spk_man)) return std::nullopt;
+    }
+    if (scheme_prefix) return scheme_prefix;
+
+    for (const auto& [_, spk_man] : m_spk_managers) {
+        if (checked_spk_mans.count(spk_man.get()) != 0) continue;
+        if (!inspect_spk_man(*spk_man)) return std::nullopt;
+    }
+
+    return scheme_prefix;
+}
+
 std::vector<WalletDescriptor> CWallet::GetWalletDescriptors(const CScript& script) const
 {
+    AssertLockHeld(cs_wallet);
     std::vector<WalletDescriptor> descs;
     for (const auto spk_man: GetScriptPubKeyMans(script)) {
         if (const auto desc_spk_man = dynamic_cast<DescriptorScriptPubKeyMan*>(spk_man)) {
@@ -4286,6 +4348,20 @@ std::vector<WalletDescriptor> CWallet::GetWalletDescriptors(const CScript& scrip
             descs.push_back(desc_spk_man->GetWalletDescriptor());
         }
     }
+
+    if (!descs.empty()) return descs;
+
+    // Historical wallet-owned addresses may not be present in m_cached_spks,
+    // so fall back to an exact script match against loaded descriptor managers.
+    for (const auto& [_, spk_man] : m_spk_managers) {
+        const auto* desc_spk_man = dynamic_cast<DescriptorScriptPubKeyMan*>(spk_man.get());
+        if (!desc_spk_man) continue;
+        const auto script_pub_keys = desc_spk_man->GetScriptPubKeys();
+        if (script_pub_keys.count(script) == 0) continue;
+        LOCK(desc_spk_man->cs_desc_man);
+        descs.push_back(desc_spk_man->GetWalletDescriptor());
+    }
+
     return descs;
 }
 
@@ -4569,7 +4645,7 @@ void CWallet::SetupDescriptorScriptPubKeyMans()
             if (!descriptor_vals.isArray()) throw std::runtime_error(std::string(__func__) + ": Unexpected result");
             std::set<OutputType> imported_output_types;
             for (const UniValue& desc_val : descriptor_vals.get_array().getValues()) {
-                const std::string desc_str = desc_val.getValStr();
+                const std::string& desc_str = desc_val.getValStr();
                 FlatSigningProvider keys;
                 std::string desc_error;
                 auto descs = Parse(desc_str, keys, desc_error, false);

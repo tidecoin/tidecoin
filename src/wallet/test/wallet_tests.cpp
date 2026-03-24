@@ -122,6 +122,48 @@ BOOST_FIXTURE_TEST_CASE(pqhd_policy_clamps_pre_auxpow, WalletTestingSetup)
     BOOST_CHECK_EQUAL(loaded->default_change_scheme, expected_change);
 }
 
+BOOST_FIXTURE_TEST_CASE(reload_wallet_preserves_descriptor_lookup_for_historical_address, WalletTestingSetup)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+
+    WalletContext context;
+    context.args = &m_args;
+    context.chain = m_node.chain.get();
+
+    auto wallet = TestLoadWallet(CreateMockableWalletDatabase(), context, WALLET_FLAG_DESCRIPTORS);
+
+    CTxDestination dest;
+    uint8_t expected_scheme_prefix{0};
+    {
+        LOCK(wallet->cs_wallet);
+        const auto policy = wallet->GetPQHDPolicy();
+        BOOST_REQUIRE(policy);
+        expected_scheme_prefix = policy->default_receive_scheme;
+        dest = *Assert(wallet->GetNewDestination(OutputType::BECH32, "reload-probe"));
+    }
+
+    auto database_copy = DuplicateMockDatabase(wallet->GetDatabase());
+    TestUnloadWallet(std::move(wallet));
+
+    wallet = TestLoadWallet(std::move(database_copy), context, WALLET_FLAG_DESCRIPTORS);
+
+    {
+        LOCK(wallet->cs_wallet);
+        const CScript script = GetScriptForDestination(dest);
+
+        BOOST_CHECK(wallet->IsMine(dest));
+        BOOST_CHECK(!wallet->GetScriptPubKeyMans(script).empty());
+        BOOST_CHECK(wallet->GetSolvingProvider(script) != nullptr);
+        BOOST_CHECK(!wallet->GetWalletDescriptors(script).empty());
+
+        const auto scheme_prefix = wallet->GetAddressSchemePrefix(dest);
+        BOOST_REQUIRE(scheme_prefix);
+        BOOST_CHECK_EQUAL(*scheme_prefix, expected_scheme_prefix);
+    }
+
+    TestUnloadWallet(std::move(wallet));
+}
+
 BOOST_FIXTURE_TEST_CASE(scan_for_wallet_transactions, TestChain100Setup)
 {
     REQUIRE_WALLET_TESTS_ENABLED();

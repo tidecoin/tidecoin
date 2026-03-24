@@ -108,6 +108,38 @@
     </widget>
    </item>
    <item row="4" column="0" alignment="Qt::AlignRight|Qt::AlignTop">
+    <widget class="QLabel" name="scheme_tag">
+     <property name="font">
+      <font>
+       <weight>75</weight>
+       <bold>true</bold>
+      </font>
+     </property>
+     <property name="text">
+      <string>Scheme:</string>
+     </property>
+     <property name="textInteractionFlags">
+      <set>Qt::NoTextInteraction</set>
+     </property>
+    </widget>
+   </item>
+   <item row="4" column="1" alignment="Qt::AlignTop">
+    <widget class="QLabel" name="scheme_content">
+     <property name="text">
+      <string notr="true">Falcon-512</string>
+     </property>
+     <property name="textFormat">
+      <enum>Qt::PlainText</enum>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+     <property name="textInteractionFlags">
+      <set>Qt::TextSelectableByMouse</set>
+     </property>
+    </widget>
+   </item>
+   <item row="5" column="0" alignment="Qt::AlignRight|Qt::AlignTop">
     <widget class="QLabel" name="amount_tag">
      <property name="font">
       <font>
@@ -123,7 +155,7 @@
      </property>
     </widget>
    </item>
-   <item row="4" column="1" alignment="Qt::AlignTop">
+   <item row="5" column="1" alignment="Qt::AlignTop">
     <widget class="QLabel" name="amount_content">
      <property name="text">
       <string notr="true">0.00000000 TDC</string>
@@ -136,7 +168,7 @@
      </property>
     </widget>
    </item>
-   <item row="5" column="0" alignment="Qt::AlignRight|Qt::AlignTop">
+   <item row="6" column="0" alignment="Qt::AlignRight|Qt::AlignTop">
     <widget class="QLabel" name="label_tag">
      <property name="font">
       <font>
@@ -152,7 +184,7 @@
      </property>
     </widget>
    </item>
-   <item row="5" column="1" alignment="Qt::AlignTop">
+   <item row="6" column="1" alignment="Qt::AlignTop">
     <widget class="QLabel" name="label_content">
      <property name="text">
       <string notr="true">label content</string>
@@ -168,7 +200,7 @@
      </property>
     </widget>
    </item>
-   <item row="6" column="0" alignment="Qt::AlignRight|Qt::AlignTop">
+   <item row="7" column="0" alignment="Qt::AlignRight|Qt::AlignTop">
     <widget class="QLabel" name="message_tag">
      <property name="font">
       <font>
@@ -184,7 +216,7 @@
      </property>
     </widget>
    </item>
-   <item row="6" column="1" alignment="Qt::AlignTop">
+   <item row="7" column="1" alignment="Qt::AlignTop">
     <widget class="QLabel" name="message_content">
      <property name="text">
       <string notr="true">message content</string>
@@ -200,7 +232,7 @@
      </property>
     </widget>
    </item>
-   <item row="7" column="0" alignment="Qt::AlignRight|Qt::AlignTop">
+   <item row="8" column="0" alignment="Qt::AlignRight|Qt::AlignTop">
     <widget class="QLabel" name="wallet_tag">
      <property name="font">
       <font>
@@ -216,7 +248,7 @@
      </property>
     </widget>
    </item>
-   <item row="7" column="1" alignment="Qt::AlignTop">
+   <item row="8" column="1" alignment="Qt::AlignTop">
     <widget class="QLabel" name="wallet_content">
      <property name="text">
       <string notr="true">wallet name</string>
@@ -232,7 +264,7 @@
      </property>
     </widget>
    </item>
-   <item row="8" column="0" colspan="2">
+   <item row="9" column="0" colspan="2">
     <layout class="QHBoxLayout" name="horizontalLayout">
      <item>
       <widget class="QPushButton" name="btnCopyURI">
