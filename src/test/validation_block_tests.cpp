@@ -217,6 +217,34 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
     BOOST_CHECK_EQUAL(sub->m_expected_tip, m_node.chainman->ActiveChain().Tip()->GetBlockHash());
 }
 
+BOOST_AUTO_TEST_CASE(processnewblockheaders_prechecked_still_runs_contextual_checks)
+{
+    const auto good_block = GoodBlock(Params().GenesisBlock().GetHash());
+    const CBlockHeader good_header = good_block->GetBlockHeader();
+
+    const CBlockIndex* prev_index{WITH_LOCK(::cs_main, return m_node.chainman->m_blockman.LookupBlockIndex(good_header.hashPrevBlock))};
+    BOOST_REQUIRE(prev_index);
+    const int height{prev_index->nHeight + 1};
+
+    BOOST_CHECK(Assert(m_node.chainman)->HasValidHeadersProofOfWork({{good_header}}, height));
+    BlockValidationState state;
+    BOOST_CHECK(Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{good_header}}, state));
+
+    CBlockHeader bad_header{good_header};
+    bad_header.nTime = prev_index->GetMedianTimePast();
+    bad_header.nNonce = 0;
+    while (!CheckProofOfWork(bad_header, Params().GetConsensus(), height)) {
+        ++bad_header.nNonce;
+    }
+
+    BOOST_CHECK(Assert(m_node.chainman)->HasValidHeadersProofOfWork({{bad_header}}, height));
+
+    BlockValidationState bad_state;
+    BOOST_CHECK(!Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{bad_header}}, bad_state));
+    BOOST_CHECK(bad_state.IsInvalid());
+    BOOST_CHECK_EQUAL(bad_state.GetRejectReason(), "time-too-old");
+}
+
 /**
  * Test that mempool updates happen atomically with reorgs.
  *

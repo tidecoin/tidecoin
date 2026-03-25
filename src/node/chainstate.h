@@ -44,6 +44,7 @@ struct ChainstateLoadOptions {
 enum class ChainstateLoadStatus {
     SUCCESS,
     FAILURE, //!< Generic failure which reindexing may fix
+    FAILURE_REINDEX_CHAINSTATE, //!< Recoverable by rebuilding chainstate from block files
     FAILURE_FATAL, //!< Fatal error which should not prompt to reindex
     FAILURE_INCOMPATIBLE_DB,
     FAILURE_INSUFFICIENT_DBCACHE,

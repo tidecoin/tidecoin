@@ -121,6 +121,16 @@ BOOST_AUTO_TEST_CASE(subsidy_limit_test)
     BOOST_CHECK_EQUAL(sum, expected_total);
 }
 
+BOOST_AUTO_TEST_CASE(header_pow_worker_pool_reuses_threads)
+{
+    ChainstateManager& chainman = *Assert(m_node.chainman);
+    const CBlockHeader header = chainman.GetParams().GenesisBlock().GetBlockHeader();
+    std::vector<CBlockHeader> headers(256, header);
+
+    BOOST_CHECK(chainman.HasValidHeadersProofOfWork(headers));
+    BOOST_CHECK(chainman.HasValidHeadersProofOfWork(headers));
+}
+
 //! Test retrieval of valid assumeutxo values.
 BOOST_AUTO_TEST_CASE(test_assumeutxo)
 {

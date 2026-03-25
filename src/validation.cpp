@@ -4212,80 +4212,83 @@ bool HasValidProofOfWork(const std::vector<CBlockHeader>& headers, const Consens
     return HasValidProofOfWork(headers, consensusParams, std::nullopt);
 }
 
+namespace {
+constexpr size_t HEADER_POW_MIN_PARALLEL_HEADERS{64};
+
+bool CheckHeaderProofOfWork(const CBlockHeader& header, const Consensus::Params& consensusParams, std::optional<int> height)
+{
+    BlockValidationState state;
+    if (!CheckAuxPowContext(header, state, consensusParams, height)) {
+        return false;
+    }
+
+    if (header.IsAuxpow()) {
+        return true;
+    }
+
+    if (height) {
+        return CheckProofOfWork(header, consensusParams, *height);
+    }
+    return CheckProofOfWorkAny(header, consensusParams);
+}
+
+bool HasValidProofOfWorkSequential(const std::vector<CBlockHeader>& headers, const Consensus::Params& consensusParams, std::optional<int> start_height)
+{
+    for (size_t i = 0; i < headers.size(); ++i) {
+        const std::optional<int> height = start_height ? std::make_optional(*start_height + static_cast<int>(i)) : std::nullopt;
+        if (!CheckHeaderProofOfWork(headers[i], consensusParams, height)) return false;
+    }
+    return true;
+}
+} // namespace
+
+class HeaderPoWWorkerPool
+{
+public:
+    explicit HeaderPoWWorkerPool(int worker_threads_num) : m_queue{/*batch_size=*/128, worker_threads_num} {}
+    ~HeaderPoWWorkerPool() = default;
+
+    bool Verify(const std::vector<CBlockHeader>& headers, const Consensus::Params& consensusParams, std::optional<int> start_height)
+    {
+        if (!m_queue.HasThreads() || headers.size() < HEADER_POW_MIN_PARALLEL_HEADERS) {
+            return HasValidProofOfWorkSequential(headers, consensusParams, start_height);
+        }
+
+        CCheckQueueControl<HeaderPoWCheck, bool> control(m_queue);
+        std::vector<HeaderPoWCheck> checks;
+        checks.reserve(headers.size());
+        for (size_t i = 0; i < headers.size(); ++i) {
+            checks.push_back(HeaderPoWCheck{
+                .header = &headers[i],
+                .consensus_params = &consensusParams,
+                .height = start_height ? std::make_optional(*start_height + static_cast<int>(i)) : std::nullopt,
+            });
+        }
+        control.Add(std::move(checks));
+        return !control.Complete().has_value();
+    }
+
+private:
+    struct HeaderPoWCheck {
+        const CBlockHeader* header;
+        const Consensus::Params* consensus_params;
+        std::optional<int> height;
+
+        std::optional<bool> operator()()
+        {
+            if (!CheckHeaderProofOfWork(*header, *consensus_params, height)) {
+                return false;
+            }
+            return std::nullopt;
+        }
+    };
+
+    CCheckQueue<HeaderPoWCheck, bool> m_queue;
+};
+
 bool HasValidProofOfWork(const std::vector<CBlockHeader>& headers, const Consensus::Params& consensusParams, std::optional<int> start_height)
 {
-    constexpr size_t kMinParallelHeaders = 64;
-    constexpr size_t kWorkChunk = 128;
-    constexpr size_t kMaxThreads = 8;
-
-    auto check_pow = [&](size_t index) {
-        const auto& header = headers[index];
-        const std::optional<int> height = start_height ? std::make_optional(*start_height + static_cast<int>(index)) : std::nullopt;
-
-        BlockValidationState state;
-        if (!CheckAuxPowContext(header, state, consensusParams, height)) {
-            return false;
-        }
-
-        if (header.IsAuxpow()) {
-            return true;
-        }
-
-        if (height) {
-            return CheckProofOfWork(header, consensusParams, *height);
-        }
-        return CheckProofOfWorkAny(header, consensusParams);
-    };
-
-    if (headers.size() < kMinParallelHeaders) {
-        for (size_t i = 0; i < headers.size(); ++i) {
-            if (!check_pow(i)) return false;
-        }
-        return true;
-    }
-
-    size_t thread_limit = std::thread::hardware_concurrency();
-    if (thread_limit == 0) thread_limit = 2;
-    thread_limit = std::min(thread_limit, kMaxThreads);
-
-    const size_t total_chunks = (headers.size() + kWorkChunk - 1) / kWorkChunk;
-    const size_t threads = std::min(thread_limit, total_chunks);
-    if (threads <= 1) {
-        for (size_t i = 0; i < headers.size(); ++i) {
-            if (!check_pow(i)) return false;
-        }
-        return true;
-    }
-
-    std::atomic<size_t> next_chunk{0};
-    std::atomic<bool> failed{false};
-
-    auto worker = [&]() {
-        while (!failed.load(std::memory_order_relaxed)) {
-            const size_t chunk = next_chunk.fetch_add(1, std::memory_order_relaxed);
-            if (chunk >= total_chunks) return;
-            const size_t start = chunk * kWorkChunk;
-            const size_t end = std::min(start + kWorkChunk, headers.size());
-            for (size_t i = start; i < end; ++i) {
-                if (failed.load(std::memory_order_relaxed)) return;
-                if (!check_pow(i)) {
-                    failed.store(true, std::memory_order_relaxed);
-                    return;
-                }
-            }
-        }
-    };
-
-    std::vector<std::thread> pool;
-    pool.reserve(threads - 1);
-    for (size_t i = 1; i < threads; ++i) {
-        pool.emplace_back(worker);
-    }
-    worker();
-    for (auto& thread : pool) {
-        thread.join();
-    }
-    return !failed.load(std::memory_order_relaxed);
+    return HasValidProofOfWorkSequential(headers, consensusParams, start_height);
 }
 
 bool IsBlockMutated(const CBlock& block, bool check_witness_root)
@@ -4457,7 +4460,7 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     return true;
 }
 
-bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValidationState& state, CBlockIndex** ppindex, bool min_pow_checked)
+bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValidationState& state, CBlockIndex** ppindex, bool min_pow_checked, bool proof_prevalidated)
 {
     AssertLockHeld(cs_main);
 
@@ -4491,7 +4494,7 @@ bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValida
         }
         const int height = pindexPrev->nHeight + 1;
 
-        if (!CheckBlockHeader(block, state, GetConsensus(), /*fCheckPOW=*/true, height)) {
+        if (!proof_prevalidated && !CheckBlockHeader(block, state, GetConsensus(), /*fCheckPOW=*/true, height)) {
             LogDebug(BCLog::VALIDATION, "%s: Consensus::CheckBlockHeader: %s, %s\n", __func__, hash.ToString(), state.ToString());
             return false;
         }
@@ -4512,15 +4515,14 @@ bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValida
     return true;
 }
 
-// Exposed wrapper for AcceptBlockHeader
-bool ChainstateManager::ProcessNewBlockHeaders(std::span<const CBlockHeader> headers, bool min_pow_checked, BlockValidationState& state, const CBlockIndex** ppindex)
+bool ChainstateManager::ProcessNewBlockHeadersImpl(std::span<const CBlockHeader> headers, bool min_pow_checked, bool proof_prevalidated, BlockValidationState& state, const CBlockIndex** ppindex)
 {
     AssertLockNotHeld(cs_main);
     {
         LOCK(cs_main);
         for (const CBlockHeader& header : headers) {
             CBlockIndex *pindex = nullptr; // Use a temp pindex instead of ppindex to avoid a const_cast
-            bool accepted{AcceptBlockHeader(header, state, &pindex, min_pow_checked)};
+            bool accepted{AcceptBlockHeader(header, state, &pindex, min_pow_checked, proof_prevalidated)};
             CheckBlockIndex();
 
             if (!accepted) {
@@ -4541,6 +4543,16 @@ bool ChainstateManager::ProcessNewBlockHeaders(std::span<const CBlockHeader> hea
         }
     }
     return true;
+}
+
+bool ChainstateManager::ProcessNewBlockHeaders(std::span<const CBlockHeader> headers, bool min_pow_checked, BlockValidationState& state, const CBlockIndex** ppindex)
+{
+    return ProcessNewBlockHeadersImpl(headers, min_pow_checked, /*proof_prevalidated=*/false, state, ppindex);
+}
+
+bool ChainstateManager::ProcessNewBlockHeadersPrechecked(std::span<const CBlockHeader> headers, BlockValidationState& state, const CBlockIndex** ppindex)
+{
+    return ProcessNewBlockHeadersImpl(headers, /*min_pow_checked=*/true, /*proof_prevalidated=*/true, state, ppindex);
 }
 
 void ChainstateManager::ReportHeadersPresync(const arith_uint256& work, int64_t height, int64_t timestamp)
@@ -4579,7 +4591,7 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     CBlockIndex *pindexDummy = nullptr;
     CBlockIndex *&pindex = ppindex ? *ppindex : pindexDummy;
 
-    bool accepted_header{AcceptBlockHeader(block, state, &pindex, min_pow_checked)};
+    bool accepted_header{AcceptBlockHeader(block, state, &pindex, min_pow_checked, /*proof_prevalidated=*/false)};
     CheckBlockIndex();
 
     if (!accepted_header)
@@ -6444,6 +6456,7 @@ static ChainstateManager::Options&& Flatten(ChainstateManager::Options&& opts)
 
 ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Options options, node::BlockManager::Options blockman_options)
     : m_script_check_queue{/*batch_size=*/128, std::clamp(options.worker_threads_num, 0, MAX_SCRIPTCHECK_THREADS)},
+      m_header_pow_worker_pool{std::make_unique<HeaderPoWWorkerPool>(std::clamp(options.worker_threads_num, 0, MAX_HEADER_POW_THREADS - 1))},
       m_interrupt{interrupt},
       m_options{Flatten(std::move(options))},
       m_blockman{interrupt, std::move(blockman_options)},
@@ -6456,6 +6469,11 @@ ChainstateManager::~ChainstateManager()
     LOCK(::cs_main);
 
     m_versionbitscache.Clear();
+}
+
+bool ChainstateManager::HasValidHeadersProofOfWork(const std::vector<CBlockHeader>& headers, std::optional<int> start_height)
+{
+    return m_header_pow_worker_pool->Verify(headers, GetConsensus(), start_height);
 }
 
 bool ChainstateManager::DetectSnapshotChainstate()

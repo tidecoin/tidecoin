@@ -102,10 +102,20 @@ static ChainstateLoadResult CompleteChainstateInitialization(
 
         // Refuse to load unsupported database format.
         // This is a no-op if we cleared the coinsviewdb with -reindex or -reindex-chainstate
-        if (chainstate->CoinsDB().NeedsUpgrade()) {
+        switch (chainstate->CoinsDB().GetFormatState()) {
+        case CoinsDBFormatState::OK:
+            break;
+        case CoinsDBFormatState::NEEDS_UPGRADE:
             return {ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB, _("Unsupported chainstate database format found. "
                                                                      "Please restart with -reindex-chainstate. This will "
                                                                      "rebuild the chainstate database.")};
+        case CoinsDBFormatState::LEGACY_SCRIPT_COMPRESSION:
+            if (options.prune) {
+                return {ChainstateLoadStatus::FAILURE, _("Legacy Tidecoin chainstate format found. Pruned nodes cannot rebuild chainstate alone. "
+                                                         "Please restart with -reindex to rebuild the entire block database.")};
+            }
+            return {ChainstateLoadStatus::FAILURE_REINDEX_CHAINSTATE, _("Legacy Tidecoin chainstate format found. Rebuilding chainstate is required because "
+                                                                        "older releases stored UTXO entries with an incompatible script compressor.")};
         }
 
         // ReplayBlocks is a no-op if we cleared the coinsviewdb with -reindex or -reindex-chainstate

@@ -4,8 +4,9 @@
 
 Tide-native vectors used by `test/functional/mining_mainnet.py`.
 
-The file stores full block hex for heights `1..7200` on an alternate Tide
-mainnet branch anchored to Tide genesis.
+The file stores full block hex for heights `1..7199` on an alternate Tide
+mainnet branch anchored to Tide genesis, plus the expected retarget bits for
+height `7200`.
 
 - `retarget_interval` is 7200 (5 days / 60s).
 - blocks are mined back-to-back by the node itself so the first retarget is
@@ -19,8 +20,9 @@ Regenerate with:
 python3 contrib/devtools/gen_mining_mainnet_alt_tide.py
 ```
 
-The functional test replays blocks `1..7199`, checks `getmininginfo.next`,
-then submits vector block `7200` and verifies the new difficulty is active.
+The functional test replays blocks `1..7199` and checks that
+`getmininginfo.next.bits` matches the historical mainnet retarget at height
+`7200`.
 
 ## mainnet_alt.json
 

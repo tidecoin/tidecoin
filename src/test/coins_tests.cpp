@@ -5,6 +5,7 @@
 #include <addresstype.h>
 #include <clientversion.h>
 #include <coins.h>
+#include <compressor.h>
 #include <streams.h>
 #include <test/util/poolresourcetester.h>
 #include <test/util/random.h>
@@ -28,6 +29,54 @@ void UpdateCoins(const CTransaction& tx, CCoinsViewCache& inputs, CTxUndo &txund
 
 namespace
 {
+struct CoinEntryKey
+{
+    COutPoint* outpoint;
+    uint8_t key{'C'};
+
+    explicit CoinEntryKey(COutPoint* ptr) : outpoint(ptr) {}
+    SERIALIZE_METHODS(CoinEntryKey, obj) { READWRITE(obj.key, obj.outpoint->hash, VARINT(obj.outpoint->n)); }
+};
+
+struct OldScriptCompression
+{
+    const CScript& script;
+
+    template <typename Stream>
+    void Serialize(Stream& s) const
+    {
+        unsigned int nSize = script.size() + 6;
+        ::Serialize(s, VARINT(nSize));
+        s << std::span{script};
+    }
+};
+
+struct OldTxOutCompression
+{
+    const CTxOut& txout;
+
+    template <typename Stream>
+    void Serialize(Stream& s) const
+    {
+        uint64_t nVal = CompressAmount(txout.nValue);
+        ::Serialize(s, VARINT(nVal));
+        ::Serialize(s, OldScriptCompression{txout.scriptPubKey});
+    }
+};
+
+struct OldCoinSerialization
+{
+    const Coin& coin;
+
+    template <typename Stream>
+    void Serialize(Stream& s) const
+    {
+        const uint32_t code = coin.nHeight * uint32_t{2} + coin.fCoinBase;
+        ::Serialize(s, VARINT(code));
+        ::Serialize(s, OldTxOutCompression{coin.out});
+    }
+};
+
 //! equality test
 bool operator==(const Coin &a, const Coin &b) {
     // Empty Coin objects are always equal.
@@ -1085,6 +1134,49 @@ BOOST_AUTO_TEST_CASE(coins_resource_is_used)
     }
 
     PoolResourceTester::CheckAllDataAccountedFor(resource);
+}
+
+BOOST_AUTO_TEST_CASE(coinsdb_detects_legacy_script_compression)
+{
+    const fs::path path{m_args.GetDataDirBase() / "coinsdb_detects_legacy_script_compression"};
+    COutPoint outpoint{Txid::FromUint256(m_rng.rand256()), 7};
+    CScript script;
+    script << std::vector<unsigned char>(80, 0x42) << OP_TRUE;
+    const Coin coin{CTxOut{1234, script}, 100, false};
+
+    {
+        CDBWrapper db{{.path = path, .cache_bytes = 1 << 20, .wipe_data = true, .obfuscate = true}};
+        BOOST_CHECK(db.Write(CoinEntryKey{&outpoint}, OldCoinSerialization{coin}));
+    }
+
+    CCoinsViewDB coins_db{{.path = path, .cache_bytes = 1 << 20}, {}};
+    BOOST_CHECK(coins_db.GetFormatState() == CoinsDBFormatState::LEGACY_SCRIPT_COMPRESSION);
+}
+
+BOOST_AUTO_TEST_CASE(coinsdb_marks_current_script_compression_format)
+{
+    const fs::path path{m_args.GetDataDirBase() / "coinsdb_marks_current_script_compression_format"};
+    COutPoint outpoint{Txid::FromUint256(m_rng.rand256()), 3};
+    CScript script;
+    script << std::vector<unsigned char>(80, 0x24) << OP_TRUE;
+    const Coin coin{CTxOut{5678, script}, 200, true};
+
+    {
+        CDBWrapper db{{.path = path, .cache_bytes = 1 << 20, .wipe_data = true, .obfuscate = true}};
+        BOOST_CHECK(db.Write(CoinEntryKey{&outpoint}, coin));
+    }
+
+    {
+        CCoinsViewDB coins_db{{.path = path, .cache_bytes = 1 << 20}, {}};
+        BOOST_CHECK(coins_db.GetFormatState() == CoinsDBFormatState::OK);
+    }
+
+    {
+        CDBWrapper db{{.path = path, .cache_bytes = 1 << 20, .obfuscate = true}};
+        uint8_t format_version{0};
+        BOOST_CHECK(db.Read(uint8_t{'F'}, format_version));
+        BOOST_CHECK_EQUAL(format_version, 1);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -13,28 +13,16 @@
 #include <util/check.h>
 
 namespace {
-arith_uint256 ScaleTarget(arith_uint256 target, int64_t actual_timespan, int64_t target_timespan, const arith_uint256& pow_limit)
+arith_uint256 ScaleTargetLegacyOverflow(arith_uint256 target, int64_t actual_timespan, int64_t target_timespan, const arith_uint256& pow_limit)
 {
-    int shift{0};
-    if (actual_timespan > 0) {
-        uint64_t timespan = static_cast<uint64_t>(actual_timespan);
-        int actual_bits{0};
-        while (timespan != 0) {
-            ++actual_bits;
-            timespan >>= 1;
-        }
-        const int target_bits = target.bits();
-        if (target_bits + actual_bits > 256) {
-            shift = target_bits + actual_bits - 256;
-        }
-    }
-    if (shift > 0) {
-        target >>= shift;
+    const bool shift = target.bits() > pow_limit.bits() - 1;
+    if (shift) {
+        target >>= 1;
     }
     target *= actual_timespan;
     target /= target_timespan;
-    if (shift > 0) {
-        target <<= shift;
+    if (shift) {
+        target <<= 1;
     }
     return target;
 }
@@ -214,7 +202,7 @@ unsigned int CalculateNextWorkRequiredOld(const CBlockIndex* pindexLast, int64_t
     const arith_uint256 bnPowLimit = UintToArith256(params.powLimit);
     arith_uint256 bnNew;
     bnNew.SetCompact(pindexLast->nBits);
-    bnNew = ScaleTarget(bnNew, nActualTimespan, params.nPowTargetTimespan, bnPowLimit);
+    bnNew = ScaleTargetLegacyOverflow(bnNew, nActualTimespan, params.nPowTargetTimespan, bnPowLimit);
 
     if (bnNew > bnPowLimit)
         bnNew = bnPowLimit;
@@ -241,7 +229,7 @@ bool PermittedDifficultyTransition(const Consensus::Params& params, int64_t heig
             // Calculate the largest difficulty value possible:
             arith_uint256 largest_difficulty_target;
             largest_difficulty_target.SetCompact(old_nbits);
-            largest_difficulty_target = ScaleTarget(largest_difficulty_target, largest_timespan, params.nPowTargetTimespan, pow_limit);
+            largest_difficulty_target = ScaleTargetLegacyOverflow(largest_difficulty_target, largest_timespan, params.nPowTargetTimespan, pow_limit);
 
             if (largest_difficulty_target > pow_limit) {
                 largest_difficulty_target = pow_limit;
@@ -256,7 +244,7 @@ bool PermittedDifficultyTransition(const Consensus::Params& params, int64_t heig
             // Calculate the smallest difficulty value possible:
             arith_uint256 smallest_difficulty_target;
             smallest_difficulty_target.SetCompact(old_nbits);
-            smallest_difficulty_target = ScaleTarget(smallest_difficulty_target, smallest_timespan, params.nPowTargetTimespan, pow_limit);
+            smallest_difficulty_target = ScaleTargetLegacyOverflow(smallest_difficulty_target, smallest_timespan, params.nPowTargetTimespan, pow_limit);
 
             if (smallest_difficulty_target > pow_limit) {
                 smallest_difficulty_target = pow_limit;

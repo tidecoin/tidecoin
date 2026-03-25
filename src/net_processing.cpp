@@ -2479,10 +2479,10 @@ void PeerManagerImpl::SendBlockTransactions(CNode& pfrom, Peer& peer, const CBlo
     MakeAndPushMessage(pfrom, NetMsgType::BLOCKTXN, resp);
 }
 
-bool PeerManagerImpl::CheckHeadersPoW(const std::vector<CBlockHeader>& headers, const Consensus::Params& consensusParams, Peer& peer, std::optional<int> start_height)
+bool PeerManagerImpl::CheckHeadersPoW(const std::vector<CBlockHeader>& headers, const Consensus::Params& /*consensusParams*/, Peer& peer, std::optional<int> start_height)
 {
     // Do these headers have proof-of-work matching what's claimed?
-    if (!HasValidProofOfWork(headers, consensusParams, start_height)) {
+    if (!m_chainman.HasValidHeadersProofOfWork(headers, start_height)) {
         Misbehaving(peer, "header with invalid proof of work");
         return false;
     }
@@ -2894,9 +2894,15 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
 
         have_headers_sync = !!peer.m_headers_sync;
     }
-
-    // Do these headers connect to something in our block index?
-    const CBlockIndex *chain_start_header{WITH_LOCK(::cs_main, return m_chainman.m_blockman.LookupBlockIndex(headers[0].hashPrevBlock))};
+    std::optional<int> process_start_height;
+    const CBlockIndex* chain_start_header{nullptr};
+    {
+        LOCK(cs_main);
+        chain_start_header = m_chainman.m_blockman.LookupBlockIndex(headers[0].hashPrevBlock);
+        if (chain_start_header != nullptr) {
+            process_start_height = chain_start_header->nHeight + 1;
+        }
+    }
     bool headers_connect_blockindex{chain_start_header != nullptr};
 
     if (!headers_connect_blockindex) {
@@ -2952,9 +2958,9 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
 
     // Now process all the headers.
     BlockValidationState state;
-    const bool processed{m_chainman.ProcessNewBlockHeaders(headers,
-                                                           /*min_pow_checked=*/true,
-                                                           state, &pindexLast)};
+    const bool processed{process_start_height.has_value()
+                             ? m_chainman.ProcessNewBlockHeadersPrechecked(headers, state, &pindexLast)
+                             : m_chainman.ProcessNewBlockHeaders(headers, /*min_pow_checked=*/true, state, &pindexLast)};
     if (!processed) {
         if (state.IsInvalid()) {
             MaybePunishNodeForBlock(pfrom.GetId(), state, via_compact_block, "invalid header received");

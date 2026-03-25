@@ -224,13 +224,13 @@ BitcoinAmountField::BitcoinAmountField(QWidget* parent)
     amount->setLocale(QLocale::c());
     amount->installEventFilter(this);
     amount->setMaximumWidth(240);
+    amount->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Fixed);
 
     QHBoxLayout *layout = new QHBoxLayout(this);
-    layout->addWidget(amount);
+    layout->addWidget(amount, 1);
     unit = new QValueComboBox(this);
     unit->setModel(new BitcoinUnits(this));
     layout->addWidget(unit);
-    layout->addStretch(1);
     layout->setContentsMargins(0,0,0,0);
 
     setLayout(layout);

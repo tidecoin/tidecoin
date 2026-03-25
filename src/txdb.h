@@ -33,6 +33,12 @@ struct CoinsViewOptions {
     int simulate_crash_ratio = 0;
 };
 
+enum class CoinsDBFormatState {
+    OK,
+    NEEDS_UPGRADE,
+    LEGACY_SCRIPT_COMPRESSION,
+};
+
 /** CCoinsView backed by the coin database (chainstate/) */
 class CCoinsViewDB final : public CCoinsView
 {
@@ -52,6 +58,7 @@ public:
 
     //! Whether an unsupported database format is used.
     bool NeedsUpgrade();
+    CoinsDBFormatState GetFormatState();
     size_t EstimateSize() const override;
 
     //! Dynamically alter the underlying leveldb cache size.

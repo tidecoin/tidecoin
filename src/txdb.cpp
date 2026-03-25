@@ -22,17 +22,10 @@
 static constexpr uint8_t DB_COIN{'C'};
 static constexpr uint8_t DB_BEST_BLOCK{'B'};
 static constexpr uint8_t DB_HEAD_BLOCKS{'H'};
+static constexpr uint8_t DB_CHAINSTATE_FORMAT{'F'};
 // Keys used in previous version that might still be found in the DB:
 static constexpr uint8_t DB_COINS{'c'};
-
-bool CCoinsViewDB::NeedsUpgrade()
-{
-    std::unique_ptr<CDBIterator> cursor{m_db->NewIterator()};
-    // DB_COINS was deprecated in v0.15.0, commit
-    // 1088b02f0ccd7358d2b7076bb9e122d59d502d02
-    cursor->Seek(std::make_pair(DB_COINS, uint256{}));
-    return cursor->Valid();
-}
+static constexpr uint8_t CHAINSTATE_FORMAT_CURRENT{1};
 
 namespace {
 
@@ -44,7 +37,59 @@ struct CoinEntry {
     SERIALIZE_METHODS(CoinEntry, obj) { READWRITE(obj.key, obj.outpoint->hash, VARINT(obj.outpoint->n)); }
 };
 
+bool IsCurrentCoinSerialization(const std::string& value)
+{
+    try {
+        DataStream stream{MakeByteSpan(value)};
+        Coin coin;
+        stream >> coin;
+        return stream.empty();
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
 } // namespace
+
+bool CCoinsViewDB::NeedsUpgrade()
+{
+    return GetFormatState() == CoinsDBFormatState::NEEDS_UPGRADE;
+}
+
+CoinsDBFormatState CCoinsViewDB::GetFormatState()
+{
+    std::unique_ptr<CDBIterator> cursor{m_db->NewIterator()};
+
+    // DB_COINS was deprecated in v0.15.0, commit
+    // 1088b02f0ccd7358d2b7076bb9e122d59d502d02
+    cursor->Seek(std::make_pair(DB_COINS, uint256{}));
+    if (cursor->Valid()) return CoinsDBFormatState::NEEDS_UPGRADE;
+
+    uint8_t format_version{0};
+    if (m_db->Read(DB_CHAINSTATE_FORMAT, format_version)) {
+        return format_version == CHAINSTATE_FORMAT_CURRENT
+            ? CoinsDBFormatState::OK
+            : CoinsDBFormatState::LEGACY_SCRIPT_COMPRESSION;
+    }
+
+    cursor->Seek(DB_COIN);
+    while (cursor->Valid()) {
+        COutPoint outpoint;
+        CoinEntry entry{&outpoint};
+        if (!cursor->GetKey(entry) || entry.key != DB_COIN) break;
+
+        std::string raw_value;
+        if (!cursor->GetValueRaw(raw_value) || !IsCurrentCoinSerialization(raw_value)) {
+            return CoinsDBFormatState::LEGACY_SCRIPT_COMPRESSION;
+        }
+        cursor->Next();
+    }
+
+    if (!m_db->Write(DB_CHAINSTATE_FORMAT, CHAINSTATE_FORMAT_CURRENT)) {
+        throw dbwrapper_error{"Failed to persist chainstate format marker"};
+    }
+    return CoinsDBFormatState::OK;
+}
 
 CCoinsViewDB::CCoinsViewDB(DBParams db_params, CoinsViewOptions options) :
     m_db_params{std::move(db_params)},
@@ -147,6 +192,7 @@ bool CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256 &hashB
     // In the last batch, mark the database as consistent with hashBlock again.
     batch.Erase(DB_HEAD_BLOCKS);
     batch.Write(DB_BEST_BLOCK, hashBlock);
+    batch.Write(DB_CHAINSTATE_FORMAT, CHAINSTATE_FORMAT_CURRENT);
 
     LogDebug(BCLog::COINDB, "Writing final batch of %.2f MiB\n", batch.ApproximateSize() * (1.0 / 1048576.0));
     bool ret = m_db->WriteBatch(batch);

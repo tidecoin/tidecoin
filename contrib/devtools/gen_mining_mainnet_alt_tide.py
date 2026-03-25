@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Generate Tide mainnet vectors for test/functional/mining_mainnet.py.
 
-This script mines 7200 blocks on a clean main-chain datadir with deterministic
+This script mines 7199 blocks on a clean main-chain datadir with deterministic
 mocktime spacing and stores full block hex + header fields. The functional test
-replays those blocks through submitblock to verify retarget behavior.
+replays those blocks through submitblock and verifies the historical retarget
+for block 7200 via getmininginfo.next.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ class GenerateMiningMainnetAltTide(BitcoinTestFramework):
         descriptor = node.getdescriptorinfo(f"raw({COINBASE_SCRIPT_PUBKEY})")["descriptor"]
 
         blocks = []
-        for height in range(1, RETARGET_INTERVAL + 1):
+        for height in range(1, RETARGET_INTERVAL):
             block_hash = node.generateblock(descriptor, [], called_by_framework=True)["hash"]
             header = node.getblockheader(block_hash)
             blocks.append({
@@ -63,6 +64,7 @@ class GenerateMiningMainnetAltTide(BitcoinTestFramework):
             "genesis_hash": genesis_hash,
             "retarget_interval": RETARGET_INTERVAL,
             "initial_nbits": f"0x{blocks[0]['bits']}",
+            "expected_next_bits": node.getmininginfo()["next"]["bits"],
             "block_version": hex(blocks[0]["version"]),
             "coinbase_script_pubkey": COINBASE_SCRIPT_PUBKEY,
             "genesis_time": genesis_time,

@@ -52,6 +52,7 @@
 class Chainstate;
 class CTxMemPool;
 class ChainstateManager;
+class HeaderPoWWorkerPool;
 struct ChainTxData;
 class DisconnectedBlockTransactions;
 struct PrecomputedTransactionData;
@@ -83,6 +84,8 @@ static const uint64_t MIN_DISK_SPACE_FOR_BLOCK_FILES = 550 * 1024 * 1024;
 
 /** Maximum number of dedicated script-checking threads allowed */
 static constexpr int MAX_SCRIPTCHECK_THREADS{15};
+/** Maximum total number of threads used for header proof-of-work verification, including the caller thread. */
+static constexpr int MAX_HEADER_POW_THREADS{8};
 
 /** Current sync state passed to tip changed callbacks. */
 enum class SynchronizationState {
@@ -960,7 +963,14 @@ private:
         const CBlockHeader& block,
         BlockValidationState& state,
         CBlockIndex** ppindex,
-        bool min_pow_checked) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+        bool min_pow_checked,
+        bool proof_prevalidated) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool ProcessNewBlockHeadersImpl(
+        std::span<const CBlockHeader> headers,
+        bool min_pow_checked,
+        bool proof_prevalidated,
+        BlockValidationState& state,
+        const CBlockIndex** ppindex) LOCKS_EXCLUDED(cs_main);
     friend Chainstate;
 
     /** Most recent headers presync progress update, for rate-limiting. */
@@ -977,6 +987,7 @@ private:
 
     //! A queue for script verifications that have to be performed by worker threads.
     CCheckQueue<CScriptCheck> m_script_check_queue;
+    std::unique_ptr<HeaderPoWWorkerPool> m_header_pow_worker_pool;
 
     //! Timers and counters used for benchmarking validation in both background
     //! and active chainstates.
@@ -1234,6 +1245,13 @@ public:
     bool ProcessNewBlockHeaders(std::span<const CBlockHeader> headers, bool min_pow_checked, BlockValidationState& state, const CBlockIndex** ppindex = nullptr) LOCKS_EXCLUDED(cs_main);
 
     /**
+     * Process incoming block headers that were already fully proof-validated
+     * at exact heights by the network header pipeline. Contextual header
+     * checks and block-index insertion still run here.
+     */
+    bool ProcessNewBlockHeadersPrechecked(std::span<const CBlockHeader> headers, BlockValidationState& state, const CBlockIndex** ppindex = nullptr) LOCKS_EXCLUDED(cs_main);
+
+    /**
      * Sufficiently validate a block for disk storage (and store on disk).
      *
      * @param[in]   pblock          The block we want to process.
@@ -1335,6 +1353,7 @@ public:
     void RecalculateBestHeader() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     CCheckQueue<CScriptCheck>& GetCheckQueue() { return m_script_check_queue; }
+    bool HasValidHeadersProofOfWork(const std::vector<CBlockHeader>& headers, std::optional<int> start_height = std::nullopt);
 
     ~ChainstateManager();
 };

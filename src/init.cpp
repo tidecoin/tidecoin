@@ -1735,7 +1735,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     assert(!node.chainman);
 
     bool do_reindex{args.GetBoolArg("-reindex", false)};
-    const bool do_reindex_chainstate{args.GetBoolArg("-reindex-chainstate", false)};
+    bool do_reindex_chainstate{args.GetBoolArg("-reindex-chainstate", false)};
 
     // Chainstate initialization and loading may be retried once with reindexing by GUI users
     auto [status, error] = InitAndLoadChainstate(
@@ -1744,6 +1744,21 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         do_reindex_chainstate,
         kernel_cache_sizes,
         args);
+    if (status == ChainstateLoadStatus::FAILURE_REINDEX_CHAINSTATE && !do_reindex && !do_reindex_chainstate && !ShutdownRequested(node)) {
+        const bilingual_str rebuild_msg = _("Legacy Tidecoin chainstate detected. Rebuilding chainstate from local block files. This may take a while, but does not require redownloading blocks.");
+        LogWarning("%s\n", rebuild_msg.original);
+        uiInterface.InitMessage(rebuild_msg.translated);
+        if (!Assert(node.shutdown_signal)->reset()) {
+            LogError("Internal error: failed to reset shutdown signal.\n");
+        }
+        do_reindex_chainstate = true;
+        std::tie(status, error) = InitAndLoadChainstate(
+            node,
+            do_reindex,
+            do_reindex_chainstate,
+            kernel_cache_sizes,
+            args);
+    }
     if (status == ChainstateLoadStatus::FAILURE && !do_reindex && !ShutdownRequested(node)) {
         // suggest a reindex
         bool do_retry{HasTestOption(args, "reindex_after_failure_noninteractive_yes") ||

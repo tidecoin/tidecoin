@@ -171,6 +171,18 @@ public:
         }
         return true;
     }
+
+    bool GetValueRaw(std::string& value)
+    {
+        try {
+            DataStream ssValue{GetValueImpl()};
+            dbwrapper_private::GetObfuscation(parent)(ssValue);
+            value = ssValue.str();
+        } catch (const std::exception&) {
+            return false;
+        }
+        return true;
+    }
 };
 
 struct LevelDBContext;
@@ -223,6 +235,24 @@ public:
             DataStream ssValue{MakeByteSpan(*strValue)};
             m_obfuscation(ssValue);
             ssValue >> value;
+        } catch (const std::exception&) {
+            return false;
+        }
+        return true;
+    }
+
+    template <typename K>
+    bool ReadRaw(const K& key, std::string& value) const
+    {
+        DataStream ssKey{};
+        ssKey.reserve(DBWRAPPER_PREALLOC_KEY_SIZE);
+        ssKey << key;
+        std::optional<std::string> strValue{ReadImpl(ssKey)};
+        if (!strValue) return false;
+        try {
+            DataStream ssValue{MakeByteSpan(*strValue)};
+            m_obfuscation(ssValue);
+            value = ssValue.str();
         } catch (const std::exception&) {
             return false;
         }

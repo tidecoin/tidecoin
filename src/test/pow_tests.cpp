@@ -55,11 +55,29 @@ arith_uint256 ScaleTarget(arith_uint256 target, int64_t actual_timespan, const C
     return target;
 }
 
+arith_uint256 ScaleTargetLegacyOverflow(arith_uint256 target, int64_t actual_timespan, const Consensus::Params& params)
+{
+    const arith_uint256 pow_limit = UintToArith256(params.powLimit);
+    const bool shift = target.bits() > pow_limit.bits() - 1;
+    if (shift) {
+        target >>= 1;
+    }
+    target *= actual_timespan;
+    target /= params.nPowTargetTimespan;
+    if (shift) {
+        target <<= 1;
+    }
+    if (target > pow_limit) {
+        target = pow_limit;
+    }
+    return target;
+}
+
 arith_uint256 CalculateExpectedTarget(uint32_t nBits, int64_t actual_timespan, const Consensus::Params& params)
 {
     arith_uint256 target;
     target.SetCompact(nBits);
-    return ScaleTarget(target, ClampTimespan(actual_timespan, params), params);
+    return ScaleTargetLegacyOverflow(target, ClampTimespan(actual_timespan, params), params);
 }
 } // namespace
 
@@ -73,13 +91,14 @@ BOOST_AUTO_TEST_CASE(get_next_work)
     consensus.nNewPowDiffHeight = Consensus::AUXPOW_DISABLED;
     CBlockIndex pindexLast;
     const arith_uint256 pow_limit = UintToArith256(consensus.powLimit);
-    arith_uint256 start_target = pow_limit >> 4;
+    arith_uint256 start_target = pow_limit >> 16;
     pindexLast.nHeight = consensus.DifficultyAdjustmentInterval() - 1;
     pindexLast.nTime = 1'000'000;
     pindexLast.nBits = start_target.GetCompact();
     int64_t nLastRetargetTime = pindexLast.nTime - consensus.nPowTargetTimespan;
 
-    unsigned int expected_nbits = start_target.GetCompact();
+    const arith_uint256 expected_target = CalculateExpectedTarget(pindexLast.nBits, pindexLast.GetBlockTime() - nLastRetargetTime, consensus);
+    unsigned int expected_nbits = expected_target.GetCompact();
     BOOST_CHECK_EQUAL(CalculateNextWorkRequired(&pindexLast, nLastRetargetTime, consensus), expected_nbits);
     BOOST_CHECK(PermittedDifficultyTransition(consensus, pindexLast.nHeight + 1, pindexLast.nBits, expected_nbits));
 }
@@ -97,7 +116,8 @@ BOOST_AUTO_TEST_CASE(get_next_work_pow_limit)
     pindexLast.nBits = pow_limit.GetCompact();
     int64_t nLastRetargetTime = pindexLast.nTime - (consensus.nPowTargetTimespan * 10);
 
-    unsigned int expected_nbits = pow_limit.GetCompact();
+    const arith_uint256 expected_target = CalculateExpectedTarget(pindexLast.nBits, pindexLast.GetBlockTime() - nLastRetargetTime, consensus);
+    unsigned int expected_nbits = expected_target.GetCompact();
     BOOST_CHECK_EQUAL(CalculateNextWorkRequired(&pindexLast, nLastRetargetTime, consensus), expected_nbits);
     BOOST_CHECK(PermittedDifficultyTransition(consensus, pindexLast.nHeight + 1, pindexLast.nBits, expected_nbits));
 }
@@ -175,6 +195,22 @@ BOOST_AUTO_TEST_CASE(get_next_work_first_retarget_period)
     unsigned int expected = CalculateNextWorkRequired(&blocks.back(), blocks.front().GetBlockTime(), params);
     unsigned int actual = GetNextWorkRequired(&blocks.back(), &dummy, params);
     BOOST_CHECK_EQUAL(actual, expected);
+}
+
+BOOST_AUTO_TEST_CASE(get_next_work_mainnet_historical_first_retarget)
+{
+    Consensus::Params params = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
+
+    CBlockIndex pindex_last;
+    pindex_last.nHeight = params.DifficultyAdjustmentInterval() - 1;
+    pindex_last.nTime = 1'609'162'893; // historical height 7199
+    pindex_last.nBits = 0x2001ffffU;
+
+    const int64_t genesis_time = 1'609'074'580; // historical genesis timestamp
+    const unsigned int expected_nbits = 0x1e43b698U; // historical height 7200
+
+    BOOST_CHECK_EQUAL(CalculateNextWorkRequired(&pindex_last, genesis_time, params), expected_nbits);
+    BOOST_CHECK(PermittedDifficultyTransition(params, pindex_last.nHeight + 1, pindex_last.nBits, expected_nbits));
 }
 
 BOOST_AUTO_TEST_CASE(get_next_work_new_insufficient_blocks)
