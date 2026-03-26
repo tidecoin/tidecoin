@@ -1018,7 +1018,6 @@ class V2TransportTester
     FastRandomContext& m_rng;
     V2Transport m_transport; //!< V2Transport being tested
     BIP324PQCipher m_cipher; //!< Cipher to help with the other side
-    bool m_test_initiator; //!< Whether m_transport is the initiator (true) or responder (false)
     bool m_peer_initiator; //!< Whether the tester is the initiator
 
     pq::MLKEM512Keypair m_kem_keypair;
@@ -1036,7 +1035,6 @@ public:
         : m_rng{rng},
           m_transport{0, test_initiator},
           m_cipher{},
-          m_test_initiator(test_initiator),
           m_peer_initiator(!test_initiator)
     {
         if (m_peer_initiator) {
