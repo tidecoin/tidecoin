@@ -32,10 +32,14 @@ public:
 };
 
 namespace {
+static constexpr int32_t TEST_BIT{9};
+static constexpr int32_t TEST_MASK{1 << TEST_BIT};
+static constexpr int32_t OTHER_MASK{1 << 10};
+
 struct Deployments
 {
     const Consensus::BIP9Deployment normal{
-        .bit = 8,
+        .bit = TEST_BIT,
         .nStartTime = TestTime(10000),
         .nTimeout = TestTime(20000),
         .min_activation_height = 0,
@@ -189,35 +193,35 @@ BOOST_AUTO_TEST_CASE(versionbits_test)
     for (int i = 0; i < 64; i++) {
         // DEFINED -> STARTED after timeout reached -> FAILED
         VersionBitsTester(m_rng, VERSIONBITS_TOP_BITS).TestDefined().TestStateSinceHeight(0)
-                           .Mine(1, TestTime(1), 0x100).TestDefined().TestStateSinceHeight(0)
-                           .Mine(11, TestTime(11), 0x100).TestDefined().TestStateSinceHeight(0)
-                           .Mine(989, TestTime(989), 0x100).TestDefined().TestStateSinceHeight(0)
-                           .Mine(999, TestTime(20000), 0x100).TestDefined().TestStateSinceHeight(0) // Timeout and start time reached simultaneously
+                           .Mine(1, TestTime(1), TEST_MASK).TestDefined().TestStateSinceHeight(0)
+                           .Mine(11, TestTime(11), TEST_MASK).TestDefined().TestStateSinceHeight(0)
+                           .Mine(989, TestTime(989), TEST_MASK).TestDefined().TestStateSinceHeight(0)
+                           .Mine(999, TestTime(20000), TEST_MASK).TestDefined().TestStateSinceHeight(0) // Timeout and start time reached simultaneously
                            .Mine(1000, TestTime(20000), 0).TestStarted().TestStateSinceHeight(1000) // Hit started, stop signalling
                            .Mine(1999, TestTime(30001), 0).TestStarted().TestStateSinceHeight(1000)
-                           .Mine(2000, TestTime(30002), 0x100).TestFailed().TestStateSinceHeight(2000) // Hit failed, start signalling again
-                           .Mine(2001, TestTime(30003), 0x100).TestFailed().TestStateSinceHeight(2000)
-                           .Mine(2999, TestTime(30004), 0x100).TestFailed().TestStateSinceHeight(2000)
-                           .Mine(3000, TestTime(30005), 0x100).TestFailed().TestStateSinceHeight(2000)
-                           .Mine(4000, TestTime(30006), 0x100).TestFailed().TestStateSinceHeight(2000)
+                           .Mine(2000, TestTime(30002), TEST_MASK).TestFailed().TestStateSinceHeight(2000) // Hit failed, start signalling again
+                           .Mine(2001, TestTime(30003), TEST_MASK).TestFailed().TestStateSinceHeight(2000)
+                           .Mine(2999, TestTime(30004), TEST_MASK).TestFailed().TestStateSinceHeight(2000)
+                           .Mine(3000, TestTime(30005), TEST_MASK).TestFailed().TestStateSinceHeight(2000)
+                           .Mine(4000, TestTime(30006), TEST_MASK).TestFailed().TestStateSinceHeight(2000)
 
         // DEFINED -> STARTED -> FAILED
                            .Reset().TestDefined().TestStateSinceHeight(0)
                            .Mine(1, TestTime(1), 0).TestDefined().TestStateSinceHeight(0)
-                           .Mine(1000, TestTime(10000) - 1, 0x100).TestDefined().TestStateSinceHeight(0) // One second more and it would be defined
-                           .Mine(2000, TestTime(10000), 0x100).TestStarted().TestStateSinceHeight(2000) // So that's what happens the next period
+                           .Mine(1000, TestTime(10000) - 1, TEST_MASK).TestDefined().TestStateSinceHeight(0) // One second more and it would be defined
+                           .Mine(2000, TestTime(10000), TEST_MASK).TestStarted().TestStateSinceHeight(2000) // So that's what happens the next period
                            .Mine(2051, TestTime(10010), 0).TestStarted().TestStateSinceHeight(2000) // 51 old blocks
-                           .Mine(2950, TestTime(10020), 0x100).TestStarted().TestStateSinceHeight(2000) // 899 new blocks
+                           .Mine(2950, TestTime(10020), TEST_MASK).TestStarted().TestStateSinceHeight(2000) // 899 new blocks
                            .Mine(3000, TestTime(20000), 0).TestFailed().TestStateSinceHeight(3000) // 50 old blocks (so 899 out of the past 1000)
-                           .Mine(4000, TestTime(20010), 0x100).TestFailed().TestStateSinceHeight(3000)
+                           .Mine(4000, TestTime(20010), TEST_MASK).TestFailed().TestStateSinceHeight(3000)
 
         // DEFINED -> STARTED -> LOCKEDIN after timeout reached -> ACTIVE
                            .Reset().TestDefined().TestStateSinceHeight(0)
                            .Mine(1, TestTime(1), 0).TestDefined().TestStateSinceHeight(0)
-                           .Mine(1000, TestTime(10000) - 1, 0x101).TestDefined().TestStateSinceHeight(0) // One second more and it would be defined
-                           .Mine(2000, TestTime(10000), 0x101).TestStarted().TestStateSinceHeight(2000) // So that's what happens the next period
-                           .Mine(2999, TestTime(30000), 0x100).TestStarted().TestStateSinceHeight(2000) // 999 new blocks
-                           .Mine(3000, TestTime(30000), 0x100).TestLockedIn().TestStateSinceHeight(3000) // 1 new block (so 1000 out of the past 1000 are new)
+                           .Mine(1000, TestTime(10000) - 1, TEST_MASK | 1).TestDefined().TestStateSinceHeight(0) // One second more and it would be defined
+                           .Mine(2000, TestTime(10000), TEST_MASK | 1).TestStarted().TestStateSinceHeight(2000) // So that's what happens the next period
+                           .Mine(2999, TestTime(30000), TEST_MASK).TestStarted().TestStateSinceHeight(2000) // 999 new blocks
+                           .Mine(3000, TestTime(30000), TEST_MASK).TestLockedIn().TestStateSinceHeight(3000) // 1 new block (so 1000 out of the past 1000 are new)
                            .Mine(3999, TestTime(30001), 0).TestLockedIn().TestStateSinceHeight(3000)
                            .Mine(4000, TestTime(30002), 0).TestActiveDelayed().TestStateSinceHeight(4000, 3000)
                            .Mine(14333, TestTime(30003), 0).TestActiveDelayed().TestStateSinceHeight(4000, 3000)
@@ -226,12 +230,12 @@ BOOST_AUTO_TEST_CASE(versionbits_test)
         // DEFINED -> STARTED -> LOCKEDIN before timeout -> ACTIVE
                            .Reset().TestDefined()
                            .Mine(1, TestTime(1), 0).TestDefined().TestStateSinceHeight(0)
-                           .Mine(1000, TestTime(10000) - 1, 0x101).TestDefined().TestStateSinceHeight(0) // One second more and it would be defined
-                           .Mine(2000, TestTime(10000), 0x101).TestStarted().TestStateSinceHeight(2000) // So that's what happens the next period
-                           .Mine(2050, TestTime(10010), 0x200).TestStarted().TestStateSinceHeight(2000) // 50 old blocks
-                           .Mine(2950, TestTime(10020), 0x100).TestStarted().TestStateSinceHeight(2000) // 900 new blocks
-                           .Mine(2999, TestTime(19999), 0x200).TestStarted().TestStateSinceHeight(2000) // 49 old blocks
-                           .Mine(3000, TestTime(29999), 0x200).TestLockedIn().TestStateSinceHeight(3000) // 1 old block (so 900 out of the past 1000)
+                           .Mine(1000, TestTime(10000) - 1, TEST_MASK | 1).TestDefined().TestStateSinceHeight(0) // One second more and it would be defined
+                           .Mine(2000, TestTime(10000), TEST_MASK | 1).TestStarted().TestStateSinceHeight(2000) // So that's what happens the next period
+                           .Mine(2050, TestTime(10010), OTHER_MASK).TestStarted().TestStateSinceHeight(2000) // 50 old blocks
+                           .Mine(2950, TestTime(10020), TEST_MASK).TestStarted().TestStateSinceHeight(2000) // 900 new blocks
+                           .Mine(2999, TestTime(19999), OTHER_MASK).TestStarted().TestStateSinceHeight(2000) // 49 old blocks
+                           .Mine(3000, TestTime(29999), OTHER_MASK).TestLockedIn().TestStateSinceHeight(3000) // 1 old block (so 900 out of the past 1000)
                            .Mine(3999, TestTime(30001), 0).TestLockedIn().TestStateSinceHeight(3000)
                            .Mine(4000, TestTime(30002), 0).TestActiveDelayed().TestStateSinceHeight(4000, 3000) // delayed will not become active until height=15000
                            .Mine(14333, TestTime(30003), 0).TestActiveDelayed().TestStateSinceHeight(4000, 3000)
@@ -248,8 +252,8 @@ BOOST_AUTO_TEST_CASE(versionbits_test)
                            .Mine(5000, TestTime(10000), 0).TestStarted().TestStateSinceHeight(3000)
                            .Mine(5999, TestTime(20000), 0).TestStarted().TestStateSinceHeight(3000)
                            .Mine(6000, TestTime(20000), 0).TestFailed().TestStateSinceHeight(6000)
-                           .Mine(7000, TestTime(20000), 0x100).TestFailed().TestStateSinceHeight(6000)
-                           .Mine(24000, TestTime(20000), 0x100).TestFailed().TestStateSinceHeight(6000) // stay in FAILED no matter how much we signal
+                           .Mine(7000, TestTime(20000), TEST_MASK).TestFailed().TestStateSinceHeight(6000)
+                           .Mine(24000, TestTime(20000), TEST_MASK).TestFailed().TestStateSinceHeight(6000) // stay in FAILED no matter how much we signal
         ;
     }
 }
@@ -456,6 +460,9 @@ BOOST_FIXTURE_TEST_CASE(versionbits_computeblockversion, BlockVersionTest)
             const uint32_t dep_mask{uint32_t{1} << chainParams->GetConsensus().vDeployments[dep].bit};
             BOOST_CHECK(!(chain_all_vbits & dep_mask));
             chain_all_vbits |= dep_mask;
+            BOOST_CHECK_NE(chainParams->GetConsensus().vDeployments[dep].bit, CPureBlockHeader::VERSION_START_BIT - 8);
+            BOOST_CHECK(chainParams->GetConsensus().vDeployments[dep].bit < CPureBlockHeader::VERSION_START_BIT ||
+                        chainParams->GetConsensus().vDeployments[dep].bit > CPureBlockHeader::VERSION_START_BIT + 4);
             check_computeblockversion(vbcache, chainParams->GetConsensus(), dep);
         }
     }
@@ -478,6 +485,38 @@ BOOST_FIXTURE_TEST_CASE(versionbits_computeblockversion, BlockVersionTest)
         const auto chainParams = CreateChainParams(args, ChainType::REGTEST);
         check_computeblockversion(vbcache, chainParams->GetConsensus(), Consensus::DEPLOYMENT_TESTDUMMY);
     }
+}
+
+BOOST_FIXTURE_TEST_CASE(versionbits_ignores_auxpow_metadata, BasicTestingSetup)
+{
+    const auto chain_params = CreateChainParams(*m_node.args, ChainType::TESTNET);
+    VersionBitsCache versionbitscache;
+    auto params = chain_params->GetConsensus();
+
+    params.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY] = {
+        .bit = TEST_BIT,
+        .nStartTime = TestTime(10000),
+        .nTimeout = TestTime(20000),
+        .min_activation_height = 0,
+        .period = 1000,
+        .threshold = 900,
+    };
+
+    VersionBitsTester plain_chain{m_rng, VERSIONBITS_TOP_BITS};
+    VersionBitsTester auxpow_chain{m_rng, VERSIONBITS_TOP_BITS | CPureBlockHeader::VERSION_AUXPOW | (params.nAuxpowChainId << CPureBlockHeader::VERSION_START_BIT)};
+
+    const auto mine_to_started = [&](VersionBitsTester& chain) -> const CBlockIndex* {
+        return chain.Mine(1000, TestTime(10000) - 1, TEST_MASK | 1)
+                    .Mine(2000, TestTime(10000), TEST_MASK | 1)
+                    .Tip();
+    };
+
+    const CBlockIndex* plain_tip = mine_to_started(plain_chain);
+    const CBlockIndex* auxpow_tip = mine_to_started(auxpow_chain);
+
+    BOOST_CHECK_EQUAL(versionbitscache.ComputeBlockVersion(plain_tip, params), versionbitscache.ComputeBlockVersion(auxpow_tip, params));
+    BOOST_CHECK_EQUAL(versionbitscache.Info(*plain_tip, params, Consensus::DEPLOYMENT_TESTDUMMY).current_state,
+                      versionbitscache.Info(*auxpow_tip, params, Consensus::DEPLOYMENT_TESTDUMMY).current_state);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

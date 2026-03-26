@@ -303,6 +303,86 @@ BOOST_AUTO_TEST_CASE(checkpow_height_selects_hash)
     BOOST_CHECK_EQUAL(CheckProofOfWork(header, params, params.nAuxpowStartHeight), expected_post);
 }
 
+BOOST_AUTO_TEST_CASE(pow_activation_boundary_current_selector_behavior)
+{
+    auto params = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
+    params.nAuxpowStartHeight = 100;
+    params.nNewPowDiffHeight = 100;
+    params.fPowAllowMinDifficultyBlocks = false;
+    params.fPowNoRetargeting = false;
+    params.nPowAllowMinDifficultyBlocksAfterHeight = std::nullopt;
+
+    auto always_new_params = params;
+    always_new_params.nNewPowDiffHeight = 0;
+
+    arith_uint256 pow_limit = UintToArith256(params.powLimit);
+    arith_uint256 fixed_target = pow_limit;
+    fixed_target >>= 12;
+    const unsigned int fixed_nbits = fixed_target.GetCompact();
+
+    std::vector<CBlockIndex> blocks(103);
+    for (int i = 0; i < 103; ++i) {
+        blocks[i].nHeight = i;
+        blocks[i].nTime = 1'000 + i * 120;
+        blocks[i].nBits = fixed_nbits;
+        blocks[i].pprev = i ? &blocks[i - 1] : nullptr;
+        blocks[i].BuildSkip();
+    }
+
+    CBlockHeader next_at_activation;
+    next_at_activation.nTime = blocks[99].nTime + 120;
+    const unsigned int actual_at_activation = GetNextWorkRequired(&blocks[99], &next_at_activation, params);
+    const unsigned int forced_new_at_activation = GetNextWorkRequired(&blocks[99], &next_at_activation, always_new_params);
+
+    CBlockHeader first_post_activation;
+    first_post_activation.nTime = blocks[100].nTime + 120;
+    const unsigned int actual_first_post_activation = GetNextWorkRequired(&blocks[100], &first_post_activation, params);
+    const unsigned int forced_new_first_post_activation = GetNextWorkRequired(&blocks[100], &first_post_activation, always_new_params);
+
+    CBlockHeader second_post_activation;
+    second_post_activation.nTime = blocks[101].nTime + 120;
+    const unsigned int actual_second_post_activation = GetNextWorkRequired(&blocks[101], &second_post_activation, params);
+    const unsigned int forced_new_second_post_activation = GetNextWorkRequired(&blocks[101], &second_post_activation, always_new_params);
+
+    BOOST_CHECK(UseScryptPoW(params, params.nAuxpowStartHeight));
+    BOOST_CHECK(UseScryptPoW(params, params.nAuxpowStartHeight + 1));
+    BOOST_CHECK_EQUAL(actual_at_activation, fixed_nbits);
+    BOOST_CHECK_NE(actual_at_activation, forced_new_at_activation);
+    BOOST_CHECK_EQUAL(actual_first_post_activation, fixed_nbits);
+    BOOST_CHECK_NE(actual_first_post_activation, forced_new_first_post_activation);
+    BOOST_CHECK_EQUAL(actual_second_post_activation, forced_new_second_post_activation);
+    BOOST_CHECK_NE(actual_second_post_activation, fixed_nbits);
+}
+
+BOOST_AUTO_TEST_CASE(permitted_difficulty_transition_boundary_current_selector_behavior)
+{
+    auto params = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
+    params.nAuxpowStartHeight = 100;
+    params.nNewPowDiffHeight = 100;
+    params.fPowAllowMinDifficultyBlocks = false;
+    params.fPowNoRetargeting = false;
+
+    arith_uint256 pow_limit = UintToArith256(params.powLimit);
+    arith_uint256 old_target = pow_limit;
+    old_target >>= 12;
+    const unsigned int old_nbits = old_target.GetCompact();
+
+    arith_uint256 allowed_new_target;
+    allowed_new_target.SetCompact(old_nbits);
+    const int64_t down_num_sq = (100LL + params.nPowMaxAdjustDown) * (100LL + params.nPowMaxAdjustDown);
+    allowed_new_target *= down_num_sq;
+    allowed_new_target /= 10000LL;
+    if (allowed_new_target > pow_limit) {
+        allowed_new_target = pow_limit;
+    }
+    const unsigned int allowed_new_nbits = allowed_new_target.GetCompact();
+
+    BOOST_REQUIRE_NE(allowed_new_nbits, old_nbits);
+
+    BOOST_CHECK(!PermittedDifficultyTransition(params, params.nAuxpowStartHeight, old_nbits, allowed_new_nbits));
+    BOOST_CHECK(PermittedDifficultyTransition(params, params.nAuxpowStartHeight + 1, old_nbits, allowed_new_nbits));
+}
+
 BOOST_AUTO_TEST_CASE(CheckProofOfWork_test_biger_hash_than_target)
 {
     const auto consensus = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();

@@ -33,10 +33,25 @@ unsigned int GetNextWorkRequiredOld(const CBlockIndex* pindexLast, const CBlockH
 unsigned int CalculateNextWorkRequiredNew(arith_uint256 bnAvg, int64_t nLastBlockTime, int64_t nFirstBlockTime, const Consensus::Params& params);
 unsigned int GetNextWorkRequiredNew(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params& params);
 
+bool UseAuxpowHeaderRules(const Consensus::Params& params, int candidate_height)
+{
+    return candidate_height >= params.nAuxpowStartHeight;
+}
+
+bool UseLegacyDifficultyForNextBlock(const Consensus::Params& params, int prev_height)
+{
+    return prev_height <= params.nNewPowDiffHeight;
+}
+
+bool UseLegacyDifficultyTransitionBounds(const Consensus::Params& params, int candidate_height)
+{
+    return candidate_height <= params.nNewPowDiffHeight;
+}
+
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params& params)
 {
     assert(pindexLast != nullptr);
-    if (pindexLast->nHeight <= params.nNewPowDiffHeight) {
+    if (UseLegacyDifficultyForNextBlock(params, pindexLast->nHeight)) {
         return GetNextWorkRequiredOld(pindexLast, pblock, params);
     }
     return GetNextWorkRequiredNew(pindexLast, pblock, params);
@@ -45,7 +60,7 @@ unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHead
 unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nFirstBlockTime, const Consensus::Params& params)
 {
     assert(pindexLast != nullptr);
-    if (pindexLast->nHeight <= params.nNewPowDiffHeight) {
+    if (UseLegacyDifficultyForNextBlock(params, pindexLast->nHeight)) {
         return CalculateNextWorkRequiredOld(pindexLast, nFirstBlockTime, params);
     }
 
@@ -217,7 +232,7 @@ bool PermittedDifficultyTransition(const Consensus::Params& params, int64_t heig
     // Allow everything when min-difficulty is allowed (regtest/test modes).
     if (params.fPowAllowMinDifficultyBlocks) return true;
 
-    if (height <= params.nNewPowDiffHeight) {
+    if (UseLegacyDifficultyTransitionBounds(params, height)) {
         if (height % params.DifficultyAdjustmentInterval() == 0) {
             int64_t smallest_timespan = params.nPowTargetTimespan/4;
             int64_t largest_timespan = params.nPowTargetTimespan*4;
@@ -313,7 +328,7 @@ bool CheckProofOfWork(uint256 hash, unsigned int nBits, const Consensus::Params&
 
 bool UseScryptPoW(const Consensus::Params& params, int height)
 {
-    return height >= params.nAuxpowStartHeight;
+    return UseAuxpowHeaderRules(params, height);
 }
 
 uint256 GetPoWHashForHeight(const CBlockHeader& block, const Consensus::Params& params, int height)

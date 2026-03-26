@@ -6,6 +6,7 @@
 #define BITCOIN_VERSIONBITS_IMPL_H
 
 #include <chain.h>
+#include <primitives/pureheader.h>
 #include <sync.h>
 #include <versionbits.h>
 
@@ -78,7 +79,8 @@ public:
 
     bool Condition(int32_t nVersion) const
     {
-        return (((nVersion & VERSIONBITS_TOP_MASK) == VERSIONBITS_TOP_BITS) && (nVersion & Mask()) != 0);
+        const int32_t base_version = CPureBlockHeader::GetBaseVersion(nVersion);
+        return (((base_version & VERSIONBITS_TOP_MASK) == VERSIONBITS_TOP_BITS) && (base_version & Mask()) != 0);
     }
 };
 

@@ -5,6 +5,7 @@
 #include <consensus/params.h>
 #include <deploymentinfo.h>
 #include <kernel/chainparams.h>
+#include <primitives/pureheader.h>
 #include <util/check.h>
 #include <versionbits.h>
 #include <versionbits_impl.h>
@@ -322,10 +323,12 @@ public:
 
     bool Condition(const CBlockIndex* pindex) const override
     {
+        const int32_t base_version = CPureBlockHeader::GetBaseVersion(pindex->nVersion);
+        const int32_t expected_version = CPureBlockHeader::GetBaseVersion(::ComputeBlockVersion(pindex->pprev, m_params, m_caches));
         return pindex->nHeight >= m_params.MinBIP9WarningHeight &&
-               ((pindex->nVersion & VERSIONBITS_TOP_MASK) == VERSIONBITS_TOP_BITS) &&
-               ((pindex->nVersion >> m_bit) & 1) != 0 &&
-               ((::ComputeBlockVersion(pindex->pprev, m_params, m_caches) >> m_bit) & 1) == 0;
+               ((base_version & VERSIONBITS_TOP_MASK) == VERSIONBITS_TOP_BITS) &&
+               ((base_version >> m_bit) & 1) != 0 &&
+               ((expected_version >> m_bit) & 1) == 0;
     }
 };
 } // anonymous namespace
