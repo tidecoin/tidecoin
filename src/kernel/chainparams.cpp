@@ -114,8 +114,8 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].threshold = 6048; // 75% of 8064
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].period = 8064;
 
-        consensus.nMinimumChainWork = uint256{"0000000000000000000000000000000000000000000000000000000000000001"};
-        consensus.defaultAssumeValid = uint256{"b34a457c601ef8ce3294116e3296078797be7ded1b0d12515395db9ab5e93ab8"}; // 1683528
+        consensus.nMinimumChainWork = uint256{"0000000000000000000000000000000000000000000000000007e9c0d0d38263"};
+        consensus.defaultAssumeValid = uint256{"1b4031baa9b71ea2d01b6676705fe25b07a72db1437d965a5be4e7ad3ccf6c9f"}; // 2463084
 
         /**
          * The message start string is designed to be unlikely to occur in normal data.

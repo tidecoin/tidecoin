@@ -835,6 +835,21 @@ private:
     /** Stalling timeout for blocks in IBD */
     std::atomic<std::chrono::seconds> m_block_stalling_timeout{BLOCK_STALLING_TIMEOUT_DEFAULT};
 
+    /** Count peers actively participating in low-work headers synchronization. */
+    int CountActiveLowWorkHeadersSyncPeers() const EXCLUSIVE_LOCKS_REQUIRED(cs_main, !m_peer_mutex)
+    {
+        int active_presync_peers{0};
+        LOCK(m_peer_mutex);
+        for (const auto& [_, peer] : m_peer_map) {
+            LOCK(peer->m_headers_sync_mutex);
+            if (peer->m_headers_sync != nullptr &&
+                peer->m_headers_sync->GetState() != HeadersSyncState::State::FINAL) {
+                ++active_presync_peers;
+            }
+        }
+        return active_presync_peers;
+    }
+
     /**
      * For sending `inv`s to inbound peers, we use a single (exponentially
      * distributed) timer for all peers. If we used a separate timer for each
@@ -4013,7 +4028,18 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             // our initial peer is unresponsive (but less bandwidth than we'd
             // use if we turned on sync with all peers).
             CNodeState& state{*Assert(State(pfrom.GetId()))};
-            if (state.fSyncStarted || (!peer->m_inv_triggered_getheaders_before_sync && *best_block != m_last_block_inv_triggering_headers_sync)) {
+            const int active_low_work_headers_sync_peers{CountActiveLowWorkHeadersSyncPeers()};
+            const bool limit_low_work_headers_sync_peers{
+                m_chainman.IsInitialBlockDownload() && active_low_work_headers_sync_peers > 0
+            };
+            const bool can_activate_low_work_headers_sync_peer{
+                CanActivateAdditionalLowWorkHeadersSyncPeer(
+                    limit_low_work_headers_sync_peers, active_low_work_headers_sync_peers)
+            };
+            if (state.fSyncStarted ||
+                (can_activate_low_work_headers_sync_peer &&
+                 !peer->m_inv_triggered_getheaders_before_sync &&
+                 *best_block != m_last_block_inv_triggering_headers_sync)) {
                 if (MaybeSendGetHeaders(pfrom, GetLocator(m_chainman.m_best_header), *peer)) {
                     LogDebug(BCLog::NET, "getheaders (%d) %s to peer=%d\n",
                             m_chainman.m_best_header->nHeight, best_block->ToString(),
@@ -4026,6 +4052,10 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
                     // than 1 new peer every new block.
                     m_last_block_inv_triggering_headers_sync = *best_block;
                 }
+            } else if (!state.fSyncStarted && limit_low_work_headers_sync_peers) {
+                LogDebug(BCLog::NET,
+                         "Skipping inv-triggered getheaders for peer=%d due to low-work headers sync peer limit (%d active)\n",
+                         pfrom.GetId(), active_low_work_headers_sync_peers);
             }
         }
 
@@ -5537,8 +5567,15 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
         }
 
         if (!state.fSyncStarted && CanServeBlocks(*peer) && !m_chainman.m_blockman.LoadingBlocks()) {
+            const int active_low_work_headers_sync_peers{CountActiveLowWorkHeadersSyncPeers()};
+            const bool limit_low_work_headers_sync_peers{
+                m_chainman.IsInitialBlockDownload() && active_low_work_headers_sync_peers > 0
+            };
             // Only actively request headers from a single peer, unless we're close to today.
-            if ((nSyncStarted == 0 && sync_blocks_and_headers_from_peer) || m_chainman.m_best_header->Time() > NodeClock::now() - 24h) {
+            if (CanActivateAdditionalLowWorkHeadersSyncPeer(
+                    limit_low_work_headers_sync_peers, active_low_work_headers_sync_peers) &&
+                ((nSyncStarted == 0 && sync_blocks_and_headers_from_peer) ||
+                 m_chainman.m_best_header->Time() > NodeClock::now() - 24h)) {
                 const CBlockIndex* pindexStart = m_chainman.m_best_header;
                 /* If possible, start at the block preceding the currently
                    best known header.  This ensures that we always get a
@@ -5562,6 +5599,10 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                         );
                     nSyncStarted++;
                 }
+            } else if (limit_low_work_headers_sync_peers) {
+                LogDebug(BCLog::NET,
+                         "Skipping initial headers sync for peer=%d due to low-work headers sync peer limit (%d active)\n",
+                         pto->GetId(), active_low_work_headers_sync_peers);
             }
         }
 

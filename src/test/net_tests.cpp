@@ -135,6 +135,17 @@ BOOST_AUTO_TEST_CASE(cnode_simple_test)
     BOOST_CHECK_EQUAL(pnode4->ConnectedThroughNetwork(), Network::NET_ONION);
 }
 
+BOOST_AUTO_TEST_CASE(low_work_headers_sync_peer_limit_policy)
+{
+    BOOST_CHECK(CanActivateAdditionalLowWorkHeadersSyncPeer(/*limit_low_work_headers_sync_peers=*/false, 0));
+    BOOST_CHECK(CanActivateAdditionalLowWorkHeadersSyncPeer(/*limit_low_work_headers_sync_peers=*/false, 10));
+
+    BOOST_CHECK(CanActivateAdditionalLowWorkHeadersSyncPeer(/*limit_low_work_headers_sync_peers=*/true, 0));
+    BOOST_CHECK(CanActivateAdditionalLowWorkHeadersSyncPeer(/*limit_low_work_headers_sync_peers=*/true, 1));
+    BOOST_CHECK(!CanActivateAdditionalLowWorkHeadersSyncPeer(/*limit_low_work_headers_sync_peers=*/true, 2));
+    BOOST_CHECK(!CanActivateAdditionalLowWorkHeadersSyncPeer(/*limit_low_work_headers_sync_peers=*/true, 3));
+}
+
 BOOST_AUTO_TEST_CASE(cnetaddr_basic)
 {
     CNetAddr addr;

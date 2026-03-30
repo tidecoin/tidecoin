@@ -46,6 +46,20 @@ static const unsigned int MAX_CMPCTBLOCKS_INFLIGHT_PER_BLOCK = 3;
 /** Number of headers sent in one getheaders result. We rely on the assumption that if a peer sends
  *  less than this number, we reached its tip. Changing this value is a protocol upgrade. */
 static const unsigned int MAX_HEADERS_RESULTS = 2000;
+/** Maximum number of concurrent low-work headers presync peers during IBD. */
+static constexpr int MAX_LOW_WORK_HEADERS_SYNC_PEERS{2};
+
+/**
+ * Decide whether another low-work headers presync peer may be activated.
+ * This only constrains request policy during IBD; it does not alter validation.
+ */
+[[nodiscard]] static constexpr bool CanActivateAdditionalLowWorkHeadersSyncPeer(
+    bool limit_low_work_headers_sync_peers,
+    int active_low_work_headers_sync_peers)
+{
+    return !limit_low_work_headers_sync_peers ||
+           active_low_work_headers_sync_peers < MAX_LOW_WORK_HEADERS_SYNC_PEERS;
+}
 
 struct CNodeStateStats {
     int nSyncHeight = -1;
