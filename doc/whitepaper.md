@@ -6,7 +6,7 @@
 
 ## Abstract
 
-Tidecoin is a decentralized cryptocurrency engineered from genesis to resist attacks from both classical and quantum computers. While Bitcoin and virtually all major blockchains rely on the Elliptic Curve Digital Signature Algorithm (ECDSA) -- which Shor's algorithm will break once sufficiently powerful quantum computers exist -- Tidecoin replaces ECDSA entirely with NIST-standardized post-quantum signature schemes: Falcon-512/1024 and ML-DSA-44/65/87. Built on the battle-tested Bitcoin Core v30 codebase, Tidecoin preserves the UTXO model, scripting system, and 15+ years of peer-reviewed consensus logic while adding a custom Post-Quantum Hierarchical Deterministic (PQHD) wallet, SHA-512-based witness scripts, ML-KEM-512 encrypted peer-to-peer transport, and a two-phase proof-of-work strategy: CPU-friendly YespowerTIDE mining for fair initial distribution, transitioning to scrypt-based merged mining with Litecoin for long-term quantum-resistant network security. The network has been in continuous operation since December 27, 2020 -- over five years of uninterrupted block production with zero security incidents.
+Tidecoin is a decentralized cryptocurrency engineered from genesis to resist attacks from both classical and quantum computers. Built on Bitcoin Core, it replaces ECDSA with post-quantum signature schemes from the NIST PQC process -- Falcon-512/1024 and ML-DSA-44/65/87 -- while preserving the UTXO model, scripting system, and 15+ years of peer-reviewed consensus logic. Post-quantum design extends beyond signatures to include a hardened-only PQHD wallet, SHA-512 witness scripts, ML-KEM-512 peer-to-peer transport encryption, and a two-phase proof-of-work strategy transitioning from CPU-friendly YespowerTIDE to scrypt-based merged mining with Litecoin. The network has been in continuous operation since December 27, 2020.
 
 ---
 
@@ -24,12 +24,9 @@ Tidecoin is a decentralized cryptocurrency engineered from genesis to resist att
 10. [Economic Model](#10-economic-model)
 11. [Network Parameters](#11-network-parameters)
 12. [Security Analysis](#12-security-analysis)
-13. [Comparison with Other Post-Quantum Projects](#13-comparison-with-other-post-quantum-projects)
-14. [Operational Track Record](#14-operational-track-record)
-15. [Roadmap](#15-roadmap)
-16. [Conclusion](#16-conclusion)
-17. [References](#17-references)
-18. [Sources Consulted](#18-sources-consulted)
+13. [Design Positioning](#13-design-positioning)
+14. [Conclusion](#14-conclusion)
+15. [References](#15-references)
 
 ---
 
@@ -71,7 +68,7 @@ Blockchain data is uniquely vulnerable because it is public and immutable. An ad
 
 The Federal Reserve's 2025 paper, "Harvest Now Decrypt Later: Examining Post-Quantum Cryptography and the Data Privacy Risks for Distributed Ledger Networks," specifically analyzes this scenario. Their key finding: even after a blockchain migrates to PQC, **previously recorded transaction data remains permanently vulnerable**. The immutability of blockchains -- normally their greatest strength -- becomes their greatest weakness in the quantum context.
 
-For Bitcoin specifically:
+For Bitcoin specifically (estimates from Deloitte [44], the Federal Reserve [13], and on-chain analyses [45]):
 
 | Category | BTC Exposed | Risk Level |
 |----------|-------------|------------|
@@ -100,7 +97,7 @@ Tidecoin's architecture follows four principles:
 
 ### 3.1 NIST Standards, Not Experiments
 
-Every cryptographic primitive in Tidecoin is either a finalized NIST standard or a NIST competition winner in active standardization:
+Every post-quantum cryptographic primitive in Tidecoin is either a finalized NIST standard or a NIST competition winner in active standardization:
 
 - **ML-DSA** (FIPS 204, August 2024) -- Digital signatures
 - **ML-KEM** (FIPS 203, August 2024) -- Key encapsulation
@@ -117,7 +114,7 @@ Tidecoin is built on Bitcoin Core v30, preserving:
 - Script-based programmable spending conditions
 - The peer-to-peer network protocol
 - The validated block relay and mempool architecture
-- Over 135 unit test files and 255 functional test files
+- Extensive unit and functional test coverage across consensus, script validation, wallet, networking, PQ signatures, PQHD, AuxPoW, and transport code.
 
 This is 15+ years of battle-tested, peer-reviewed code. We replaced only what quantum computers break (ECDSA) and extended only what quantum security demands (witness versions, opcodes, HD wallet derivation).
 
@@ -128,7 +125,7 @@ Tidecoin applies post-quantum security at every layer:
 | Layer | Classical (Bitcoin) | Post-Quantum (Tidecoin) |
 |-------|-------------------|------------------------|
 | Transaction signing | ECDSA (secp256k1) | Falcon-512/1024, ML-DSA-44/65/87 |
-| Witness script hashing | SHA-256 (128-bit PQ security) | SHA-512 (256-bit PQ security) |
+| Witness script hashing | SHA-256 (Category 1) | SHA-512 (Category 5) |
 | Peer-to-peer encryption | ECDH (secp256k1) | ML-KEM-512 (FIPS 203) |
 | Proof-of-work | SHA-256d (no memory barrier) | YespowerTIDE -> scrypt (memory-hard, merged-mined) |
 | HD wallet derivation | BIP32 (ECDSA-based xpub) | PQHD (hardened-only, hash-based) |
@@ -145,7 +142,7 @@ New signature schemes are activated through height-gated consensus upgrades, not
 
 Falcon (**F**ast-Fourier **L**attice-based **C**ompact Signatures **o**ver **N**TRU) is a NIST PQC Round 3 winner, designated for standardization as **FIPS 206 (FN-DSA)**. The draft standard was described as "basically written, awaiting approval" at the 6th PQC Standardization Conference in September 2025.
 
-Falcon-512 has been the active signature scheme on Tidecoin's mainnet since genesis (December 2020), making Tidecoin one of the earliest live blockchains to use this NIST-standardized lattice-based signature.
+Falcon-512 has been the active signature scheme on Tidecoin's mainnet since genesis (December 2020), making Tidecoin one of the earliest live blockchains to use this lattice-based signature family later designated for standardization as FN-DSA (Draft FIPS 206).
 
 #### 4.1.1 Mathematical Foundation: NTRU Lattices and the GPV Framework
 
@@ -195,19 +192,32 @@ Verification is remarkably simple and fast:
 
 Verification uses only **integer arithmetic** -- no floating-point, no Gaussian sampling, no secret key involvement. On typical hardware, Falcon-512 verification achieves ~28,000 verifications/second, approximately 5-10x faster than signing.
 
-#### 4.1.5 Size Comparison
+#### 4.1.5 NIST PQC Security Categories
+
+NIST defines five security categories for post-quantum schemes, each referenced against a specific classical primitive under quantum attack:
+
+| Category | Reference Problem | Approximate Quantum Security |
+|----------|------------------|------------------------------|
+| 1 | AES-128 key search (Grover) | 2^128 gate operations |
+| 2 | SHA-256 collision (BHT/Grover) | 2^128 gate operations (different cost model) |
+| 3 | AES-192 key search (Grover) | 2^192 gate operations |
+| 5 | AES-256 key search (Grover) | 2^256 gate operations |
+
+Odd categories (1, 3, 5) measure resistance to block cipher key search. Even categories (2) measure resistance to hash collision finding. Categories 1 and 2 both provide roughly 128-bit quantum security but against different attack models. NIST does not use Category 4 for PQC selections.
+
+#### 4.1.6 Size Comparison
 
 | Parameter | Falcon-512 | Falcon-1024 | ML-DSA-44 | ML-DSA-65 |
 |-----------|-----------|-------------|-----------|-----------|
-| NIST Security Level | 1 (~AES-128) | 5 (~AES-256) | 2 (~AES-128) | 3 (~AES-192) |
+| NIST Security Category | 1 | 5 | 2 | 3 |
 | Public Key | 897 bytes | 1,793 bytes | 1,312 bytes | 1,952 bytes |
 | Signature (padded) | 666 bytes | 1,280 bytes | 2,420 bytes | 3,309 bytes |
 | **PK + Sig** | **~1,563 bytes** | **~3,073 bytes** | **3,732 bytes** | **5,261 bytes** |
 | Verification speed | ~28,000 ver/s | ~13,700 ver/s | Fast | Fast |
 
-Falcon's combined public key + signature size is the **smallest of any NIST PQC signature standard**, which is decisive for bandwidth-constrained blockchain transactions.
+Falcon's combined public key + signature size is the **smallest of any NIST PQC lattice signature**, which is decisive for bandwidth-constrained blockchain transactions.
 
-#### 4.1.6 Signature Formats: Compressed vs. Padded
+#### 4.1.7 Signature Formats: Compressed vs. Padded
 
 The Falcon specification defines multiple signature encoding formats:
 
@@ -217,24 +227,22 @@ The Falcon specification defines multiple signature encoding formats:
 
 FIPS 206 will include both padded and compressed formats with domain separation to maintain strong unforgeability when multiple encodings coexist.
 
-#### 4.1.7 Integer Emulation: Eliminating Floating-Point Side Channels
+#### 4.1.8 Integer Emulation: Eliminating Floating-Point Side Channels
 
 The discrete Gaussian sampler at the heart of Falcon signing requires high-precision floating-point arithmetic for its FFT computations. Native hardware FPU operations are fast but vulnerable to **electromagnetic emanation**, **power analysis**, and **timing side-channels** -- demonstrated by the FALCON DOWN attack (2021, ePrint 2021/772) which achieved full key recovery through electromagnetic measurements of FFT multiplications, and the SHIFT SNARE attack (2025) which achieved 100% key recovery from a single power trace on ARM Cortex-M4.
 
 Tidecoin's implementation uses the **PQClean "clean" constant-time implementation** by Thomas Pornin, which employs **integer emulation** (FALCON_FPEMU) rather than native floating-point:
 
 - **All floating-point arithmetic is emulated using `uint64_t` integer operations.** The C `double` type is never used. Instead, IEEE-754 binary64 format is represented as a 64-bit unsigned integer (bit 63: sign, bits 52-62: exponent, bits 51-0: mantissa), with all arithmetic (addition, subtraction, multiplication, division, square root, rounding) implemented as sequences of integer operations.
-- **Constant-time shifts:** Custom functions `fpr_ursh()`, `fpr_irsh()`, and `fpr_ulsh()` handle 64-bit shifts with "possibly secret shift count" using barrel-shifter emulation through XOR masking, avoiding variable-time software shift routines (source: `src/pq/falcon-512/fpr.h:125-153`).
+- **Constant-time shifts:** Custom functions `fpr_ursh()`, `fpr_irsh()`, and `fpr_ulsh()` handle 64-bit shifts with "possibly secret shift count" using barrel-shifter emulation through XOR masking, avoiding variable-time software shift routines.
 - **No branching on secrets:** Table lookups read all elements (no early exit), and value tests use constant-time bitwise operations.
 - **Fully portable:** Works on any platform with a C99-compliant compiler -- no FPU required. Successfully tested on 32-bit and 64-bit systems, both little-endian (x86, ARM) and big-endian (PowerPC).
 
 The integer emulation approach makes signing approximately 20x slower than native floating-point with AVX2, but this tradeoff is accepted for **provable constant-time behavior** -- the critical security property for a cryptocurrency where keys protect real value. The formal correctness of Falcon's emulated floating-point has been verified (ePrint 2024/321).
 
-Source: `src/pq/falcon-512/fpr.h:34-96` (header documenting the integer emulation design), `src/pq/falcon-512/fpr.c` (implementation).
+#### 4.1.9 Tidecoin's Legacy vs. Strict Signature Modes
 
-#### 4.1.8 Tidecoin's Legacy vs. Strict Signature Modes
-
-Tidecoin's Falcon-512 implementation (source: `src/pq/falcon512.c`) supports two verification modes:
+Tidecoin's Falcon-512 implementation supports two verification modes:
 
 - **Legacy mode** (active since genesis): Uses the original Falcon signature format with a relaxed norm bound derived from the pre-2019-fix acceptance threshold (`floor((7085 * 12289) >> (10 - logn))`). This preserves backward compatibility with all signatures created since genesis block zero. The legacy format uses header byte `0x39` (0x30 + 9 for degree-9 = 512).
 
@@ -242,7 +250,7 @@ Tidecoin's Falcon-512 implementation (source: `src/pq/falcon512.c`) supports two
 
 **Keys remain identical in both modes.** The public key format (polynomial h encoded as 14 bits per coefficient with header byte `0x09`) and private key format (f, g, F polynomials with header byte `0x59`) are unchanged. Only signature *creation* and *verification bounds* differ. This means existing wallets require no key migration -- the same keys simply produce and verify tighter signatures after AuxPoW activation.
 
-#### 4.1.9 From Falcon to FN-DSA (FIPS 206): What Changes
+#### 4.1.10 From Falcon to FN-DSA (FIPS 206): What Changes
 
 FIPS 206 standardizes Falcon under the name **FN-DSA** (FFT over NTRU-Lattice-Based Digital Signature Algorithm). Key changes from the original Falcon specification:
 
@@ -258,7 +266,7 @@ FIPS 206 standardizes Falcon under the name **FN-DSA** (FFT over NTRU-Lattice-Ba
 
 **Key compatibility:** Public key encoding remains unchanged between original Falcon and FN-DSA (same polynomial h, same sizes). However, FN-DSA signatures are **not backward-compatible** with original Falcon signatures because the hash input changed (includes hpk and context). Tidecoin's transition plan: existing keys work in both modes; the legacy verification path accepts pre-activation signatures, while post-activation signatures will use the stricter format that aligns with FN-DSA's direction.
 
-#### 4.1.10 The 2019 Sampler Bug and PQClean Security History
+#### 4.1.11 The 2019 Sampler Bug and PQClean Security History
 
 In August 2019, Thomas Pornin published a new constant-time Falcon implementation. Shortly after, **Markku-Juhani O. Saarinen** discovered two severe bugs in the Gaussian sampler:
 
@@ -330,7 +338,7 @@ Verification is single-pass with no retry loop:
 
 | Parameter | ML-DSA-44 | ML-DSA-65 | ML-DSA-87 |
 |-----------|-----------|-----------|-----------|
-| **NIST Security Category** | **2** (~AES-128) | **3** (~AES-192) | **5** (~AES-256) |
+| **NIST Security Category** | **2** | **3** | **5** |
 | (k, l) matrix dimensions | (4, 4) | (6, 5) | (8, 7) |
 | eta (secret key coefficient range) | 2 | 4 | 2 |
 | tau (nonzero coefficients in challenge) | 39 | 49 | 60 |
@@ -340,7 +348,7 @@ Verification is single-pass with no retry loop:
 | **Secret Key** | **2,560 bytes** | **4,032 bytes** | **4,896 bytes** |
 | **Signature** | **2,420 bytes** | **3,309 bytes** | **4,627 bytes** |
 
-(Source: `src/pq/pq_scheme.h:72-100`, FIPS 204 Table 1)
+(Source: FIPS 204 Table 1)
 
 #### 4.2.6 Advantages Over Falcon
 
@@ -353,7 +361,7 @@ ML-DSA complements Falcon with several distinct advantages:
 - **Already finalized:** FIPS 204 was published August 13, 2024 and is effective immediately. Falcon's FIPS 206 remains in draft with projected finalization in 2026-2027.
 - **Strong unforgeability (SUF-CMA):** An adversary cannot produce a new valid signature even for a message that has already been signed.
 
-The tradeoff: ML-DSA signatures (2,420-4,627 bytes) are 3.6-3.6x larger than Falcon signatures (666-1,280 bytes). In blockchain contexts where bandwidth is constrained, Falcon's compactness remains valuable -- which is why Tidecoin supports both families, allowing users to choose the appropriate tradeoff.
+The tradeoff: ML-DSA signatures (2,420-4,627 bytes) are roughly 3.6x larger than the corresponding Falcon signatures (666-1,280 bytes). In blockchain contexts where bandwidth is constrained, Falcon's compactness remains valuable -- which is why Tidecoin supports both families, allowing users to choose the appropriate tradeoff.
 
 #### 4.2.7 From CRYSTALS-Dilithium to ML-DSA (FIPS 204)
 
@@ -368,7 +376,7 @@ The standard is based on Dilithium specification version 3.1, with changes made 
 
 ### 4.3 Scheme Registry and Consensus Integration
 
-All five signature schemes are registered in a compile-time scheme registry (source: `src/pq/pq_scheme.h:42-108`). Each scheme has:
+All five signature schemes are registered in a compile-time scheme registry. Each scheme has:
 
 - A unique one-byte prefix (0x07-0x0B) prepended to serialized public keys
 - Fixed metadata: public key size, secret key size, maximum and fixed signature sizes
@@ -381,9 +389,7 @@ EvalScript() -> EvalChecksig() -> CheckPostQuantumSignature()
   -> VerifyPostQuantumSignature() -> CPubKey::Verify() -> pq::VerifyPrefixed()
 ```
 
-(Source: `src/script/interpreter.cpp:1445-1495`, `src/pubkey.cpp:19-74`)
-
-Three consensus script verification flags control PQ behavior (source: `src/script/interpreter.h:114-122`):
+Three consensus script verification flags control PQ behavior:
 
 - `SCRIPT_VERIFY_PQ_STRICT` (bit 13): Reject legacy signature formats
 - `SCRIPT_VERIFY_WITNESS_V1_512` (bit 14): Enable 64-byte witness v1 scripthash
@@ -403,7 +409,7 @@ In a quantum setting, this is catastrophic: Shor's algorithm can derive the priv
 
 Tidecoin implements a custom Post-Quantum Hierarchical Deterministic wallet (PQHD) that replaces BIP32 entirely. The design uses hardened-only derivation with hash-based key material generation.
 
-**Path structure** (source: `src/pq/pqhd_kdf.cpp:102-114`):
+**Path structure:**
 
 ```
 m / purpose' / coin_type' / scheme' / account' / change' / index'
@@ -417,7 +423,7 @@ All path elements are hardened (high bit set), with fixed values:
 
 ### 5.3 Key Derivation
 
-The derivation chain from master seed to leaf key (source: `src/pq/pqhd_kdf.h`, `src/pq/pqhd_kdf.cpp`, `src/pq/pqhd_keygen.cpp`):
+The derivation chain from master seed to leaf key is:
 
 1. **Seed ID computation:** `SeedID = SHA-256("Tidecoin PQHD seedid v1" || master_seed)` -- domain-separated identifier
 2. **Master node derivation:** HMAC-SHA-512 based master node creation from 32-byte master seed
@@ -434,9 +440,9 @@ The derivation chain from master seed to leaf key (source: `src/pq/pqhd_kdf.h`, 
 PQHD is fully integrated with Bitcoin Core's descriptor wallet framework:
 
 - **Descriptor format:** `wpkh(pqhd(SEEDID)/purpose'/cointype'/scheme'/account'/change'/index')`
-- **PSBT support:** Proprietary fields (identifier: "tidecoin", subtype 0x01) carry PQHD origin metadata for offline signers (source: `src/psbt.h:30-63`)
-- **Encrypted storage:** Seeds are encrypted with the wallet master key; decryption occurs only when spending (source: `src/wallet/pqhd.h:29-42`)
-- **Policy management:** The `setpqhdpolicy` RPC command allows setting default receive and change signature schemes (source: `src/wallet/rpc/wallet.cpp:348-391`)
+- **PSBT support:** Proprietary fields (identifier: "tidecoin", subtype 0x01) carry PQHD origin metadata for offline signers
+- **Encrypted storage:** Seeds are encrypted with the wallet master key; decryption occurs only when spending
+- **Policy management:** The `setpqhdpolicy` RPC command allows setting default receive and change signature schemes
 
 ---
 
@@ -444,7 +450,7 @@ PQHD is fully integrated with Bitcoin Core's descriptor wallet framework:
 
 Tidecoin employs a **two-phase proof-of-work strategy** designed to maximize both fairness during early distribution and long-term network security against quantum adversaries.
 
-### 6.1 Phase 1: YespowerTIDE (Current -- CPU Mining)
+### 6.1 Phase 1: YespowerTIDE (Pre-AuxPoW -- CPU Mining)
 
 During its initial phase, Tidecoin uses **YespowerTIDE**, a memory-hard proof-of-work algorithm from the yespower/yescrypt family designed by Solar Designer (Alexander Peslyak) of the Openwall Project. Yespower is a PoW-focused fork of yescrypt, which itself builds on Colin Percival's scrypt.
 
@@ -454,11 +460,11 @@ During its initial phase, Tidecoin uses **YespowerTIDE**, a memory-hard proof-of
 - **GPU-unfriendly:** Memory access patterns map poorly to GPU architectures, preventing GPU mining farms from dominating
 - **ASIC-neutral:** While dedicated hardware can eventually be built, the advantage over CPUs is far smaller than Bitcoin's SHA-256d, where ASICs outperform CPUs by factors of 10^6+
 
-**Purpose of Phase 1:** YespowerTIDE ensures fair initial coin distribution. Anyone with a standard CPU -- including mobile devices via the Tidecoin Android Miner -- can participate in mining. This prevents the concentration of supply in the hands of ASIC or GPU farm operators during the critical early years when the coin supply is being distributed.
+**Purpose of Phase 1:** YespowerTIDE ensures fair initial coin distribution. Anyone with a standard CPU -- including mobile devices -- can participate in mining. This prevents the concentration of supply in the hands of ASIC or GPU farm operators during the critical early years when the coin supply is being distributed.
 
 ### 6.2 Phase 2: Scrypt via Merged Mining with Litecoin (Post-AuxPoW Activation)
 
-At a predetermined consensus height, Tidecoin activates **Auxiliary Proof-of-Work (AuxPoW)**, transitioning from standalone YespowerTIDE mining to **scrypt-based merged mining with Litecoin**. This is not merely a PoW algorithm change -- it is a deliberate security architecture decision. The AuxPoW activation simultaneously enables:
+Upon AuxPoW activation, Tidecoin transitions from standalone YespowerTIDE mining to **scrypt-based merged mining with Litecoin**. This is a deliberate security architecture decision. The AuxPoW activation simultaneously enables:
 
 1. **Scrypt proof-of-work** via Litecoin's parent chain
 2. **Multi-scheme signature support** (Falcon-1024, ML-DSA-44/65/87 join Falcon-512)
@@ -595,18 +601,19 @@ A critical finding in the QRAM literature: under fault-tolerant operation (requi
 
 ### 6.4 Difficulty Adjustment
 
-Tidecoin uses a DigiShield-variant difficulty adjustment algorithm (source: `src/kernel/chainparams.cpp:99-108`):
+**Pre-AuxPoW (legacy retarget):** Tidecoin uses a Bitcoin-style periodic difficulty retarget. Difficulty is recalculated every 7,200 blocks (~5 days at 60-second targets), comparing actual elapsed time against the 5-day target timespan and clamping the adjustment to prevent large swings.
 
-| Parameter | Value |
-|-----------|-------|
-| Target block time | 60 seconds |
-| Averaging window | 17 blocks |
-| Target timespan | 5 days (432,000 seconds) |
-| Max adjustment down | 32% per period |
-| Max adjustment up | 16% per period |
-| Min difficulty blocks | Disabled on mainnet |
+**Post-AuxPoW (averaging-window retarget):** Upon AuxPoW activation, Tidecoin switches to a Zcash-derived averaging-window algorithm that adjusts difficulty every block using median time past (MTP), resisting time-warp attacks.
 
-This provides responsive difficulty adjustment while resisting manipulation through time-warp attacks.
+| Parameter | Pre-AuxPoW | Post-AuxPoW |
+|-----------|------------|-------------|
+| Target block time | 60 seconds | 60 seconds |
+| Retarget interval | Every 7,200 blocks (~5 days) | Every block |
+| Method | Periodic (Bitcoin-style) | Averaging window (Zcash-derived, MTP) |
+| Averaging window | N/A | 17 blocks |
+| Max adjustment down | Per-period clamp | 32% |
+| Max adjustment up | Per-period clamp | 16% |
+| Min difficulty blocks | Disabled on mainnet | Disabled on mainnet |
 
 ---
 
@@ -614,7 +621,7 @@ This provides responsive difficulty adjustment while resisting manipulation thro
 
 ### 7.1 OP_SHA512
 
-Tidecoin introduces `OP_SHA512` (opcode 0xb3, source: `src/script/script.h:187`), which computes the SHA-512 hash of the top stack element.
+Tidecoin introduces `OP_SHA512` (opcode 0xb3), which computes the SHA-512 hash of the top stack element.
 
 **Post-quantum justification:** Under Grover's algorithm:
 
@@ -623,7 +630,7 @@ Tidecoin introduces `OP_SHA512` (opcode 0xb3, source: `src/script/script.h:187`)
 | SHA-256 | 256 bits | 128 bits |
 | SHA-512 | 512 bits | 256 bits |
 
-SHA-256 provides 128-bit post-quantum security -- sufficient by NIST standards (Category 1), but with no margin. SHA-512 provides 256-bit post-quantum security (NIST Category 5), offering the maximum security margin against future quantum algorithmic improvements.
+SHA-256 provides 128-bit post-quantum security (NIST Category 1), but with no margin. SHA-512 provides 256-bit post-quantum security (NIST Category 5), offering the maximum security margin against future quantum algorithmic improvements.
 
 NIST explicitly states that existing symmetric cryptography and hash functions "are less vulnerable to attacks by quantum computers" and "NIST does not expect to need to transition away from these standards." By choosing SHA-512, Tidecoin aligns with NIST's highest security category for hash-based security.
 
@@ -631,7 +638,7 @@ NIST explicitly states that existing symmetric cryptography and hash functions "
 
 Tidecoin extends Bitcoin's witness program with a new witness version 1 type: **P2WSH-512** (Pay-to-Witness-Script-Hash-512). This uses a 64-byte (512-bit) SHA-512 hash of the witness script, compared to Bitcoin's 32-byte SHA-256 hash.
 
-Defined in `src/script/interpreter.h:178-180`:
+Tidecoin defines the following witness program sizes:
 
 ```
 WITNESS_V0_SCRIPTHASH_SIZE = 32   // Bitcoin-compatible (SHA-256)
@@ -643,7 +650,7 @@ The v1 witness is activated by the `SCRIPT_VERIFY_WITNESS_V1_512` consensus flag
 
 ### 7.3 Post-Quantum Address Formats
 
-Tidecoin uses two bech32 address families (source: `src/kernel/chainparams.cpp:153-154`):
+Tidecoin uses two bech32 address families:
 
 | Address Type | HRP | Witness Version | Use Case |
 |-------------|-----|-----------------|----------|
@@ -660,7 +667,7 @@ Testnet uses `ttbc` and `tq`; regtest uses `rtbc` and `rq`.
 
 Tidecoin's v2 peer-to-peer transport protocol replaces Bitcoin's ECDH-based key exchange with **ML-KEM-512** (FIPS 203), a Module-Lattice-Based Key-Encapsulation Mechanism.
 
-ML-KEM-512 parameters (NIST Security Level 1):
+ML-KEM-512 parameters (NIST Security Category 1):
 
 | Parameter | Size |
 |-----------|------|
@@ -669,17 +676,15 @@ ML-KEM-512 parameters (NIST Security Level 1):
 | Ciphertext | 768 bytes |
 | Shared secret | 32 bytes |
 
-The ML-KEM handshake establishes a 256-bit shared secret that is then used for authenticated encryption of all subsequent peer-to-peer communication. This ensures that an adversary with a quantum computer cannot decrypt recorded network traffic to extract transaction data before it is confirmed in a block.
-
-Implementation: `src/pq/kem.cpp` (83 lines), `src/pq/pq_api.h:69-109`, with Python functional test support via a vendored ML-KEM library at `test/functional/test_framework/crypto/kyber_py/ml_kem/`.
+The ML-KEM handshake establishes a 256-bit shared secret that is then used for authenticated encryption of all subsequent peer-to-peer communication. As with Bitcoin's BIP 324 v2 transport, the primary purpose is peer privacy and censorship resistance — preventing ISP-level traffic analysis, connection fingerprinting, and selective relay censorship. Tidecoin replaces the ECDH key exchange with ML-KEM so that this protection does not become a quantum-era weakness.
 
 ### 8.2 Why P2P Encryption Matters for PQ
 
-In a classical setting, P2P encryption prevents passive eavesdropping but is less critical because transactions are broadcast publicly. In a post-quantum setting, P2P encryption prevents a quantum adversary from:
+In a post-quantum setting, P2P encryption makes it harder for a passive network adversary to:
 
-1. Intercepting transactions between broadcast and confirmation
-2. Extracting public keys from unconfirmed transactions in the mempool
-3. Correlating network metadata with quantum key-recovery attacks
+1. Intercept unconfirmed transactions in transit between peers
+2. Collect exposed public keys from transaction relay traffic without participating as a receiving peer
+3. Correlate transport-layer metadata with observed transaction propagation
 
 ---
 
@@ -689,21 +694,21 @@ In a classical setting, P2P encryption prevents passive eavesdropping but is les
 
 Every proof-of-work cryptocurrency faces a fundamental security equation: the cost of a 51% attack must exceed the profit an attacker could extract. For small standalone chains, this equation is often unfavorable.
 
-**Real-world attack costs (from Crypto51.app, 2025-2026 data):**
+**Illustrative rental-market benchmarks (Crypto51/NiceHash snapshots, 2025-2026):**
 
-| Chain | Algorithm | 1-Hour Attack Cost | Context |
-|-------|-----------|-------------------|---------|
-| Bitcoin | SHA-256d | ~$1,611,667 | Effectively unattackable |
-| Litecoin | Scrypt | ~$58,356 | Expensive but finite |
-| Small standalone chains | Various | **$42 - $250** | Trivially attackable |
+| Chain | Algorithm | Approximate 1-Hour Rental Benchmark | Interpretation |
+|-------|-----------|--------------------------------------|----------------|
+| Bitcoin | SHA-256d | Million-dollar-plus | Rental attack infeasible at market scale |
+| Litecoin | Scrypt | Tens-of-thousands of dollars | Meaningful benchmark, but not evidence that majority hashpower is rentable on demand |
+| Small standalone chains | Various | Tens to low hundreds of dollars | Often cheap enough to be threatened if rental supply exists |
 
-A small CPU-mined chain like Tidecoin in its yespower phase, with a hashrate of ~5-6 MH/s, could theoretically be 51%-attacked by renting CPU power. This is the fundamental motivation for merged mining: **inherited security from a major chain eliminates this vulnerability class entirely**.
+These figures are lower-bound market heuristics, not full real-world attack budgets. Crypto51 derives them from NiceHash pricing and separately reports available rental capacity; in observed snapshots, rentable scrypt supply is far below Litecoin's total network hashrate. For Tidecoin, the key point is comparative scale: merged mining anchors security to a much larger scrypt mining base than a standalone small chain can typically sustain.
 
 ### 9.2 How Merged Mining Works
 
 Auxiliary Proof-of-Work (AuxPoW) allows miners working on one blockchain (the "parent chain") to simultaneously secure additional blockchains ("auxiliary chains") using the same computational work, at near-zero marginal cost.
 
-**Protocol mechanics** (source: `src/auxpow.h`, `src/auxpow.cpp`):
+**Protocol mechanics:**
 
 1. **Block assembly:** The miner constructs block candidates for both the parent chain (Litecoin) and the auxiliary chain (Tidecoin)
 2. **Coinbase embedding:** The hash of Tidecoin's block header is inserted into the coinbase field of Litecoin's coinbase transaction, prefixed with magic bytes `0xfabe6d6d`
@@ -726,17 +731,17 @@ The effectiveness of AuxPoW is demonstrated by historical data. Dogecoin activat
 
 The choice of Litecoin as the parent chain is deliberate:
 
-**Security inheritance:** Litecoin's scrypt hashrate (~3 PH/s) costs approximately $58,356 per hour to attack. By merged mining with Litecoin, Tidecoin inherits this security -- a **100-1,000x improvement** over standalone small-chain security.
+**Security inheritance:** Litecoin's multi-petahash scrypt network provides a far higher security ceiling than a small standalone chain. NiceHash-based benchmarks place Litecoin in the tens-of-thousands-of-dollars-per-hour class, but observed rentable scrypt supply is far below Litecoin's full network hashrate. By merged mining with Litecoin, Tidecoin ties its PoW security to that much larger mining base rather than relying solely on its own standalone hashrate.
 
 **Quantum-resistant PoW:** Litecoin uses scrypt, a provably maximally memory-hard function (see Section 6.3). Unlike Bitcoin's SHA-256d, which can be attacked by a quantum computer with only computational qubits (no QRAM), scrypt requires ~1.2 billion physical qubits including QRAM for a quantum Grover attack (see Section 6.3.5). Merged mining with Litecoin means Tidecoin's PoW layer inherits scrypt's quantum resistance.
 
 **Aligned incentives:** Litecoin miners opt into merged mining voluntarily because Tidecoin block rewards provide additional revenue at negligible extra cost. This creates a positive-sum relationship where Litecoin miners earn more and Tidecoin gains security.
 
-**Chain ID separation:** Tidecoin uses AuxPoW Chain ID 8 (`src/kernel/chainparams.cpp:94`) with strict chain ID enforcement, preventing cross-chain proof replay attacks.
+**Chain ID separation:** Tidecoin uses AuxPoW Chain ID 8 with strict chain ID enforcement, preventing cross-chain proof replay attacks.
 
 ### 9.5 AuxPoW Activation as the Upgrade Gate
 
-AuxPoW activation is the single consensus transition that unlocks Tidecoin's full post-quantum feature set. At the predetermined activation height, the following changes take effect simultaneously:
+AuxPoW activation is the single consensus transition that unlocks Tidecoin's full post-quantum feature set. At the activation height, the following changes take effect simultaneously:
 
 | Feature | Before AuxPoW | After AuxPoW |
 |---------|--------------|--------------|
@@ -748,7 +753,7 @@ AuxPoW activation is the single consensus transition that unlocks Tidecoin's ful
 
 This bundled activation ensures that the most significant upgrades deploy together, reducing the number of consensus transitions and allowing comprehensive testing of the combined feature set.
 
-**Current status:** AuxPoW infrastructure is complete and tested (`consensus.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED` in `src/kernel/chainparams.cpp:93`). Activation height will be set via a node software release coordinated with the mining community.
+AuxPoW and its associated consensus changes are defined as a single height-gated transition. Before activation, Tidecoin operates under its pre-AuxPoW ruleset; after activation, the AuxPoW ruleset takes effect.
 
 ### 9.6 Combined Quantum Security of Scrypt + Merged Mining
 
@@ -756,7 +761,7 @@ The quantum security argument for merged mining with Litecoin is twofold:
 
 **Layer 1 -- Algorithmic resistance:** Scrypt requires ~1.2 million logical qubits (~1.2 billion physical qubits) for the quantum oracle, including QRAM for the 128 KB scratchpad. This is approximately **200x more qubits** than attacking SHA-256d. The QRAM technology required does not exist and faces fundamental engineering challenges with no clear timeline for realization.
 
-**Layer 2 -- Economic resistance:** Even if a quantum adversary could somehow construct a scrypt quantum oracle, they must still outcompete the combined hashrate of all Litecoin and Tidecoin miners. The cost of 51%-attacking Litecoin's hashrate is $58,000+/hour classically; a quantum attacker would need to exceed this rate of PoW production, which requires not just a single quantum oracle evaluation but sustained, faster-than-classical throughput -- a far harder problem than a single Grover search.
+**Layer 2 -- Economic resistance:** Even if a quantum adversary could somehow construct a scrypt quantum oracle, they must still outcompete the combined hashrate of all Litecoin and Tidecoin miners. NiceHash-style benchmarks place Litecoin in the tens-of-thousands-of-dollars-per-hour rental class, but those figures are only lower-bound market heuristics and do not imply that majority scrypt hashpower can actually be rented on demand. A quantum attacker would still need sustained, faster-than-classical PoW throughput against the live mining network -- a far harder problem than a single Grover search.
 
 **The compound barrier:** An attacker must simultaneously solve two independent hard problems: (1) build a quantum computer with billion-qubit-scale QRAM, and (2) make that quantum computer evaluate scrypt faster than the entire Litecoin mining network's classical hardware. These barriers multiply rather than add.
 
@@ -766,7 +771,7 @@ The quantum security argument for merged mining with Litecoin is twofold:
 
 ### 10.1 Supply Schedule
 
-Tidecoin uses a doubling-interval halving schedule with quartering rewards, designed to converge to a total supply of approximately 21 million TDC (source: `src/validation.cpp:1946-1974`, `src/kernel/chainparams.cpp:86`).
+Tidecoin uses a doubling-interval halving schedule with quartering rewards, designed to converge to a total supply of approximately 21 million TDC.
 
 **Initial parameters:**
 - Initial block reward: 40 TDC
@@ -790,7 +795,7 @@ Tidecoin uses a doubling-interval halving schedule with quartering rewards, desi
 - This front-loads emission while maintaining a hard supply cap
 - The schedule converges to approximately 21 million TDC total supply
 
-**Implementation** (`src/validation.cpp:1970-1972`):
+In code, the core reward update is:
 
 ```cpp
 CAmount nSubsidy = 40 * COIN;
@@ -805,25 +810,26 @@ Tidecoin had no premine, no initial coin offering, and no developer allocation. 
 
 ## 11. Network Parameters
 
-| Parameter | Value | Source |
-|-----------|-------|--------|
-| **Ticker** | TDC | -- |
-| **Genesis timestamp** | December 27, 2020, 13:09:40 UTC | `chainparams.cpp:134` |
-| **Genesis hash** | `480ecc76...018075` | `chainparams.cpp:136` |
-| **Block time target** | 60 seconds | `chainparams.cpp:100` |
-| **Initial block reward** | 40 TDC | `validation.cpp:1970` |
-| **Halving interval (initial)** | 262,800 blocks | `chainparams.cpp:86` |
-| **Total supply** | ~21,000,000 TDC | Derived from schedule |
-| **PoW algorithm (Phase 1)** | YespowerTIDE (CPU-optimized, memory-hard) | `pureheader.cpp:20-27` |
-| **PoW algorithm (Phase 2)** | Scrypt via LTC merged mining (memory-hard) | `pureheader.cpp:29-38` |
-| **Default port** | 8755 | `chainparams.cpp:129` |
-| **Network magic** | 0xecfacea5 | `chainparams.cpp:125-128` |
-| **Bech32 HRP** | `tbc` (mainnet), `q` (PQ witness) | `chainparams.cpp:153-154` |
-| **Active signature scheme** | Falcon-512 | `pq_scheme.h:52-60` |
-| **P2P encryption** | ML-KEM-512 | `pq/kem.cpp` |
-| **DNS seeds** | seed.tidecoin.co, tidecoin.ddnsgeek.com, tidecoin.theworkpc.com | `chainparams.cpp:144-146` |
-| **SegWit** | Active from block 1 | `chainparams.cpp:92` |
-| **AuxPoW Chain ID** | 8 | `chainparams.cpp:94` |
+*Protocol parameters across both PoW phases. Features marked "post-AuxPoW" activate at the AuxPoW consensus height.*
+
+| Parameter | Value |
+|-----------|-------|
+| **Ticker** | TDC |
+| **Genesis timestamp** | December 27, 2020, 13:09:40 UTC |
+| **Genesis hash** | `480ecc76...018075` |
+| **Block time target** | 60 seconds |
+| **Initial block reward** | 40 TDC |
+| **Halving interval (initial)** | 262,800 blocks |
+| **Total supply** | ~21,000,000 TDC |
+| **PoW algorithms** | YespowerTIDE (pre-AuxPoW), scrypt via LTC merged mining (post-AuxPoW) |
+| **Default port** | 8755 |
+| **Network magic** | 0xecfacea5 |
+| **Bech32 HRP** | `tbc` (mainnet), `q` (PQ witness, post-AuxPoW) |
+| **Signature schemes** | Falcon-512 (genesis), Falcon-1024 / ML-DSA-44/65/87 (post-AuxPoW) |
+| **P2P encryption** | ML-KEM-512 |
+| **DNS seeds** | seed.tidecoin.co |
+| **SegWit** | Active from block 1 |
+| **AuxPoW Chain ID** | 8 |
 
 ---
 
@@ -837,7 +843,7 @@ Tidecoin had no premine, no initial coin offering, and no developer allocation. 
 | Quantum attack (Shor) | Polynomial time -- **broken** | Not applicable (no ECDLP) |
 | Quantum attack (Grover on hash) | N/A | Quadratic speedup on underlying hash |
 | Underlying hard problem | ECDLP | SIS over NTRU lattices |
-| NIST security level | N/A (deprecated) | Level 1 (AES-128 equivalent) |
+| NIST security level | N/A (deprecated) | Category 1 |
 
 Falcon-512's security is proven in the Quantum Random Oracle Model under the assumption that the SIS problem over NTRU lattices is hard. The NTRU lattice problem has been studied since 1996 (Hoffstein, Pipher, Silverman) with no known polynomial-time quantum algorithm.
 
@@ -845,23 +851,23 @@ Falcon-512's security is proven in the Quantum Random Oracle Model under the ass
 
 | Component | Bitcoin | Tidecoin | PQ Security Level |
 |-----------|---------|----------|-------------------|
-| Block hash | SHA-256d | SHA-256d | 128-bit (NIST Cat 1) |
-| Witness script hash (v0) | SHA-256 | SHA-256 | 128-bit (NIST Cat 1) |
-| Witness script hash (v1) | N/A | SHA-512 | 256-bit (NIST Cat 5) |
+| Block hash | SHA-256d | SHA-256d | Category 1 |
+| Witness script hash (v0) | SHA-256 | SHA-256 | Category 1 |
+| Witness script hash (v1) | N/A | SHA-512 | Category 5 |
 | Address hash (P2PKH) | HASH160 | HASH160 | 80-bit (legacy compat) |
 
 NIST confirms: "The existing algorithm standards for symmetric cryptography are less vulnerable to attacks by quantum computers. NIST does not expect to need to transition away from these standards as part of the PQC migration."
 
 ### 12.3 Proof-of-Work Security
 
-**Current phase (YespowerTIDE -- CPU mining):**
+**Pre-AuxPoW phase (YespowerTIDE -- CPU mining):**
 
 | Property | SHA-256d (Bitcoin) | YespowerTIDE (Tidecoin Phase 1) |
 |----------|-------------------|---------------------------------|
 | Memory requirement | ~0 (stateless) | 1-16 MB |
 | ASIC advantage | ~10^6x over CPU | Moderate over CPU |
 | Mining decentralization | ASIC-dominated | CPU-accessible |
-| 51% attack cost | ~$1.6M/hour | Low (small standalone chain) |
+| 51% attack benchmark | Million-dollar-plus/hour rental benchmark | Low as a standalone small chain |
 
 **Post-AuxPoW phase (scrypt via Litecoin merged mining):**
 
@@ -873,16 +879,18 @@ NIST confirms: "The existing algorithm standards for symmetric cryptography are 
 | QRAM needed | **None** | **128 KB in superposition** |
 | Sequential oracle depth | ~16K T-depth | **~100M+ T-depth** |
 | Effective Grover speedup | Full quadratic | **Substantially subquadratic** |
-| 51% attack cost | ~$1.6M/hour | ~$58K/hour (inherited from LTC) |
+| 51% attack benchmark | Million-dollar-plus/hour rental benchmark | Tens-of-thousands/hour rental benchmark at Litecoin scale* |
 
-The transition from YespowerTIDE to scrypt merged mining trades the Phase 1 advantage (CPU-accessible decentralization) for the Phase 2 advantage (inherited Litecoin hashrate security + quantum-resistant memory-hard PoW). This is a deliberate lifecycle design: fair distribution first, maximum security second.
+* Benchmark figures are lower-bound rental-market heuristics, not guarantees that majority hashpower is rentable on demand.
+
+The transition from YespowerTIDE to scrypt merged mining trades the Phase 1 advantage (CPU-accessible decentralization) for the Phase 2 advantage (inherited Litecoin-scale security + quantum-resistant memory-hard PoW). This is a deliberate lifecycle design: fair distribution first, maximum security second.
 
 ### 12.4 Transport Security
 
 | Property | Bitcoin v2 | Tidecoin v2 |
 |----------|-----------|-------------|
 | Key exchange | ECDH (secp256k1) | ML-KEM-512 (FIPS 203) |
-| Quantum security | Broken by Shor | NIST Level 1 |
+| Quantum security | Broken by Shor | NIST Category 1 |
 | Shared secret | 32 bytes | 32 bytes |
 
 ### 12.5 Memory Safety
@@ -898,99 +906,37 @@ The PQ implementation applies defense-in-depth memory safety practices:
 
 ---
 
-## 13. Comparison with Other Post-Quantum Projects
+## 13. Design Positioning
 
-| Feature | Tidecoin | QRL | Algorand | Bitcoin (proposed) | Ethereum (proposed) |
-|---------|----------|-----|----------|-------------------|-------------------|
-| **PQ algorithms** | Falcon-512/1024, ML-DSA-44/65/87, ML-KEM-512 | XMSS (hash-based) | Falcon-1024 | BIP-360: Falcon, ML-DSA | Account abstraction |
-| **PQ since genesis** | Yes (Dec 2020) | Yes (2018) | No (Nov 2025 first tx) | No (proposal stage) | No (devnet stage) |
-| **NIST standards** | FIPS 203, 204, draft 206 | RFC 8391 | Draft FIPS 206 | Proposed only | Proposed only |
-| **Stateless signatures** | Yes | No (XMSS is stateful) | Yes | Proposed | Proposed |
-| **Consensus model** | PoW (memory-hard) | PoW -> PoS | Pure PoS | PoW (SHA-256d) | PoS |
-| **HD wallet** | PQHD (custom, hardened-only) | N/A | N/A | BIP-360 proposal | N/A |
-| **P2P encryption** | ML-KEM-512 | N/A | N/A | N/A | N/A |
-| **Bitcoin heritage** | Full (v30 codebase) | Independent | Independent | Is Bitcoin | Independent |
-| **Years of operation** | 5+ | 7+ | PQ: < 1 year | N/A | N/A |
-| **Max supply** | ~21M TDC | 65M QRL | 10B ALGO | 21M BTC | Unlimited |
-| **Compact signatures** | Yes (Falcon: 666 B) | No (XMSS: ~2.7 KB) | Yes (Falcon: 1.3 KB) | Proposed | Proposed |
+Post-quantum blockchain projects differ in how deep the PQ commitment goes. Some swap the signature algorithm and stop there. Others retrofit PQ into an existing chain, where the real challenge is coordination and backward compatibility rather than cryptographic design. Tidecoin takes a third approach: PQ from genesis, applied beyond just signatures.
 
-### Key Differentiators
+| Approach | Description | Trade-offs |
+|----------|-------------|------------|
+| **Signature-only retrofit** | Replace signing algorithm on an existing chain | Requires coordinated migration; prior transactions remain exposed; political and block-space costs |
+| **Full-stack PQ (new chain)** | PQ across signing, wallet, transport from launch | No migration debt; smaller network initially |
+| **Stateful PQ** | Hash-based signatures (XMSS, LMS) | Conservative assumptions, but key reuse limits and state tracking add operational complexity |
 
-1. **Multi-scheme architecture:** Tidecoin supports five NIST-standardized signature schemes, allowing scheme agility. If a vulnerability is found in one lattice construction, alternative schemes are available through consensus upgrade.
+Tidecoin is a full-stack PQ design on a Bitcoin-architecture chain. Falcon and ML-DSA handle transaction signing, but Tidecoin also uses a hardened-only PQHD wallet, SHA-512 witness extensions, and ML-KEM-encrypted peer transport. The aim is to close quantum-era exposure across the full transaction lifecycle, not just at the signing step.
 
-2. **Full-stack PQ:** Unlike projects that add PQ at only one layer, Tidecoin secures signatures (Falcon/ML-DSA), script hashing (SHA-512), P2P transport (ML-KEM), and wallet derivation (PQHD) with post-quantum primitives.
+On the stateful-vs-stateless axis, Tidecoin chose stateless lattice signatures. Stateful schemes like XMSS have strong security properties but turn address reuse and signer state into consensus-level concerns -- operational complexity that is hard to justify when stateless alternatives exist. Lattice signatures avoid this entirely and preserve a wallet experience close to Bitcoin's.
 
-3. **Bitcoin-compatible architecture:** Tidecoin preserves Bitcoin's UTXO model, enabling future compatibility with Bitcoin ecosystem tooling, while other PQ projects use custom transaction models.
+Tidecoin supports five parameter sets across two NIST-track signature families (Falcon-512/1024, ML-DSA-44/65/87), providing scheme agility. If a vulnerability is found in one lattice construction, alternative schemes are available through consensus upgrade without a hard fork.
 
-4. **Stateless signatures:** Unlike QRL's XMSS (which is stateful and limits key reuse to 2^13 signatures), Falcon and ML-DSA are stateless -- keys can sign unlimited messages without tracking state.
+Architecturally, Tidecoin stays on the Bitcoin UTXO model, script system, and node design. It is not a new execution environment. The components that break under quantum attack -- signatures, key derivation, transport encryption -- were replaced or extended. Everything else was kept.
 
 ---
 
-## 14. Operational Track Record
+## 14. Conclusion
 
-Tidecoin has been in continuous operation since December 27, 2020:
+The quantum threat to cryptocurrency is not a question of *if* but *when*. NIST, the Federal Reserve, the NSA, and the UK NCSC all recommend migration to post-quantum cryptography within the next decade. Retrofitting post-quantum security onto existing blockchains is a significant engineering and coordination challenge, as the ongoing efforts around Bitcoin's BIP-360 and Ethereum's roadmap illustrate.
 
-| Metric | Value |
-|--------|-------|
-| Genesis date | December 27, 2020 |
-| Years of operation | 5+ |
-| Total blocks produced | ~2,380,000+ |
-| Security incidents | 0 |
-| Consensus failures | 0 |
-| Hard forks | 0 (all changes via soft fork) |
-| Network participants | 53+ connected nodes |
-| Mining pools | 6+ active pools |
-| Exchange listings | Dex-Trade, NonKyc.io, PancakeSwap V2 (wTDC) |
+Tidecoin took a different approach: build quantum resistance in from the start. Every transaction on the Tidecoin blockchain, from genesis to the present, is protected by post-quantum signatures drawn from the NIST PQC process. The network has operated continuously for over five years, demonstrating that post-quantum cryptocurrency is not merely theoretical -- it is operational and production-ready.
 
-The project was first announced on BitcoinTalk on January 4, 2021, and has maintained continuous community presence on Discord (1,000+ members), Telegram, and X/Twitter.
-
-Tidecoin was discussed on the official NIST Post-Quantum Cryptography mailing list (pqc-forum), which is notable recognition for a cryptocurrency project.
+By combining the proven foundation of Bitcoin Core with NIST's post-quantum cryptographic standards, Tidecoin provides a Bitcoin-architecture cryptocurrency with post-quantum security from genesis -- no migration required.
 
 ---
 
-## 15. Roadmap
-
-### Phase 1 -- Completed (Genesis to Present)
-
-- Falcon-512 signature scheme (active since genesis, December 2020)
-- PQHD deterministic wallet with encrypted seed storage
-- SegWit activation from block 1
-- YespowerTIDE CPU-friendly proof-of-work for fair initial distribution
-- ML-KEM-512 P2P transport encryption
-- AuxPoW merged mining infrastructure (code complete, tested)
-- OP_SHA512 and witness v1 512-bit script support (code complete, activation pending)
-- 135 unit test files + 255 functional test files
-- 5+ years of continuous network operation
-
-### Phase 2 -- AuxPoW Activation (Upcoming)
-
-The AuxPoW activation is the single most significant upgrade in Tidecoin's roadmap, simultaneously enabling:
-
-- **Scrypt merged mining with Litecoin:** Transition from standalone CPU mining to Litecoin-secured merged mining, increasing 51% attack cost by 100-1,000x
-- **Multi-scheme signatures:** Falcon-1024, ML-DSA-44, ML-DSA-65, ML-DSA-87 join Falcon-512
-- **Witness v1 activation:** SHA-512-based 64-byte script hashing with `q1...` PQ addresses
-- **OP_SHA512 activation:** 256-bit post-quantum script hashing
-- **Strict PQ validation:** Legacy signature format rejection
-
-### Phase 3 -- Long-Term
-
-- **Hardware wallet integration:** Falcon-512 and ML-DSA support for Ledger/Trezor secure elements
-- **Cross-chain bridges:** Quantum-secure bridge protocols using ML-KEM key exchange
-- **Performance optimization:** SIMD-accelerated signature verification for high-throughput nodes
-
----
-
-## 16. Conclusion
-
-The quantum threat to cryptocurrency is not a question of *if* but *when*. NIST, the Federal Reserve, the NSA, and the UK NCSC all recommend migration to post-quantum cryptography within the next decade. Yet Bitcoin, Ethereum, and the vast majority of blockchain systems have not begun this migration, and face years of political and technical obstacles before they can.
-
-Tidecoin took a different approach: build quantum resistance in from the start. Every transaction on the Tidecoin blockchain, from genesis to the present, is protected by NIST-standardized post-quantum signatures. The network has operated continuously for over five years without incident, demonstrating that post-quantum cryptocurrency is not merely theoretical -- it is operational, tested, and production-ready.
-
-By combining the proven foundation of Bitcoin Core with NIST's post-quantum cryptographic standards, Tidecoin offers what no other project currently provides: a Bitcoin-architecture cryptocurrency that is quantum-safe today, not someday.
-
----
-
-## 17. References
+## 15. References
 
 ### NIST Standards and Publications
 
@@ -1005,7 +951,7 @@ By combining the proven foundation of Bitcoin Core with NIST's post-quantum cryp
 
 7. Shor, P. "Algorithms for Quantum Computation: Discrete Logarithms and Factoring." FOCS 1994.
 8. Alwen, J., Chen, B., Pietrzak, K., Reyzin, L., Tessaro, S. "Scrypt Is Maximally Memory-Hard." EUROCRYPT 2017. https://eprint.iacr.org/2016/989
-9. Gentry, C., Peikert, C., Vaikuntanathan, V. "Trapdoors for Hard Lattices and New Cryptographic Constructions." STOC 2008.
+9. Gentry, C., Peikert, C., Vaikuntanathan, V. "Trapdoors for Hard Lattices and New Cryptographic Constructions." STOC 2008. https://eprint.iacr.org/2007/432.pdf
 10. Hoffstein, J., Pipher, J., Silverman, J.H. "NTRU: A Ring-Based Public Key Cryptosystem." ANTS-III 1998.
 11. Song, G., Seo, H. "Grover on Scrypt." MDPI Electronics, vol. 13, no. 16, article 3167, 2024. https://www.mdpi.com/2079-9292/13/16/3167
 12. Roetteler, M., Naehrig, M., Svore, K.M., Lauter, K. "Quantum Resource Estimates for Computing Elliptic Curve Discrete Logarithms." 2017. https://eprint.iacr.org/2017/598
@@ -1019,351 +965,47 @@ By combining the proven foundation of Bitcoin Core with NIST's post-quantum cryp
 
 ### Quantum Attacks on PoW
 
-14. Amy, M., Di Matteo, O., Gheorghiu, V., Mosca, M., Parent, A., Schanck, J. "Estimating the cost of generic quantum pre-image attacks on SHA-2 and SHA-3." 2016. https://arxiv.org/abs/1603.09383
-15. Benkoczi, R., Gaur, D., et al. "Quantum Bitcoin Mining." Entropy 24(3):323, 2022. https://www.mdpi.com/1099-4300/24/3/323
-16. Nerem, R., Gaur, D. "Conditions for Advantageous Quantum Bitcoin Mining." 2023. https://www.sciencedirect.com/science/article/pii/S2096720923000167
-17. Lee, S., et al. "T-depth reduction method for efficient SHA-256 quantum circuit construction." IET Information Security, 2023. https://ietresearch.onlinelibrary.wiley.com/doi/full/10.1049/ise2.12074
-18. Blocki, J., Holman, B., Lee, S. "The Parallel Reversible Pebbling Game: Analyzing the Post-quantum Security of iMHFs." 2022. https://eprint.iacr.org/2022/1503
-19. Phalak, K., et al. "Quantum Random Access Memory for Dummies." 2023. https://pmc.ncbi.nlm.nih.gov/articles/PMC10490729/
+17. Amy, M., Di Matteo, O., Gheorghiu, V., Mosca, M., Parent, A., Schanck, J. "Estimating the cost of generic quantum pre-image attacks on SHA-2 and SHA-3." 2016. https://arxiv.org/abs/1603.09383
+18. Benkoczi, R., Gaur, D., et al. "Quantum Bitcoin Mining." Entropy 24(3):323, 2022. https://www.mdpi.com/1099-4300/24/3/323
+19. Nerem, R., Gaur, D. "Conditions for Advantageous Quantum Bitcoin Mining." 2023. https://www.sciencedirect.com/science/article/pii/S2096720923000167
+20. Lee, S., et al. "T-depth reduction method for efficient SHA-256 quantum circuit construction." IET Information Security, 2023. https://ietresearch.onlinelibrary.wiley.com/doi/full/10.1049/ise2.12074
+21. Blocki, J., Holman, B., Lee, S. "The Parallel Reversible Pebbling Game: Analyzing the Post-quantum Security of iMHFs." 2022. https://eprint.iacr.org/2022/1503
+22. Phalak, K., et al. "Quantum Random Access Memory for Dummies." 2023. https://pmc.ncbi.nlm.nih.gov/articles/PMC10490729/
 
 ### Falcon Algorithm and Implementation
 
-20. Falcon specification. https://falcon-sign.info/falcon.pdf
-21. Falcon implementation paper (Pornin, 2019). https://falcon-sign.info/falcon-impl-20190802.pdf
-22. Gentry, C., Peikert, C., Vaikuntanathan, V. "Trapdoors for Hard Lattices and New Cryptographic Constructions." STOC 2008. https://eprint.iacr.org/2007/432.pdf
-23. Abou Haidar, C., Tibouchi, M. "How Bad Was The Falcon Bug of 2019?" ACM CCS 2025. https://www.esat.kuleuven.be/cosic/blog/ccs25-falconbug/
-24. Guerreau, M., et al. "FALCON Down: Breaking Falcon Post-Quantum Signature Scheme through Side-Channel Attacks." 2021. https://eprint.iacr.org/2021/772
-25. Berzati, A., et al. "SHIFT SNARE: Uncovering Secret Keys in FALCON via Single-Trace Analysis." 2025. https://arxiv.org/html/2504.00320v1
-26. Kim, S., Hong, S. "Improved Power Analysis Attacks on Falcon." EUROCRYPT 2023. https://dl.acm.org/doi/10.1007/978-3-031-30634-1_19
-27. Howe, J., et al. "Do Not Disturb a Sleeping Falcon: Floating-Point Error Sensitivity." 2024. https://eprint.iacr.org/2024/1709
-28. Becker, H., Howe, J. "Formal Verification of Emulated Floating-Point Arithmetic in Falcon." 2024. https://eprint.iacr.org/2024/321.pdf
-29. Pornin, T., Prest, T. "BUFFing FALCON without Increasing the Signature Size." 2024. https://eprint.iacr.org/2024/710.pdf
-30. PQClean: Clean, portable implementations of post-quantum cryptography. https://github.com/PQClean/PQClean
-31. PQClean PR #210: Falcon integer-only constant-time implementations. https://github.com/PQClean/PQClean/pull/210
-32. FIPS 206 Status Update slides (Perlner). https://csrc.nist.gov/csrc/media/presentations/2025/fips-206-fn-dsa-(falcon)/images-media/fips_206-perlner_2.1.pdf
-33. Pornin, T. rust-fn-dsa: Rust implementation of FN-DSA. https://github.com/pornin/rust-fn-dsa
+23. Falcon specification. https://falcon-sign.info/falcon.pdf
+24. Falcon implementation paper (Pornin, 2019). https://falcon-sign.info/falcon-impl-20190802.pdf
+25. Abou Haidar, C., Tibouchi, M. "How Bad Was The Falcon Bug of 2019?" ACM CCS 2025. https://www.esat.kuleuven.be/cosic/blog/ccs25-falconbug/
+26. Guerreau, M., et al. "FALCON Down: Breaking Falcon Post-Quantum Signature Scheme through Side-Channel Attacks." 2021. https://eprint.iacr.org/2021/772
+27. Berzati, A., et al. "SHIFT SNARE: Uncovering Secret Keys in FALCON via Single-Trace Analysis." 2025. https://arxiv.org/html/2504.00320v1
+28. Kim, S., Hong, S. "Improved Power Analysis Attacks on Falcon." EUROCRYPT 2023. https://dl.acm.org/doi/10.1007/978-3-031-30634-1_19
+29. Howe, J., et al. "Do Not Disturb a Sleeping Falcon: Floating-Point Error Sensitivity." 2024. https://eprint.iacr.org/2024/1709
+30. Becker, H., Howe, J. "Formal Verification of Emulated Floating-Point Arithmetic in Falcon." 2024. https://eprint.iacr.org/2024/321.pdf
+31. Pornin, T., Prest, T. "BUFFing FALCON without Increasing the Signature Size." 2024. https://eprint.iacr.org/2024/710.pdf
+32. PQClean: Clean, portable implementations of post-quantum cryptography. https://github.com/PQClean/PQClean
+33. PQClean PR #210: Falcon integer-only constant-time implementations. https://github.com/PQClean/PQClean/pull/210
+34. FIPS 206 Status Update slides (Perlner). https://csrc.nist.gov/csrc/media/presentations/2025/fips-206-fn-dsa-(falcon)/images-media/fips_206-perlner_2.1.pdf
+35. Pornin, T. rust-fn-dsa: Rust implementation of FN-DSA. https://github.com/pornin/rust-fn-dsa
 
 ### ML-DSA Algorithm and Implementation
 
-34. Ducas, L., Kiltz, E., Lepoint, T., Lyubashevsky, V., Schwabe, P., Seiler, G., Stehle, D. "CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme." TCHES 2018. https://eprint.iacr.org/2017/633.pdf
-35. Lyubashevsky, V. "Fiat-Shamir with Aborts: Applications to Lattice and Factoring-Based Signatures." ASIACRYPT 2009. https://link.springer.com/chapter/10.1007/978-3-642-10366-7_35
-36. Langlois, A., Stehle, D. "Worst-Case to Average-Case Reductions for Module Lattices." Designs, Codes and Cryptography, 2015. https://perso.ens-lyon.fr/damien.stehle/downloads/MSIS.pdf
-37. CRYSTALS-Dilithium Round 3 Specification (v3.1). https://pq-crystals.org/dilithium/data/dilithium-specification-round3-20210208.pdf
-38. Regev, O. "The Learning with Errors Problem." Survey. https://cims.nyu.edu/~regev/papers/lwesurvey.pdf
+36. Ducas, L., Kiltz, E., Lepoint, T., Lyubashevsky, V., Schwabe, P., Seiler, G., Stehle, D. "CRYSTALS-Dilithium: A Lattice-Based Digital Signature Scheme." TCHES 2018. https://eprint.iacr.org/2017/633.pdf
+37. Lyubashevsky, V. "Fiat-Shamir with Aborts: Applications to Lattice and Factoring-Based Signatures." ASIACRYPT 2009. https://link.springer.com/chapter/10.1007/978-3-642-10366-7_35
+38. Langlois, A., Stehle, D. "Worst-Case to Average-Case Reductions for Module Lattices." Designs, Codes and Cryptography, 2015. https://perso.ens-lyon.fr/damien.stehle/downloads/MSIS.pdf
+39. CRYSTALS-Dilithium Round 3 Specification (v3.1). https://pq-crystals.org/dilithium/data/dilithium-specification-round3-20210208.pdf
+40. Regev, O. "The Learning with Errors Problem." Survey. https://cims.nyu.edu/~regev/papers/lwesurvey.pdf
 
 ### Other Cryptographic References
 
-39. Percival, C. "Stronger Key Derivation via Sequential Memory-Hard Functions." BSDCan'09. https://www.tarsnap.com/scrypt.html
-40. RFC 7914: The scrypt Password-Based Key Derivation Function. https://www.rfc-editor.org/rfc/rfc7914.html
-41. Solar Designer. Yespower. https://www.openwall.com/yespower/
+41. Percival, C. "Stronger Key Derivation via Sequential Memory-Hard Functions." BSDCan'09. https://www.tarsnap.com/scrypt.html
+42. RFC 7914: The scrypt Password-Based Key Derivation Function. https://www.rfc-editor.org/rfc/rfc7914.html
+43. Solar Designer. Yespower. https://www.openwall.com/yespower/
 
----
+### Bitcoin Quantum Vulnerability Estimates
 
-## 18. Sources Consulted
-
-The following URLs were accessed during the research and preparation of this whitepaper. They are provided for transparency and verifiability.
-
-### NIST and Government Sources
-
-- https://csrc.nist.gov/pubs/fips/203/final
-- https://csrc.nist.gov/pubs/fips/204/final
-- https://csrc.nist.gov/pubs/fips/205/final
-- https://csrc.nist.gov/presentations/2025/fips-206-fn-dsa-falcon
-- https://csrc.nist.gov/presentations/2024/navigating-floating-point-challenges-in-falcon
-- https://csrc.nist.gov/projects/post-quantum-cryptography/post-quantum-cryptography-standardization
-- https://csrc.nist.gov/projects/post-quantum-cryptography/post-quantum-cryptography-standardization/evaluation-criteria/security-(evaluation-criteria)
-- https://csrc.nist.gov/projects/post-quantum-cryptography/workshops-and-timeline
-- https://csrc.nist.gov/projects/post-quantum-cryptography/faqs
-- https://csrc.nist.gov/pubs/ir/8547/ipd
-- https://csrc.nist.gov/Presentations/2024/practical-cost-of-grover-for-aes-key-recovery
-- https://nvlpubs.nist.gov/nistpubs/fips/nist.fips.204.pdf
-- https://nvlpubs.nist.gov/nistpubs/fips/nist.fips.203.pdf
-- https://www.nist.gov/news-events/news/2024/08/nist-releases-first-3-finalized-post-quantum-encryption-standards
-- https://www.nist.gov/news-events/news/2025/03/nist-selects-hqc-fifth-algorithm-post-quantum-encryption
-- https://www.federalreserve.gov/econres/feds/harvest-now-decrypt-later-examining-post-quantum-cryptography-and-the-data-privacy-risks-for-distributed-ledger-networks.htm
-- https://www.federalreserve.gov/econres/feds/files/2025093pap.pdf
-- https://www.federalregister.gov/documents/2024/08/14/2024-17956/announcing-issuance-of-federal-information-processing-standards-fips-fips-203-module-lattice-based
-- https://csrc.nist.gov/CSRC/media/Presentations/Falcon/images-media/Falcon-April2018.pdf
-- https://www.inria.fr/en/nist-algorithm-falcon-post-quantum-cryptographic
-
-### Falcon Technical Sources
-
-- https://falcon-sign.info/
-- https://falcon-sign.info/falcon.pdf
-- https://falcon-sign.info/falcon-impl-20190802.pdf
-- https://falcon-sign.info/impl/falcon.h.html
-- https://falcon-sign.info/impl/config.h.html
-- https://falcon-sign.info/impl/sign.c.html
-- https://eprint.iacr.org/2007/432.pdf (GPV framework)
-- https://eprint.iacr.org/2021/772 (FALCON DOWN side-channel attack)
-- https://eprint.iacr.org/2024/710.pdf (BUFFing Falcon / FN-DSA BUFF security)
-- https://eprint.iacr.org/2024/1709 (Floating-point error sensitivity)
-- https://eprint.iacr.org/2024/1769.pdf (A Closer Look at Falcon)
-- https://eprint.iacr.org/2024/321.pdf (Formal verification of emulated FP in Falcon)
-- https://eprint.iacr.org/2025/1042 (Crowhammer: Rowhammer bit-flip key recovery)
-- https://eprint.iacr.org/2025/351.pdf (Thorough power analysis on Falcon)
-- https://eprint.iacr.org/2025/2159 (Single-trace key recovery)
-- https://eprint.iacr.org/2021/1486.pdf (Mitaka: simpler Falcon variant)
-- https://arxiv.org/html/2504.00320v1 (SHIFT SNARE single-trace analysis)
-- https://dl.acm.org/doi/10.1007/978-3-031-30634-1_19 (EUROCRYPT 2023 power analysis)
-- https://www.esat.kuleuven.be/cosic/blog/ccs25-falconbug/ (How Bad Was The Falcon Bug of 2019?)
-- https://csrc.nist.gov/csrc/media/Events/2022/fourth-pqc-standardization-conference/documents/papers/falcon-down-pqc2022.pdf
-- https://csrc.nist.gov/csrc/media/presentations/2025/fips-206-fn-dsa-(falcon)/images-media/fips_206-perlner_2.1.pdf
-- https://csrc.nist.gov/csrc/media/Presentations/2024/falcon/images-media/prest-falcon-pqc2024.pdf
-- https://csrc.nist.gov/csrc/media/Projects/post-quantum-cryptography/documents/selected-algos-2022/official-comments/falcon-selected-algo-official-comment.pdf
-- https://groups.google.com/a/list.nist.gov/g/pqc-forum/c/7Z8x5AMXy8s/m/Spyv8VYoBQAJ (Falcon bug & fixes PQC Forum)
-- https://groups.google.com/a/list.nist.gov/g/pqc-forum/c/Dpr3tnTlKy0/m/X8z4uVw5AAAJ (Signature format feedback)
-- https://groups.google.com/a/list.nist.gov/g/pqc-forum/c/1HXzjlMUU6Y (FIPS 206 status)
-- https://cryptoservices.github.io/post-quantum/cryptography/2019/09/18/new-falcon-impl.html (NCC Group Falcon impl)
-- https://cryptoservices.github.io/post-quantum/cryptography/2019/10/21/falcon-implementation.html (Optimized Falcon)
-- https://pqshield.com/falcon-a-post-quantum-signature-scheme/
-- https://www.digicert.com/blog/quantum-ready-fndsa-nears-draft-approval-from-nist
-- https://quarkslab.github.io/crypto-condor/latest/method/Falcon.html
-- https://github.com/pornin/rust-fn-dsa
-- https://github.com/pornin/c-fn-dsa
-- https://github.com/PQClean/PQClean
-- https://github.com/PQClean/PQClean/pull/210 (Falcon integer-only CT implementation)
-- https://github.com/PQClean/PQClean/issues/522 (aarch64 fmla bit-flip issue)
-- https://github.com/PQClean/PQClean/security
-- https://openquantumsafe.org/liboqs/algorithms/sig/falcon.html
-
-### ML-DSA Technical Sources
-
-- https://pq-crystals.org/dilithium/
-- https://pq-crystals.org/dilithium/data/dilithium-specification-round3-20210208.pdf
-- https://pq-crystals.org/dilithium/resources.shtml
-- https://eprint.iacr.org/2017/633.pdf (CRYSTALS-Dilithium original paper)
-- https://tches.iacr.org/index.php/TCHES/article/view/839
-- https://link.springer.com/chapter/10.1007/978-3-642-10366-7_35 (Fiat-Shamir with Aborts)
-- https://iacr.org/archive/asiacrypt2009/59120596/59120596.pdf
-- https://link.springer.com/chapter/10.1007/978-3-031-38554-4_12 (Fixing Fiat-Shamir with Aborts proof, CRYPTO 2023)
-- https://perso.ens-lyon.fr/damien.stehle/downloads/MSIS.pdf (Module lattice reductions)
-- https://dl.acm.org/doi/10.1007/s10623-014-9938-4
-- https://cims.nyu.edu/~regev/papers/lwesurvey.pdf (LWE survey)
-- https://web.eecs.umich.edu/~cpeikert/pubs/LWsE.pdf (SIS/LWE with small parameters)
-- https://arxiv.org/html/2409.02222v1 (Module-LWE/SIS digital signatures)
-- https://nvlpubs.nist.gov/nistpubs/fips/nist.fips.204.pdf
-- https://csrc.nist.gov/files/pubs/fips/204/ipd/docs/fips-204-initial-public-comments-2023.pdf
-- https://github.com/pq-crystals/dilithium (reference implementation)
-- https://openquantumsafe.org/liboqs/algorithms/sig/ml-dsa.html
-- https://blog.cloudflare.com/post-quantum-signatures/ (deep dive)
-- https://electricdusk.com/ntt.html (NTT tutorial)
-- https://kivicore.com/en/embedded-security-blog/ml-dsa-explained-quantum-safe-digital-signatures-for-secure-embedded-systems
-- https://github.com/itzmeanjan/ml-kem
-
-### Quantum Computing and Cryptography Analysis
-
-- https://eprint.iacr.org/2017/598.pdf
-- https://eprint.iacr.org/2021/967.pdf
-- https://eprint.iacr.org/2021/292.pdf
-- https://eprint.iacr.org/2016/989
-- https://eprint.iacr.org/2023/062.pdf
-- https://kudelskisecurity.com/research/quantum-attack-resource-estimate-using-shors-algorithm-to-break-rsa-vs-dh-dsa-vs-ecc/
-- https://a16zcrypto.com/posts/article/quantum-computing-misconceptions-realities-blockchains-planning-migrations/
-- https://pmc.ncbi.nlm.nih.gov/articles/PMC8946996/
-- https://arxiv.org/pdf/1711.04235
-- https://www.sciencedirect.com/science/article/pii/S2096720923000167
-- https://www.schneier.com/blog/archives/2022/02/breaking-245-bit-elliptic-curve-encryption-with-a-quantum-computer.html
-
-### Memory-Hard Functions and PoW Quantum Resistance
-
-- https://www.mdpi.com/2079-9292/13/16/3167
-- https://www.mdpi.com/2079-9292/12/21/4485
-- https://quantum-safeinternet.com/project/quantum-security-of-memory-hard-functions/
-- https://link.springer.com/chapter/10.1007/978-3-319-56617-7_2
-- https://link.springer.com/chapter/10.1007/978-981-99-8727-6_1
-- https://dl.acm.org/doi/fullHtml/10.1145/3613424.3614270
-- https://pmc.ncbi.nlm.nih.gov/articles/PMC10490729/
-- https://sites.cs.ucsb.edu/~rich/class/old.cs290/papers/scrypt.pdf
-- https://www.rfc-editor.org/rfc/rfc7914.html
-- https://www.tarsnap.com/scrypt.html
-- https://www.openwall.com/yespower/
-- https://www.openwall.com/yescrypt/
-- https://github.com/openwall/yespower
-- https://en.wikipedia.org/wiki/Solar_Designer
-- https://openwall.info/wiki/people/solar/bio
-
-### SHA-512 and Hash Security
-
-- https://bitcoinops.org/en/topics/quantum-resistance/
-- https://www.gopher.security/post-quantum/is-sha-256-secure-against-quantum-attacks
-- https://bip360.org/bip360.html
-- https://postquantum.com/post-quantum/nist-pqc-security-categories/
-- https://postquantum.com/post-quantum/grovers-algorithm/
-- https://postquantum.com/post-quantum/brassard-hoyer-tapp-bht/
-- https://postquantum.com/post-quantum/quantum-cryptocurrencies-bitcoin/
-
-### Bitcoin Quantum Vulnerability and Migration
-
-- https://bip360.org/
-- https://qbip.org/
-- https://delvingbitcoin.org/t/proposing-a-p2qrh-bip-towards-a-quantum-resistant-soft-fork/956
-- https://delvingbitcoin.org/t/post-quantum-hd-wallets-silent-payments-key-aggregation-and-threshold-signatures/1854
-- https://chaincode.com/bitcoin-post-quantum.pdf
-- https://blog.projecteleven.com/posts/a-look-at-post-quantum-proposals-for-bitcoin
-- https://blog.projecteleven.com/posts/hd-wallets--quantum-risk-does-reusing-one-address-endanger-the-rest
-- https://river.com/learn/will-quantum-computing-break-bitcoin/
-- https://hrf.org/latest/the-quantum-threat-to-bitcoin/
-- https://bitcoinmagazine.com/news/new-bitcoin-improvement-proposal-aims-to-solve-future-quantum-security-risks
-- https://bitbo.io/news/quantum-resistant-bip-360-debate/
-- https://thebitcoinmanual.com/articles/qramp/
-- https://bitcoinist.com/bitcoins-post-quantum-shift-could-take-a-decade-crypto-exec-says/
-- https://www.ainvest.com/news/bitcoin-quantum-migration-decade-long-transition-investment-implications-2512/
-- https://www.coindesk.com/tech/2025/12/20/bitcoin-s-quantum-debate-is-resurfacing-and-markets-are-starting-to-notice
-- https://www.cointribune.com/en/bip-360-bitcoin-divides-over-quantum-challenge/
-- https://finance.yahoo.com/news/coinshares-says-only-10-200-170531015.html
-- https://thequantuminsider.com/2025/10/06/federal-reserve-warns-quantum-computers-could-expose-bitcoins-hidden-past/
-- https://crypto.news/bitcoin-investors-face-harvest-now-decrypt-later-quantum-threat/
-- https://forklog.com/en/secret-harvesters-why-quantum-computers-threaten-bitcoin-privacy/
-- https://en.wikipedia.org/wiki/Harvest_now,_decrypt_later
-- https://conduition.io/cryptography/quantum-hbs/
-
-### Post-Quantum Cryptocurrency Projects
-
-- https://www.theqrl.org/
-- https://docs.theqrl.org/what-is-qrl/
-- https://www.theqrl.org/blog/techniques-for-efficient-post-quantum-finance-part-4-reducing-storage-requirements/
-- https://algorand.co/technology/post-quantum
-- https://algorand.co/blog/technical-brief-quantum-resistant-transactions-on-algorand-with-falcon-signatures
-- https://algorand.co/blog/pioneering-falcon-post-quantum-technology-on-blockchain
-- https://www.biometricupdate.com/202510/iota-adds-post-quantum-cryptography-to-its-identity-framework
-- https://ethereum.org/roadmap/future-proofing/
-- https://www.btq.com/blog/ethereums-roadmap-post-quantum-cryptography
-- https://cointelegraph.com/news/why-vitalik-believes-quantum-computing-could-break-ethereum-s-cryptography-sooner-than-expected
-- https://cointelegraph.com/news/ethereum-post-quantum-resilience-interview
-- https://blockmanity.com/news/5-quantum-resistant-blockchain-projects-worth-watching-in-2026/
-- https://www.webopedia.com/crypto/learn/post-quantum-crypto-projects/
-- https://medium.com/mochimo-official/mcm-post-quantum-security-in-blockchain-820b3758fa83
-- https://cellframe.net/
-- https://www.amarchenkova.com/posts/quantum-secure-cryptocurrencies-qrl-mochimo-iota-cardano
-- https://thequantumspace.org/2025/11/11/post-quantum-wallets/
-- https://www.encryptionconsulting.com/how-ml-dsa-replaces-ecc-and-rsa-for-digital-signatures/
-- https://www.encryptionconsulting.com/overview-of-fips-203/
-- https://www.encryptionconsulting.com/decoding-nist-pqc-standards/
-
-### HD Wallet and PQ Key Derivation
-
-- https://link.springer.com/article/10.1186/s42400-024-00216-w
-- https://www.sciencedirect.com/science/article/abs/pii/S0304397524002895
-
-### Merged Mining
-
-- https://en.bitcoin.it/wiki/Merged_mining_specification
-- https://tlu.tarilabs.com/mining/MergedMiningIntroduction
-- https://www.binance.com/en/research/analysis/merged-mining
-- https://www.litecoinpool.org/news?id=59
-- https://litecoin.com/news/how-litecoin-and-dogecoin-created-one-of-the-most-robust-pow-networks
-- https://coincub.com/mining/merge-mining/
-- https://www.coinspect.com/blog/merged-mining-security/
-- https://earnednotgifted.medium.com/my-take-on-merged-mining-why-merged-mining-doesnt-increase-security-of-the-auxiliary-chain-ccd3bbc978b5
-- https://blog.thirdweb.com/understanding-merged-mining-a-comprehensive-guide/
-
-### Tidecoin-Specific Sources
-
-- https://tidecoin.org/
-- https://tdc-next.vercel.app/
-- https://tidecoin.pqcsf.com/
-- https://explorer.tidecoin.org/
-- https://pool.tidecoin.exchange/
-- https://github.com/tidecoin/tidecoin
-- https://github.com/tidecoin-old/whitepaper
-- https://github.com/tidecoin-old/whitepaper/blob/master/tidecoin.pdf
-- https://github.com/tidecoin/tidecoin-android-miner
-- https://bitcointalk.org/index.php?topic=5306694.0
-- https://bitcourier.co.uk/news/tidecoin-interview
-- https://groups.google.com/a/list.nist.gov/g/pqc-forum/c/GZKDF25GYc8
-- https://setcoinkr.medium.com/tidecoin-a-post-quantum-security-peer-to-peer-crypto-cash-4c181f55f753
-- https://skybaseja.medium.com/tidecoin-a-post-quantum-security-peer-to-peer-crypto-cash-74cbca584140
-- https://en.namu.wiki/w/%ED%83%80%EC%9D%B4%EB%93%9C%EC%BD%94%EC%9D%B8
-- https://en.everybodywiki.com/Tidecoin
-- https://tideidle.com/Tide_specifications/
-- https://miningpoolstats.stream/tidecoin
-- https://www.coingecko.com/en/coins/tidecoin
-- https://coincodex.com/crypto/tidecoin/exchanges/
-- https://coinpaprika.com/coin/tdc-tidecoin/
-- https://www.livecoinwatch.com/price/Tidecoin-TDC
-- https://bscscan.com/token/0x0e182bd5c8703632c4c1761e0496c66c2b5d3385
-- https://disboard.org/server/796853997259849728
-- https://x.com/tidecoin
-- https://x.com/Tidecoin_go
-- https://cputest.ru/store/yespower/tidecoin_yespowertide/33
-
-### Industry and Standards Analysis
-
-- https://www.digicert.com/blog/quantum-ready-fndsa-nears-draft-approval-from-nist
-- https://utimaco.com/news/blog-posts/nists-final-pqc-standards-are-here-what-you-need-know
-- https://hacken.io/insights/ml-dsa-crystals-dilithium/
-- https://cloudsecurityalliance.org/blog/2024/08/15/nist-fips-203-204-and-205-finalized-an-important-step-towards-a-quantum-safe-future
-- https://www.jbs.cam.ac.uk/2025/why-quantum-matters-now-for-blockchain/
-- https://en.wikipedia.org/wiki/NIST_Post-Quantum_Cryptography_Standardization
-- https://en.wikipedia.org/wiki/Grover's_algorithm
-- https://arxiv.org/pdf/2505.02239
-- https://arxiv.org/pdf/2510.09271
-- https://arxiv.org/pdf/2409.01358
-- https://blog.cloudflare.com/another-look-at-pq-signatures/
-- https://ceur-ws.org/Vol-3460/papers/DLT_2023_paper_19.pdf
-- https://www.frontiersin.org/journals/computer-science/articles/10.3389/fcomp.2025.1457000/full
-- https://github.com/veracrypt/VeraCrypt/issues/1271
-- https://www.binance.com/en/square/post/2024-10-29-vitalik-buterin-outlines-quantum-resistant-future-for-ethereum-in-new-roadmap-update-15509117799834
-- https://www.mexc.com/price/tidecoin
-- https://coinmarketcap.com/cmc-ai/quantum-resistant-ledger/what-is/
-
-### Quantum Attacks on PoW and QRAM Architecture
-
-- https://arxiv.org/abs/1603.09383
-- https://eprint.iacr.org/2016/992.pdf
-- https://ietresearch.onlinelibrary.wiley.com/doi/full/10.1049/ise2.12074
-- https://www.mdpi.com/1099-4300/24/3/323
-- https://arxiv.org/abs/2110.00878
-- https://journals.aps.org/prxquantum/pdf/10.1103/PRXQuantum.5.020312
-- https://www.nature.com/articles/s41534-024-00848-3
-- https://www.nature.com/articles/s41586-022-05434-1
-- https://www.nature.com/articles/s41586-024-08449-y
-- https://arxiv.org/html/2312.17483
-- https://www.amazon.science/publications/systems-architecture-for-quantum-random-access-memory
-- https://eprint.iacr.org/2022/1503
-- https://arxiv.org/abs/2301.05680
-- https://www.scilit.com/publications/a073ad723dcb63ac9c9a13eb40515fb5
-- https://braiins.com/blog/can-quantum-computers-51-attack-bitcoin
-- https://hackernoon.com/what-it-takes-for-quantum-computers-to-mine-bitcoin-efficiently
-- https://en.bitcoin.it/wiki/Quantum_computing_and_Bitcoin
-- https://litecoin.info/docs/key-concepts/proof-of-work
-- https://en.wikipedia.org/wiki/Scrypt
-- https://www.tarsnap.com/scrypt/scrypt.pdf
-
-### 51% Attack Costs and Merged Mining Economics
-
-- https://www.crypto51.app/
-- https://www.crypto51.app/coins/LTC.html
-- https://www.coindesk.com/tech/2023/08/02/why-you-should-care-about-litecoin-its-the-backbone-of-dogecoin
-
-### Codebase Source Files Analyzed
-
-- `src/pq/pq_scheme.h` -- PQ scheme registry (5 schemes, constexpr metadata)
-- `src/pq/pq_api.h` -- C++ API for PQ operations (KeyGen, Sign, Verify)
-- `src/pq/pqhd_kdf.h`, `src/pq/pqhd_kdf.cpp` -- PQHD key derivation function
-- `src/pq/pqhd_keygen.cpp` -- PQHD deterministic key generation
-- `src/pq/kem.cpp` -- ML-KEM-512 wrapper
-- `src/pq/falcon512.c`, `src/pq/falcon1024.c` -- Falcon signature wrappers
-- `src/pq/mldsa44.c`, `src/pq/mldsa65.c`, `src/pq/mldsa87.c` -- ML-DSA wrappers
-- `src/script/interpreter.cpp` -- CheckPostQuantumSignature consensus logic
-- `src/script/interpreter.h` -- PQ script verification flags
-- `src/script/script.h` -- OP_SHA512 opcode definition
-- `src/script/descriptor.cpp`, `src/script/descriptor.h` -- PQHD descriptor provider
-- `src/pubkey.cpp`, `src/pubkey.h` -- PQ-aware public key verification
-- `src/key.h`, `src/key.cpp` -- PQ-aware private key operations
-- `src/kernel/chainparams.cpp` -- Chain parameters (genesis, ports, seeds, consensus)
-- `src/validation.cpp` -- Block subsidy schedule (doubling-interval quartering)
-- `src/primitives/pureheader.cpp` -- Yespower and scrypt PoW hash functions
-- `src/auxpow.h`, `src/auxpow.cpp` -- AuxPoW merged mining
-- `src/wallet/pqhd.h` -- PQHD seed/policy data structures
-- `src/wallet/wallet.cpp` -- PQHD seed loading and policy management
-- `src/wallet/scriptpubkeyman.cpp` -- PQHD descriptor integration
-- `src/wallet/rpc/wallet.cpp` -- setpqhdpolicy RPC command
-- `src/psbt.h` -- PSBT PQHD proprietary fields
-- `src/clientversion.cpp` -- "Tidecoin" user agent name
-- `src/policy/policy.cpp` -- PQ-aware dust threshold and witness recognition
-- `CMakeLists.txt` -- CLIENT_NAME "Tidecoin", version 1.0.0
+44. Deloitte. "Quantum computers could crack Bitcoin security by 2030." 2022. https://www2.deloitte.com/nl/nl/pages/innovatie/artikelen/quantum-computers-and-the-bitcoin-blockchain.html
+45. Project Eleven. "A Look at Post-Quantum Proposals for Bitcoin." 2025. https://blog.projecteleven.com/posts/a-look-at-post-quantum-proposals-for-bitcoin
 
 ---
 
