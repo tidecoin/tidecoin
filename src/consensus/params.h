@@ -131,14 +131,13 @@ struct Params {
     int64_t nPowAveragingWindow;
     int64_t nPowMaxAdjustDown;
     int64_t nPowMaxAdjustUp;
-    int64_t nPostBlossomPowTargetSpacing;
     std::chrono::seconds PowTargetSpacing() const
     {
         return std::chrono::seconds{nPowTargetSpacing};
     }
     std::chrono::seconds PoWTargetSpacing() const
     {
-        return std::chrono::seconds{nPostBlossomPowTargetSpacing};
+        return PowTargetSpacing();
     }
     int64_t DifficultyAdjustmentInterval() const { return nPowTargetTimespan / nPowTargetSpacing; }
     int64_t AveragingWindowTimespan() const { return nPowAveragingWindow * PoWTargetSpacing().count(); }

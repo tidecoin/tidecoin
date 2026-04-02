@@ -106,7 +106,6 @@ public:
         consensus.nPowAveragingWindow = 17;
         consensus.nPowMaxAdjustDown = 32; // 32% adjustment down
         consensus.nPowMaxAdjustUp = 16;   // 16% adjustment up
-        consensus.nPostBlossomPowTargetSpacing = consensus.nPowTargetSpacing;
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].nStartTime = Consensus::BIP9Deployment::NEVER_ACTIVE;
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
@@ -197,7 +196,6 @@ public:
         consensus.nPowAveragingWindow = 17;
         consensus.nPowMaxAdjustDown = 32; // 32% adjustment down
         consensus.nPowMaxAdjustUp = 16;   // 16% adjustment up
-        consensus.nPostBlossomPowTargetSpacing = consensus.nPowTargetSpacing;
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].nStartTime = Consensus::BIP9Deployment::NEVER_ACTIVE;
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].nTimeout = Consensus::BIP9Deployment::NO_TIMEOUT;
@@ -278,7 +276,6 @@ public:
         consensus.nPowAveragingWindow = 17;
         consensus.nPowMaxAdjustDown = 0; // disabled on regtest
         consensus.nPowMaxAdjustUp = 0;   // disabled on regtest
-        consensus.nPostBlossomPowTargetSpacing = consensus.nPowTargetSpacing;
 
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].bit = 28;
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].nStartTime = 0;

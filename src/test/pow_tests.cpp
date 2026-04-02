@@ -220,7 +220,6 @@ BOOST_AUTO_TEST_CASE(get_next_work_new_insufficient_blocks)
     params.nPowAveragingWindow = 17;
     params.nPowMaxAdjustDown = 32;
     params.nPowMaxAdjustUp = 16;
-    params.nPostBlossomPowTargetSpacing = params.nPowTargetSpacing;
     params.nPowAllowMinDifficultyBlocksAfterHeight = std::nullopt;
     params.fPowAllowMinDifficultyBlocks = false;
     params.fPowNoRetargeting = false;
