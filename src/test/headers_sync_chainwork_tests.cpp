@@ -150,7 +150,7 @@ BOOST_AUTO_TEST_CASE(headers_sync_window_retarget_post_auxpow)
 {
     // Use a local consensus copy to force post-auxpow per-block retarget rules.
     Consensus::Params params = Params().GetConsensus();
-    params.nNewPowDiffHeight = 0;
+    params.nAuxpowStartHeight = 0;
     params.nPowAveragingWindow = 4;
     params.nPowMaxAdjustUp = 16;
     params.nPowMaxAdjustDown = 32;

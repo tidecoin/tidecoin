@@ -29,6 +29,19 @@ struct MinerTestingSetup : public RegTestingSetup {
     std::shared_ptr<CBlock> FinalizeBlock(std::shared_ptr<CBlock> pblock);
     void BuildChain(const uint256& root, int height, const unsigned int invalid_rate, const unsigned int branch_rate, const unsigned int max_size, std::vector<std::shared_ptr<const CBlock>>& blocks);
 };
+
+struct ScopedConsensusMutation {
+    Consensus::Params& params;
+    const Consensus::Params original;
+
+    explicit ScopedConsensusMutation(Consensus::Params& params_in)
+        : params{params_in}, original{params_in} {}
+
+    ~ScopedConsensusMutation()
+    {
+        params = original;
+    }
+};
 } // namespace validation_block_tests
 
 BOOST_FIXTURE_TEST_SUITE(validation_block_tests, MinerTestingSetup)
@@ -243,6 +256,120 @@ BOOST_AUTO_TEST_CASE(processnewblockheaders_prechecked_still_runs_contextual_che
     BOOST_CHECK(!Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{bad_header}}, bad_state));
     BOOST_CHECK(bad_state.IsInvalid());
     BOOST_CHECK_EQUAL(bad_state.GetRejectReason(), "time-too-old");
+}
+
+BOOST_AUTO_TEST_CASE(processnewblockheaders_prechecked_enforces_pow_activation_boundary)
+{
+    auto& consensus = const_cast<Consensus::Params&>(Params().GetConsensus());
+    ScopedConsensusMutation consensus_guard{consensus};
+
+    consensus.nAuxpowStartHeight = 5;
+    consensus.nPowTargetSpacing = 1;
+    consensus.nPowTargetTimespan = 4;
+    consensus.fPowAllowMinDifficultyBlocks = false;
+    consensus.enforce_BIP94 = false;
+    consensus.fPowNoRetargeting = false;
+    consensus.nPowAllowMinDifficultyBlocksAfterHeight = std::nullopt;
+    consensus.nPowAveragingWindow = 2;
+    consensus.nPowMaxAdjustUp = 16;
+    consensus.nPowMaxAdjustDown = 32;
+
+    auto legacy_consensus = consensus;
+    legacy_consensus.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
+
+    std::array<int64_t, 5> times{};
+    unsigned int post_auxpow_nbits{0};
+    unsigned int legacy_nbits{0};
+    bool found_boundary_case{false};
+
+    const int64_t genesis_time = Params().GenesisBlock().nTime;
+    const unsigned int genesis_nbits = Params().GenesisBlock().nBits;
+
+    for (int64_t t1 = genesis_time + 1; t1 <= genesis_time + 3 && !found_boundary_case; ++t1) {
+        for (int64_t t2 = t1 + 1; t2 <= genesis_time + 6 && !found_boundary_case; ++t2) {
+            for (int64_t t3 = t2 + 1; t3 <= genesis_time + 9 && !found_boundary_case; ++t3) {
+                for (int64_t t4 = t3 + 1; t4 <= genesis_time + 12 && !found_boundary_case; ++t4) {
+                    std::array<CBlockIndex, 5> indices{};
+                    indices[0].nHeight = 0;
+                    indices[0].nTime = genesis_time;
+                    indices[0].nBits = genesis_nbits;
+                    indices[0].pprev = nullptr;
+                    const std::array<int64_t, 5> candidate_times{
+                        genesis_time, t1, t2, t3, t4,
+                    };
+
+                    for (int height = 1; height <= 4; ++height) {
+                        CBlockHeader candidate_header;
+                        candidate_header.nTime = candidate_times[height];
+                        indices[height].nHeight = height;
+                        indices[height].nTime = candidate_times[height];
+                        indices[height].nBits = GetNextWorkRequired(&indices[height - 1], &candidate_header, consensus);
+                        indices[height].pprev = &indices[height - 1];
+                        indices[height].BuildSkip();
+                    }
+
+                    CBlockHeader activation_header;
+                    activation_header.nTime = t4 + 1;
+                    const unsigned int candidate_post_auxpow_nbits = GetNextWorkRequired(&indices[4], &activation_header, consensus);
+                    const unsigned int candidate_legacy_nbits = GetNextWorkRequired(&indices[4], &activation_header, legacy_consensus);
+                    if (candidate_post_auxpow_nbits != candidate_legacy_nbits) {
+                        times = candidate_times;
+                        post_auxpow_nbits = candidate_post_auxpow_nbits;
+                        legacy_nbits = candidate_legacy_nbits;
+                        found_boundary_case = true;
+                    }
+                }
+            }
+        }
+    }
+
+    BOOST_REQUIRE(found_boundary_case);
+
+    auto make_block = [&](const uint256& prev_hash, const CBlockIndex* expected_prev, int64_t ntime, unsigned int nbits) {
+        auto pblock = Block(prev_hash);
+        pblock->nTime = ntime;
+        m_node.chainman->GenerateCoinbaseCommitment(*pblock, expected_prev);
+        pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
+        pblock->nBits = nbits;
+        pblock->nNonce = 0;
+        while (!CheckProofOfWork(*pblock, consensus, expected_prev->nHeight + 1)) {
+            ++pblock->nNonce;
+        }
+        return pblock;
+    };
+
+    bool ignored{false};
+    uint256 tip_hash{Params().GenesisBlock().GetHash()};
+    for (int height = 1; height < consensus.nAuxpowStartHeight; ++height) {
+        const CBlockIndex* current_prev{WITH_LOCK(::cs_main, return m_node.chainman->m_blockman.LookupBlockIndex(tip_hash))};
+        BOOST_REQUIRE(current_prev);
+        auto block = make_block(tip_hash, current_prev, times[height], GetNextWorkRequired(current_prev, nullptr, consensus));
+        BOOST_REQUIRE(Assert(m_node.chainman)->ProcessNewBlock(block, /*force_processing=*/true, /*min_pow_checked=*/true, &ignored));
+        tip_hash = block->GetHash();
+    }
+
+    const CBlockIndex* prev_index{WITH_LOCK(::cs_main, return m_node.chainman->m_blockman.LookupBlockIndex(tip_hash))};
+    BOOST_REQUIRE(prev_index);
+    BOOST_REQUIRE_EQUAL(prev_index->nHeight + 1, consensus.nAuxpowStartHeight);
+
+    auto post_auxpow_block = make_block(tip_hash, prev_index, times[4] + 1, post_auxpow_nbits);
+    const CBlockHeader good_header{post_auxpow_block->GetBlockHeader()};
+    BOOST_CHECK(Assert(m_node.chainman)->HasValidHeadersProofOfWork({{good_header}}, consensus.nAuxpowStartHeight));
+
+    BlockValidationState good_state;
+    BOOST_CHECK(Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{good_header}}, good_state));
+    BOOST_CHECK(good_state.IsValid());
+
+    BOOST_CHECK(Assert(m_node.chainman)->ProcessNewBlock(post_auxpow_block, /*force_processing=*/true, /*min_pow_checked=*/true, &ignored));
+
+    auto legacy_block = make_block(tip_hash, prev_index, times[4] + 1, legacy_nbits);
+    const CBlockHeader bad_header{legacy_block->GetBlockHeader()};
+    BOOST_CHECK(Assert(m_node.chainman)->HasValidHeadersProofOfWork({{bad_header}}, consensus.nAuxpowStartHeight));
+
+    BlockValidationState bad_state;
+    BOOST_CHECK(!Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{bad_header}}, bad_state));
+    BOOST_CHECK(bad_state.IsInvalid());
+    BOOST_CHECK_EQUAL(bad_state.GetRejectReason(), "bad-diffbits");
 }
 
 /**

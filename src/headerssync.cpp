@@ -439,8 +439,8 @@ bool HeadersSyncState::CheckWindowAwareRetarget(uint32_t prev_nbits, uint32_t ne
     const int64_t win = m_consensus_params.nPowAveragingWindow;
     if (static_cast<int64_t>(m_recent_nbits.size()) < win || static_cast<int64_t>(m_recent_mtp.size()) < win + 1) return true;
 
-    // During the transition window immediately after activation, tolerate the legacy rule.
-    if (next_height <= m_consensus_params.nNewPowDiffHeight + win) {
+    // During the first averaging window after AuxPoW activation, tolerate legacy-era difficulty samples.
+    if (next_height <= static_cast<int64_t>(m_consensus_params.nAuxpowStartHeight) + win) {
         return true;
     }
 

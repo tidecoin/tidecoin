@@ -29,17 +29,8 @@ std::optional<arith_uint256> DeriveTarget(unsigned int nBits, const uint256 pow_
 unsigned int GetNextWorkRequired(const CBlockIndex* pindexLast, const CBlockHeader *pblock, const Consensus::Params&);
 unsigned int CalculateNextWorkRequired(const CBlockIndex* pindexLast, int64_t nFirstBlockTime, const Consensus::Params&);
 
-/**
- * Tidecoin activation semantics are consensus-frozen.
- *
- * AuxPoW/scrypt header rules switch on the candidate block height, while the
- * legacy difficulty algorithm remains in effect through candidate height
- * nNewPowDiffHeight + 1 because GetNextWorkRequired() is keyed off the
- * previous block height.
- */
-bool UseAuxpowHeaderRules(const Consensus::Params& params, int candidate_height);
-bool UseLegacyDifficultyForNextBlock(const Consensus::Params& params, int prev_height);
-bool UseLegacyDifficultyTransitionBounds(const Consensus::Params& params, int candidate_height);
+/** Returns true once the post-AuxPoW proof-of-work rules are active at the candidate height. */
+bool UsePostAuxpowPowRules(const Consensus::Params& params, int candidate_height);
 
 /** Check whether a block hash satisfies the proof-of-work requirement specified by nBits */
 bool CheckProofOfWork(uint256 hash, unsigned int nBits, const Consensus::Params&);

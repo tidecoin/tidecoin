@@ -88,7 +88,7 @@ BOOST_AUTO_TEST_CASE(get_next_work)
 {
     const auto chainParams = CreateChainParams(*m_node.args, ChainType::MAIN);
     auto consensus = chainParams->GetConsensus();
-    consensus.nNewPowDiffHeight = Consensus::AUXPOW_DISABLED;
+    consensus.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
     CBlockIndex pindexLast;
     const arith_uint256 pow_limit = UintToArith256(consensus.powLimit);
     arith_uint256 start_target = pow_limit >> 16;
@@ -108,7 +108,7 @@ BOOST_AUTO_TEST_CASE(get_next_work_pow_limit)
 {
     const auto chainParams = CreateChainParams(*m_node.args, ChainType::MAIN);
     auto consensus = chainParams->GetConsensus();
-    consensus.nNewPowDiffHeight = Consensus::AUXPOW_DISABLED;
+    consensus.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
     CBlockIndex pindexLast;
     const arith_uint256 pow_limit = UintToArith256(consensus.powLimit);
     pindexLast.nHeight = consensus.DifficultyAdjustmentInterval() - 1;
@@ -127,7 +127,7 @@ BOOST_AUTO_TEST_CASE(get_next_work_lower_limit_actual)
 {
     const auto chainParams = CreateChainParams(*m_node.args, ChainType::MAIN);
     auto consensus = chainParams->GetConsensus();
-    consensus.nNewPowDiffHeight = Consensus::AUXPOW_DISABLED;
+    consensus.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
     CBlockIndex pindexLast;
     const arith_uint256 pow_limit = UintToArith256(consensus.powLimit);
     arith_uint256 start_target = pow_limit >> 4;
@@ -152,7 +152,7 @@ BOOST_AUTO_TEST_CASE(get_next_work_upper_limit_actual)
 {
     const auto chainParams = CreateChainParams(*m_node.args, ChainType::MAIN);
     auto consensus = chainParams->GetConsensus();
-    consensus.nNewPowDiffHeight = Consensus::AUXPOW_DISABLED;
+    consensus.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
     CBlockIndex pindexLast;
     const arith_uint256 pow_limit = UintToArith256(consensus.powLimit);
     arith_uint256 start_target = pow_limit >> 6;
@@ -216,7 +216,7 @@ BOOST_AUTO_TEST_CASE(get_next_work_mainnet_historical_first_retarget)
 BOOST_AUTO_TEST_CASE(get_next_work_new_insufficient_blocks)
 {
     Consensus::Params params = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
-    params.nNewPowDiffHeight = 0;
+    params.nAuxpowStartHeight = 0;
     params.nPowAveragingWindow = 17;
     params.nPowMaxAdjustDown = 32;
     params.nPowMaxAdjustUp = 16;
@@ -302,17 +302,16 @@ BOOST_AUTO_TEST_CASE(checkpow_height_selects_hash)
     BOOST_CHECK_EQUAL(CheckProofOfWork(header, params, params.nAuxpowStartHeight), expected_post);
 }
 
-BOOST_AUTO_TEST_CASE(pow_activation_boundary_current_selector_behavior)
+BOOST_AUTO_TEST_CASE(pow_activation_boundary_switches_everything_at_candidate_height)
 {
     auto params = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
     params.nAuxpowStartHeight = 100;
-    params.nNewPowDiffHeight = 100;
     params.fPowAllowMinDifficultyBlocks = false;
     params.fPowNoRetargeting = false;
     params.nPowAllowMinDifficultyBlocksAfterHeight = std::nullopt;
 
-    auto always_new_params = params;
-    always_new_params.nNewPowDiffHeight = 0;
+    auto legacy_params = params;
+    legacy_params.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
 
     arith_uint256 pow_limit = UintToArith256(params.powLimit);
     arith_uint256 fixed_target = pow_limit;
@@ -328,36 +327,38 @@ BOOST_AUTO_TEST_CASE(pow_activation_boundary_current_selector_behavior)
         blocks[i].BuildSkip();
     }
 
-    CBlockHeader next_at_activation;
-    next_at_activation.nTime = blocks[99].nTime + 120;
-    const unsigned int actual_at_activation = GetNextWorkRequired(&blocks[99], &next_at_activation, params);
-    const unsigned int forced_new_at_activation = GetNextWorkRequired(&blocks[99], &next_at_activation, always_new_params);
+    CBlockHeader final_pre_activation;
+    final_pre_activation.nTime = blocks[98].nTime + 120;
+    const unsigned int actual_pre_activation = GetNextWorkRequired(&blocks[98], &final_pre_activation, params);
+    const unsigned int legacy_pre_activation = GetNextWorkRequired(&blocks[98], &final_pre_activation, legacy_params);
+
+    CBlockHeader at_activation;
+    at_activation.nTime = blocks[99].nTime + 120;
+    const unsigned int actual_at_activation = GetNextWorkRequired(&blocks[99], &at_activation, params);
+    const unsigned int legacy_at_activation = GetNextWorkRequired(&blocks[99], &at_activation, legacy_params);
 
     CBlockHeader first_post_activation;
     first_post_activation.nTime = blocks[100].nTime + 120;
     const unsigned int actual_first_post_activation = GetNextWorkRequired(&blocks[100], &first_post_activation, params);
-    const unsigned int forced_new_first_post_activation = GetNextWorkRequired(&blocks[100], &first_post_activation, always_new_params);
+    const unsigned int legacy_first_post_activation = GetNextWorkRequired(&blocks[100], &first_post_activation, legacy_params);
 
-    CBlockHeader second_post_activation;
-    second_post_activation.nTime = blocks[101].nTime + 120;
-    const unsigned int actual_second_post_activation = GetNextWorkRequired(&blocks[101], &second_post_activation, params);
-    const unsigned int forced_new_second_post_activation = GetNextWorkRequired(&blocks[101], &second_post_activation, always_new_params);
-
+    BOOST_CHECK(!UsePostAuxpowPowRules(params, params.nAuxpowStartHeight - 1));
+    BOOST_CHECK(UsePostAuxpowPowRules(params, params.nAuxpowStartHeight));
     BOOST_CHECK(UseScryptPoW(params, params.nAuxpowStartHeight));
+    BOOST_CHECK_EQUAL(actual_pre_activation, legacy_pre_activation);
+    BOOST_CHECK_EQUAL(actual_pre_activation, fixed_nbits);
     BOOST_CHECK(UseScryptPoW(params, params.nAuxpowStartHeight + 1));
-    BOOST_CHECK_EQUAL(actual_at_activation, fixed_nbits);
-    BOOST_CHECK_NE(actual_at_activation, forced_new_at_activation);
-    BOOST_CHECK_EQUAL(actual_first_post_activation, fixed_nbits);
-    BOOST_CHECK_NE(actual_first_post_activation, forced_new_first_post_activation);
-    BOOST_CHECK_EQUAL(actual_second_post_activation, forced_new_second_post_activation);
-    BOOST_CHECK_NE(actual_second_post_activation, fixed_nbits);
+    BOOST_CHECK_NE(actual_at_activation, legacy_at_activation);
+    BOOST_CHECK_NE(actual_at_activation, fixed_nbits);
+    BOOST_CHECK_NE(actual_first_post_activation, legacy_first_post_activation);
+    BOOST_CHECK_NE(actual_first_post_activation, fixed_nbits);
+    BOOST_CHECK_EQUAL(actual_at_activation, actual_first_post_activation);
 }
 
-BOOST_AUTO_TEST_CASE(permitted_difficulty_transition_boundary_current_selector_behavior)
+BOOST_AUTO_TEST_CASE(permitted_difficulty_transition_switches_at_activation_height)
 {
     auto params = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
     params.nAuxpowStartHeight = 100;
-    params.nNewPowDiffHeight = 100;
     params.fPowAllowMinDifficultyBlocks = false;
     params.fPowNoRetargeting = false;
 
@@ -378,8 +379,8 @@ BOOST_AUTO_TEST_CASE(permitted_difficulty_transition_boundary_current_selector_b
 
     BOOST_REQUIRE_NE(allowed_new_nbits, old_nbits);
 
-    BOOST_CHECK(!PermittedDifficultyTransition(params, params.nAuxpowStartHeight, old_nbits, allowed_new_nbits));
-    BOOST_CHECK(PermittedDifficultyTransition(params, params.nAuxpowStartHeight + 1, old_nbits, allowed_new_nbits));
+    BOOST_CHECK(!PermittedDifficultyTransition(params, params.nAuxpowStartHeight - 1, old_nbits, allowed_new_nbits));
+    BOOST_CHECK(PermittedDifficultyTransition(params, params.nAuxpowStartHeight, old_nbits, allowed_new_nbits));
 }
 
 BOOST_AUTO_TEST_CASE(CheckProofOfWork_test_biger_hash_than_target)

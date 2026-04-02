@@ -101,7 +101,6 @@ public:
         consensus.fPowAllowMinDifficultyBlocks = false;
         consensus.enforce_BIP94 = false;
         consensus.fPowNoRetargeting = false;
-        consensus.nNewPowDiffHeight = consensus.nAuxpowStartHeight;
         consensus.nPowAllowMinDifficultyBlocksAfterHeight = std::nullopt;
         consensus.nPowAveragingWindow = 17;
         consensus.nPowMaxAdjustDown = 32; // 32% adjustment down
@@ -191,7 +190,6 @@ public:
         consensus.fPowAllowMinDifficultyBlocks = true;
         consensus.enforce_BIP94 = false;
         consensus.fPowNoRetargeting = false;
-        consensus.nNewPowDiffHeight = consensus.nAuxpowStartHeight;
         consensus.nPowAllowMinDifficultyBlocksAfterHeight = std::nullopt;
         consensus.nPowAveragingWindow = 17;
         consensus.nPowMaxAdjustDown = 32; // 32% adjustment down
@@ -203,8 +201,8 @@ public:
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].threshold = 6048; // 75% of 8064
         consensus.vDeployments[Consensus::DEPLOYMENT_TESTDUMMY].period = 8064;
 
-        consensus.nMinimumChainWork = uint256{"0000000000000000000000000000000000000000000000000000000000000001"};
-        consensus.defaultAssumeValid = uint256{"b34a457c601ef8ce3294116e3296078797be7ded1b0d12515395db9ab5e93ab8"}; // 1683528
+        consensus.nMinimumChainWork = uint256{};
+        consensus.defaultAssumeValid = uint256{};
 
         pchMessageStart[0] = 0xba;
         pchMessageStart[1] = 0xce;
@@ -271,7 +269,6 @@ public:
         consensus.fPowAllowMinDifficultyBlocks = true;
         consensus.enforce_BIP94 = true;
         consensus.fPowNoRetargeting = true;
-        consensus.nNewPowDiffHeight = 0;
         consensus.nPowAllowMinDifficultyBlocksAfterHeight = std::nullopt;
         consensus.nPowAveragingWindow = 17;
         consensus.nPowMaxAdjustDown = 0; // disabled on regtest

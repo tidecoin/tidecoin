@@ -3974,7 +3974,7 @@ static bool CheckAuxPowContext(const CBlockHeader& block, BlockValidationState& 
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "auxpow-unexpected", "auxpow present without auxpow flag");
     }
 
-    if (height && !UseAuxpowHeaderRules(consensusParams, *height)) {
+    if (height && !UsePostAuxpowPowRules(consensusParams, *height)) {
         if (auxpow_flag || has_auxpow) {
             return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "auxpow-pre-activation", "auxpow not allowed before activation");
         }
@@ -4387,7 +4387,7 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
                                  strprintf("rejected nVersion=0x%08x (base=%d) block", block.nVersion, baseVer));
     }
 
-    if (UseAuxpowHeaderRules(consensusParams, nHeight)) {
+    if (UsePostAuxpowPowRules(consensusParams, nHeight)) {
         if (!CPureBlockHeader::IsValidBaseVersion(baseVer)) {
             return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, strprintf("bad-version(0x%08x)", baseVer),
                                  strprintf("rejected nVersion=0x%08x (base=%d) block", block.nVersion, baseVer));

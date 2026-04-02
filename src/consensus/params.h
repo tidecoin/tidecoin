@@ -116,7 +116,6 @@ struct Params {
     int MinBIP9WarningHeight;
     std::array<BIP9Deployment,MAX_VERSION_BITS_DEPLOYMENTS> vDeployments;
     /** Proof of work parameters */
-    int nNewPowDiffHeight;
     uint256 powLimit;
     bool fPowAllowMinDifficultyBlocks;
     /**
