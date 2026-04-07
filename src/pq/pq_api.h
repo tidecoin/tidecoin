@@ -40,9 +40,12 @@ namespace pq {
 using SecureKeyBytes = std::vector<uint8_t, secure_allocator<uint8_t>>;
 
 constexpr unsigned int kFalconSignMaxAttempts = 10000;
+constexpr unsigned int kDeterministicKeyGenMaxAttempts = 1024;
 
 // Test-only override to force Falcon sign attempts to fail (simulates PQClean failures).
 inline std::atomic<int> g_falcon_sign_test_fail_count{0};
+// Test-only override to force deterministic PQHD keygen attempts to fail.
+inline std::atomic<int> g_deterministic_keygen_test_fail_count{0};
 
 inline void SetFalconSignTestFailCount(int count)
 {
@@ -54,11 +57,33 @@ inline int GetFalconSignTestFailCount()
     return g_falcon_sign_test_fail_count.load(std::memory_order_relaxed);
 }
 
+inline void SetDeterministicKeyGenTestFailCount(int count)
+{
+    g_deterministic_keygen_test_fail_count.store(count, std::memory_order_relaxed);
+}
+
+inline int GetDeterministicKeyGenTestFailCount()
+{
+    return g_deterministic_keygen_test_fail_count.load(std::memory_order_relaxed);
+}
+
 inline bool ConsumeFalconSignTestFail()
 {
     int expected = g_falcon_sign_test_fail_count.load(std::memory_order_relaxed);
     while (expected > 0) {
         if (g_falcon_sign_test_fail_count.compare_exchange_weak(
+                expected, expected - 1, std::memory_order_relaxed)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool ConsumeDeterministicKeyGenTestFail()
+{
+    int expected = g_deterministic_keygen_test_fail_count.load(std::memory_order_relaxed);
+    while (expected > 0) {
+        if (g_deterministic_keygen_test_fail_count.compare_exchange_weak(
                 expected, expected - 1, std::memory_order_relaxed)) {
             return true;
         }

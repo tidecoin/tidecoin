@@ -35,6 +35,31 @@ std::string Sha256Hex(std::span<const uint8_t> data)
 
 constexpr uint32_t HARDENED = 0x80000000U;
 
+bool DirectFalconDeterministicKeypair(pq::SchemeId scheme_id,
+                                      std::span<const uint8_t> seed,
+                                      std::vector<uint8_t>& pk_out,
+                                      pq::SecureKeyBytes& sk_out)
+{
+    const pq::SchemeInfo* info = pq::SchemeFromId(scheme_id);
+    if (!info) return false;
+    pk_out.assign(info->pubkey_bytes, 0);
+    sk_out.assign(info->seckey_bytes, 0);
+    int rc = -1;
+    switch (scheme_id) {
+    case pq::SchemeId::FALCON_512:
+        rc = PQCLEAN_FALCON512_CLEAN_crypto_sign_keypair_deterministic(
+            pk_out.data(), sk_out.data(), seed.data(), seed.size());
+        break;
+    case pq::SchemeId::FALCON_1024:
+        rc = PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair_deterministic(
+            pk_out.data(), sk_out.data(), seed.data(), seed.size());
+        break;
+    default:
+        return false;
+    }
+    return rc == 0;
+}
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(pqhd_keygen_tests)
@@ -191,6 +216,85 @@ BOOST_AUTO_TEST_CASE(deterministic_keypair_rejects_wrong_seed_length)
                                                                                   seed.data(), seed.size()),
                           -1);
     }
+}
+
+BOOST_AUTO_TEST_CASE(deterministic_keygen_retry_uses_next_stream_block)
+{
+    const auto master_seed = ParseHexArray<32>("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    const auto master = pqhd::MakeMasterNode(std::span<const uint8_t, 32>(master_seed));
+
+    const std::array<std::pair<pq::SchemeId, std::array<uint32_t, 6>>, 2> cases{{
+        {pq::SchemeId::FALCON_512, {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 7U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
+        {pq::SchemeId::FALCON_1024, {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 8U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
+    }};
+
+    for (const auto& [scheme_id, path] : cases) {
+        const auto leaf = pqhd::DerivePath(master, path);
+        BOOST_REQUIRE(leaf);
+        const auto stream_key = pqhd::DeriveKeygenStreamKey(std::span<const uint8_t, 32>(leaf->node_secret),
+                                                            std::span<const uint32_t>(path));
+        BOOST_REQUIRE(stream_key);
+
+        const auto block0 = pqhd::DeriveKeygenStreamBlock(stream_key->Span(), /*ctr=*/0);
+        const auto block1 = pqhd::DeriveKeygenStreamBlock(stream_key->Span(), /*ctr=*/1);
+
+        std::vector<uint8_t> expected_pk0;
+        pq::SecureKeyBytes expected_sk0;
+        std::vector<uint8_t> expected_pk1;
+        pq::SecureKeyBytes expected_sk1;
+        BOOST_REQUIRE(DirectFalconDeterministicKeypair(scheme_id,
+                                                       std::span<const uint8_t>(block0.data(), 48),
+                                                       expected_pk0,
+                                                       expected_sk0));
+        BOOST_REQUIRE(DirectFalconDeterministicKeypair(scheme_id,
+                                                       std::span<const uint8_t>(block1.data(), 48),
+                                                       expected_pk1,
+                                                       expected_sk1));
+
+        std::vector<uint8_t> pk;
+        pq::SecureKeyBytes sk;
+        BOOST_REQUIRE(pq::KeyGenFromSeed(/*pqhd_version=*/1, scheme_id, stream_key->Span(), pk, sk));
+        BOOST_CHECK(pk == expected_pk0);
+        BOOST_CHECK(std::equal(sk.begin(), sk.end(), expected_sk0.begin(), expected_sk0.end()));
+
+        pq::SetDeterministicKeyGenTestFailCount(1);
+        std::vector<uint8_t> retry_pk;
+        pq::SecureKeyBytes retry_sk;
+        BOOST_REQUIRE(pq::KeyGenFromSeed(/*pqhd_version=*/1, scheme_id, stream_key->Span(), retry_pk, retry_sk));
+        BOOST_CHECK_EQUAL(pq::GetDeterministicKeyGenTestFailCount(), 0);
+        BOOST_CHECK(retry_pk == expected_pk1);
+        BOOST_CHECK(std::equal(retry_sk.begin(), retry_sk.end(), expected_sk1.begin(), expected_sk1.end()));
+        pq::SetDeterministicKeyGenTestFailCount(0);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(deterministic_keygen_retry_exhausts_failures)
+{
+    const auto master_seed = ParseHexArray<32>("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    const auto master = pqhd::MakeMasterNode(std::span<const uint8_t, 32>(master_seed));
+    const std::array<uint32_t, 6> path{
+        HARDENED | pqhd::PURPOSE,
+        HARDENED | pqhd::COIN_TYPE,
+        HARDENED | 7U,
+        HARDENED | 0U,
+        HARDENED | 0U,
+        HARDENED | 0U,
+    };
+
+    const auto leaf = pqhd::DerivePath(master, path);
+    BOOST_REQUIRE(leaf);
+    const auto stream_key = pqhd::DeriveKeygenStreamKey(std::span<const uint8_t, 32>(leaf->node_secret),
+                                                        std::span<const uint32_t>(path));
+    BOOST_REQUIRE(stream_key);
+
+    pq::SetDeterministicKeyGenTestFailCount(static_cast<int>(pq::kDeterministicKeyGenMaxAttempts));
+    std::vector<uint8_t> pk;
+    pq::SecureKeyBytes sk;
+    BOOST_CHECK(!pq::KeyGenFromSeed(/*pqhd_version=*/1, pq::SchemeId::FALCON_512, stream_key->Span(), pk, sk));
+    BOOST_CHECK(pk.empty());
+    BOOST_CHECK(sk.empty());
+    BOOST_CHECK_EQUAL(pq::GetDeterministicKeyGenTestFailCount(), 0);
+    pq::SetDeterministicKeyGenTestFailCount(0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

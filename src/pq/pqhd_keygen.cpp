@@ -65,9 +65,8 @@ bool KeyGenFromSeed(uint32_t pqhd_version,
     // retry deterministically with subsequent stream blocks.
     //
     // This does not change outputs for inputs that already succeeded on the first try.
-    constexpr uint32_t MAX_DETERMINISTIC_ATTEMPTS{1024};
     int rc = -1;
-    for (uint32_t ctr = 0; ctr < MAX_DETERMINISTIC_ATTEMPTS; ++ctr) {
+    for (uint32_t ctr = 0; ctr < kDeterministicKeyGenMaxAttempts; ++ctr) {
         pqhd::KeygenStreamBlock64 block = pqhd::DeriveKeygenStreamBlock(key_material, ctr);
 
         // Seed is the first seed_len bytes of the stream block.
@@ -82,30 +81,34 @@ bool KeyGenFromSeed(uint32_t pqhd_version,
             seed_ptr = seed32.data();
         }
 
-        switch (scheme_id) {
-        case SchemeId::FALCON_512:
-            rc = PQCLEAN_FALCON512_CLEAN_crypto_sign_keypair_deterministic(
-                pk_local.data(), sk_local.data(), seed_ptr, seed_len);
-            break;
-        case SchemeId::FALCON_1024:
-            rc = PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair_deterministic(
-                pk_local.data(), sk_local.data(), seed_ptr, seed_len);
-            break;
-        case SchemeId::MLDSA_44:
-            rc = PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair_deterministic(
-                pk_local.data(), sk_local.data(), seed_ptr, seed_len);
-            break;
-        case SchemeId::MLDSA_65:
-            rc = PQCLEAN_MLDSA65_CLEAN_crypto_sign_keypair_deterministic(
-                pk_local.data(), sk_local.data(), seed_ptr, seed_len);
-            break;
-        case SchemeId::MLDSA_87:
-            rc = PQCLEAN_MLDSA87_CLEAN_crypto_sign_keypair_deterministic(
-                pk_local.data(), sk_local.data(), seed_ptr, seed_len);
-            break;
-        default:
+        if (ConsumeDeterministicKeyGenTestFail()) {
             rc = -1;
-            break;
+        } else {
+            switch (scheme_id) {
+            case SchemeId::FALCON_512:
+                rc = PQCLEAN_FALCON512_CLEAN_crypto_sign_keypair_deterministic(
+                    pk_local.data(), sk_local.data(), seed_ptr, seed_len);
+                break;
+            case SchemeId::FALCON_1024:
+                rc = PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair_deterministic(
+                    pk_local.data(), sk_local.data(), seed_ptr, seed_len);
+                break;
+            case SchemeId::MLDSA_44:
+                rc = PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair_deterministic(
+                    pk_local.data(), sk_local.data(), seed_ptr, seed_len);
+                break;
+            case SchemeId::MLDSA_65:
+                rc = PQCLEAN_MLDSA65_CLEAN_crypto_sign_keypair_deterministic(
+                    pk_local.data(), sk_local.data(), seed_ptr, seed_len);
+                break;
+            case SchemeId::MLDSA_87:
+                rc = PQCLEAN_MLDSA87_CLEAN_crypto_sign_keypair_deterministic(
+                    pk_local.data(), sk_local.data(), seed_ptr, seed_len);
+                break;
+            default:
+                rc = -1;
+                break;
+            }
         }
 
         memory_cleanse(seed48.data(), seed48.size());

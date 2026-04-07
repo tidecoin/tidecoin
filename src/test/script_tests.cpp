@@ -29,6 +29,7 @@
 #include <util/fs.h>
 #include <util/strencodings.h>
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
@@ -39,6 +40,11 @@
 #include <boost/test/unit_test.hpp>
 
 #include <univalue.h>
+
+extern "C" {
+#include <pq/falcon-512/api.h>
+#include <pq/falcon-512/inner.h>
+}
 
 // Uncomment if you want to output updated JSON tests.
 // #define UPDATE_JSON_TESTS
@@ -1925,6 +1931,82 @@ BOOST_AUTO_TEST_CASE(script_sighash_v1_512_zero_rejected)
     MutableTransactionSignatureCreator creator(tx, 0, /*amount=*/1, 0);
     std::vector<unsigned char> sig;
     BOOST_CHECK(!creator.CreateSig(provider, sig, pubkey.GetID(), scriptCode, SigVersion::WITNESS_V1_512));
+}
+
+BOOST_AUTO_TEST_CASE(pq_falcon_legacy_boundary_fixture_spans_strict_and_legacy_bounds)
+{
+    CKey key0;
+    {
+        const std::vector<unsigned char> key0_secret{ParseHex(std::string{SCRIPT_BUILD_KEY0_SECRET_HEX})};
+        key0.Set(key0_secret.begin(), key0_secret.end());
+        BOOST_REQUIRE(key0.IsValid());
+    }
+    const CPubKey pubkey0 = key0.GetPubKey();
+
+    const CScript strict_script = CScript() << ToByteVector(pubkey0) << OP_CHECKSIG;
+    const CTransaction tx_credit{BuildCreditingTransaction(strict_script, /*nValue=*/0)};
+    const CMutableTransaction tx_spend = BuildSpendingTransaction(CScript(), CScriptWitness(), tx_credit);
+    const uint256 sighash = SignatureHash(strict_script, tx_spend, 0, SIGHASH_ALL, /*amount=*/0, SigVersion::BASE);
+
+    const std::vector<unsigned char> sig_with_hashtype = ParseHex(std::string{LEGACY_ONLY_STRICT_DIFF_SIG_HEX});
+    BOOST_REQUIRE(!sig_with_hashtype.empty());
+    BOOST_REQUIRE_EQUAL(sig_with_hashtype.back(), SIGHASH_ALL);
+    const std::span<const unsigned char> msg{sighash.begin(), sighash.size()};
+    const std::vector<unsigned char> sig_no_hashtype(sig_with_hashtype.begin(), sig_with_hashtype.end() - 1);
+    const std::span<const unsigned char> sig{sig_no_hashtype.data(), sig_no_hashtype.size()};
+    const std::span<const unsigned char> raw_pk{pubkey0.begin() + 1, pubkey0.size() - 1};
+
+    BOOST_CHECK(!pubkey0.Verify(sighash, sig_no_hashtype, /*legacy_mode=*/false));
+    BOOST_CHECK(pubkey0.Verify(sighash, sig_no_hashtype, /*legacy_mode=*/true));
+
+    union {
+        uint8_t b[2 * 512];
+        uint64_t dummy_u64;
+        fpr dummy_fpr;
+    } tmp;
+    uint16_t h[512], hm[512];
+    int16_t sig_dec[512];
+    inner_shake256_context sc;
+
+    BOOST_REQUIRE(sig.size() >= 1 + 40);
+    const uint8_t* const nonce = sig.data() + 1;
+    const uint8_t* const sigbuf = sig.data() + 1 + 40;
+    const size_t sigbuflen = sig.size() - 1 - 40;
+
+    BOOST_REQUIRE_EQUAL(raw_pk[0], 0x00 + 9);
+    BOOST_REQUIRE_EQUAL(PQCLEAN_FALCON512_CLEAN_modq_decode(
+                            h, 9, raw_pk.data() + 1, PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1),
+                        PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1);
+    PQCLEAN_FALCON512_CLEAN_to_ntt_monty(h, 9);
+
+    BOOST_REQUIRE_EQUAL(PQCLEAN_FALCON512_CLEAN_comp_decode(sig_dec, 9, sigbuf, sigbuflen), sigbuflen);
+
+    inner_shake256_init(&sc);
+    inner_shake256_inject(&sc, nonce, 40);
+    inner_shake256_inject(&sc, msg.data(), msg.size());
+    inner_shake256_flip(&sc);
+    PQCLEAN_FALCON512_CLEAN_hash_to_point_ct(&sc, hm, 9, tmp.b);
+    inner_shake256_ctx_release(&sc);
+
+    BOOST_CHECK(!PQCLEAN_FALCON512_CLEAN_verify_raw(hm, sig_dec, h, 9, tmp.b));
+
+    const int16_t* const s1 = reinterpret_cast<const int16_t*>(tmp.b);
+    uint32_t sqnorm = 0;
+    uint32_t overflow = 0;
+    for (size_t i = 0; i < 512; ++i) {
+        int32_t z = s1[i];
+        sqnorm += static_cast<uint32_t>(z * z);
+        overflow |= sqnorm;
+        z = sig_dec[i];
+        sqnorm += static_cast<uint32_t>(z * z);
+        overflow |= sqnorm;
+    }
+    sqnorm |= -(overflow >> 31);
+
+    constexpr uint32_t strict_bound = 34034726;
+    constexpr uint32_t legacy_bound = static_cast<uint32_t>(((uint64_t)7085 * 12289) >> 1);
+    BOOST_CHECK_GT(sqnorm, strict_bound);
+    BOOST_CHECK_LT(sqnorm, legacy_bound);
 }
 
 BOOST_AUTO_TEST_CASE(script_witness_v1_512_preauxpow_policy)
