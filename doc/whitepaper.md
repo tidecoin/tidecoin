@@ -148,7 +148,7 @@ Falcon-512 has been the active signature scheme on Tidecoin's mainnet since gene
 
 Falcon combines two fundamental constructions:
 
-**NTRU lattices.** Falcon operates over the cyclotomic polynomial ring R_q = Z_q[x] / (x^n + 1), where n is a power of 2 (512 or 1024) and q = 12,289 is a prime modulus chosen for efficient Number Theoretic Transform (NTT) computation. An NTRU lattice is defined by a public polynomial h in R_q. The public key h hides the factorization h = g * f^(-1) mod q, where f and g are polynomials with small coefficients -- the "short secret basis" of the lattice. The resulting lattice Lambda_h = { (u, v) in R^2 : u + h*v = 0 mod q } has rank 2n in Z^(2n). Because a full basis can be obtained by rotating coefficients of a few initial vectors, the public key compresses to a single polynomial h -- under 897 bytes for Falcon-512, under 1,793 bytes for Falcon-1024.
+**NTRU lattices.** Falcon operates over the cyclotomic polynomial ring R_q = Z_q[x] / (x^n + 1), where n is a power of 2 (512 or 1024) and q = 12,289 is a prime modulus chosen for efficient Number Theoretic Transform (NTT) computation. An NTRU lattice is defined by a public polynomial h in R_q. The public key h hides the factorization h = g * f^(-1) mod q, where f and g are polynomials with small coefficients -- the "short secret basis" of the lattice. The resulting lattice Lambda_h = { (u, v) in R^2 : u + h*v = 0 mod q } has rank 2n in Z^(2n). Because a full basis can be obtained by rotating coefficients of a few initial vectors, the public key compresses to a single polynomial h -- 897 bytes for Falcon-512 and 1,793 bytes for Falcon-1024.
 
 **GPV hash-then-sign framework.** The Gentry-Peikert-Vaikuntanathan (GPV) framework (STOC 2008) provides a provably secure method for constructing lattice-based hash-and-sign signatures:
 
@@ -215,6 +215,8 @@ Odd categories (1, 3, 5) measure resistance to block cipher key search. Even cat
 | **PK + Sig** | **~1,563 bytes** | **~3,073 bytes** | **3,732 bytes** | **5,261 bytes** |
 | Verification speed | ~28,000 ver/s | ~13,700 ver/s | Fast | Fast |
 
+These are scheme-level comparison figures using Falcon's padded encoding. Tidecoin's current Falcon-1024 implementation signs with the compressed PQClean API rather than the padded format.
+
 Falcon's combined public key + signature size is the **smallest of any NIST PQC lattice signature**, which is decisive for bandwidth-constrained blockchain transactions.
 
 #### 4.1.7 Signature Formats: Compressed vs. Padded
@@ -224,6 +226,8 @@ The Falcon specification defines multiple signature encoding formats:
 - **Compressed (format code 1):** Variable-length signatures using Golomb-Rice-like compression. Falcon-512: average ~652 bytes, maximum 752 bytes. This is the most bandwidth-efficient encoding.
 - **Padded (format code 2):** Fixed-length signatures (666 bytes for Falcon-512, 1,280 bytes for Falcon-1024). If a compressed signature exceeds the target size, signing restarts. Fixed size simplifies protocol design and prevents information leakage through signature length variation.
 - **Constant-time (CT, format code 3):** Fixed-length with constant-time encoding/decoding (809 bytes for Falcon-512). Each coefficient is encoded over a fixed number of bits, eliminating timing side-channels during encoding. Rarely needed but available for high-sensitivity scenarios.
+
+Tidecoin's current Falcon-1024 implementation uses the compressed PQClean signing API. The padded size remains relevant for scheme comparisons and compatibility with Falcon's padded verification path, but it is not Tidecoin's default Falcon-1024 signing output.
 
 FIPS 206 will include both padded and compressed formats with domain separation to maintain strong unforgeability when multiple encodings coexist.
 
@@ -238,7 +242,7 @@ Tidecoin's implementation uses the **PQClean "clean" constant-time implementatio
 - **No branching on secrets:** Table lookups read all elements (no early exit), and value tests use constant-time bitwise operations.
 - **Fully portable:** Works on any platform with a C99-compliant compiler -- no FPU required. Successfully tested on 32-bit and 64-bit systems, both little-endian (x86, ARM) and big-endian (PowerPC).
 
-The integer emulation approach makes signing approximately 20x slower than native floating-point with AVX2, but this tradeoff is accepted for **provable constant-time behavior** -- the critical security property for a cryptocurrency where keys protect real value. The formal correctness of Falcon's emulated floating-point has been verified (ePrint 2024/321).
+The integer emulation approach makes signing approximately 20x slower than native floating-point with AVX2, but this tradeoff is accepted for **constant-time-oriented behavior by construction** -- the critical security property for a cryptocurrency where keys protect real value. The formal correctness of Falcon's emulated floating-point has been verified (ePrint 2024/321).
 
 #### 4.1.9 Tidecoin's Legacy vs. Strict Signature Modes
 
@@ -252,7 +256,7 @@ Tidecoin's Falcon-512 implementation supports two verification modes:
 
 #### 4.1.10 From Falcon to FN-DSA (FIPS 206): What Changes
 
-FIPS 206 standardizes Falcon under the name **FN-DSA** (FFT over NTRU-Lattice-Based Digital Signature Algorithm). Key changes from the original Falcon specification:
+FIPS 206 standardizes Falcon under the name **FN-DSA** (FFT over NTRU-Lattice-Based Digital Signature Algorithm). Tidecoin currently uses vendored PQClean Falcon implementing the original Round 3 Falcon specification; the following FN-DSA changes are standards background that may inform future upgrades. Key changes from the original Falcon specification:
 
 1. **BUFF security via public key hashing:** FN-DSA computes hm = SHAKE-256(nonce || hpk || 0x00 || len(ctx) || ctx || message), where hpk is a 64-byte hash of the public key. This achieves Beyond UnForgeability Features (BUFF) security at zero size cost -- no change to public key or signature sizes (ePrint 2024/710).
 
@@ -264,7 +268,7 @@ FIPS 206 standardizes Falcon under the name **FN-DSA** (FFT over NTRU-Lattice-Ba
 
 5. **Pre-hashing support:** FN-DSA supports pre-hashed messages with collision-resistant hash functions.
 
-**Key compatibility:** Public key encoding remains unchanged between original Falcon and FN-DSA (same polynomial h, same sizes). However, FN-DSA signatures are **not backward-compatible** with original Falcon signatures because the hash input changed (includes hpk and context). Tidecoin's transition plan: existing keys work in both modes; the legacy verification path accepts pre-activation signatures, while post-activation signatures will use the stricter format that aligns with FN-DSA's direction.
+**Key compatibility:** Public key encoding remains unchanged between original Falcon and FN-DSA (same polynomial h, same sizes). However, FN-DSA signatures are **not backward-compatible** with original Falcon signatures because the hash input changed (includes hpk and context). For Tidecoin, existing keys can continue to span legacy and strict verification modes, while any future move toward FN-DSA-style signing semantics would require an explicit upgrade beyond the current vendored PQClean Falcon implementation.
 
 #### 4.1.11 The 2019 Sampler Bug and PQClean Security History
 
@@ -597,7 +601,7 @@ Even with aggressive tradeoffs, the quantum attacker needs at minimum Omega(sqrt
 
 #### 6.3.6 Fault-Tolerant QRAM: The Hidden Problem
 
-A critical finding in the QRAM literature: under fault-tolerant operation (required for any useful quantum computation), the bucket-brigade QRAM **loses its theoretical efficiency advantage**. In the noiseless model, bucket-brigade QRAM has only O(log N) "active" gates per query. But under fault-tolerant operation, **all** O(N) components must be actively error-corrected, making the gate cost per QRAM query at least O(N). This means each of the 1,024 QRAM queries in scrypt's Phase B costs at least O(131,072) fault-tolerant gates -- a devastating overhead multiplier.
+A critical finding in the QRAM literature: under fault-tolerant operation (required for any useful quantum computation), the bucket-brigade QRAM **loses its theoretical efficiency advantage**. In the noiseless model, bucket-brigade QRAM has only O(log N) "active" gates per query. But under fault-tolerant operation, **all** O(N) components must be actively error-corrected, making the gate cost per QRAM query scale linearly with N. For Tidecoin's parameters, this means that each of the 1,024 QRAM queries in scrypt's Phase B requires roughly 131,072 fault-tolerant gates -- a devastating overhead multiplier.
 
 ### 6.4 Difficulty Adjustment
 
