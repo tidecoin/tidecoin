@@ -69,8 +69,9 @@ static int FallbackNestedP2WPKHInputSize(const CWallet& wallet, const CCoinContr
     std::optional<uint8_t> scheme_prefix;
     if (coin_control.m_change_scheme_override) {
         scheme_prefix = *coin_control.m_change_scheme_override;
-    } else if (const auto policy = wallet.GetPQHDPolicy()) {
-        if (policy->default_change_scheme != 0) {
+    } else {
+        const auto policy{WITH_LOCK(wallet.cs_wallet, return wallet.GetPQHDPolicy())};
+        if (policy && policy->default_change_scheme != 0) {
             scheme_prefix = policy->default_change_scheme;
         }
     }

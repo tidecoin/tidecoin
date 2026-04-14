@@ -1,0 +1,77 @@
+--- a/crypto_kem/ml-kem-512/clean/api.h
++++ b/src/pq/ml-kem-512/api.h
+@@ -9,10 +9,22 @@
+ #define PQCLEAN_MLKEM512_CLEAN_CRYPTO_BYTES           32
+ #define PQCLEAN_MLKEM512_CLEAN_CRYPTO_ALGNAME "ML-KEM-512"
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++
+ int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(uint8_t *pk, uint8_t *sk);
+ 
++int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair_derand(uint8_t *pk, uint8_t *sk, const uint8_t *coins);
++
+ int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_t *pk);
+ 
++int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc_derand(uint8_t *ct, uint8_t *ss, const uint8_t *pk, const uint8_t *coins);
++
+ int PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk);
+ 
++#ifdef __cplusplus
++} // extern "C"
++#endif
++
+ #endif
+--- a/crypto_kem/ml-kem-512/clean/indcpa.c
++++ b/src/pq/ml-kem-512/indcpa.c
+@@ -3,7 +3,7 @@
+ #include "params.h"
+ #include "poly.h"
+ #include "polyvec.h"
+-#include "randombytes.h"
++#include "../randombytes.h"
+ #include "symmetric.h"
+ #include <stddef.h>
+ #include <stdint.h>
+--- a/crypto_kem/ml-kem-512/clean/kem.c
++++ b/src/pq/ml-kem-512/kem.c
+@@ -1,7 +1,7 @@
+ #include "indcpa.h"
+ #include "kem.h"
+ #include "params.h"
+-#include "randombytes.h"
++#include "../randombytes.h"
+ #include "symmetric.h"
+ #include "verify.h"
+ #include <stddef.h>
+--- a/crypto_kem/ml-kem-512/clean/kem.h
++++ b/src/pq/ml-kem-512/kem.h
+@@ -10,6 +10,10 @@
+ 
+ #define PQCLEAN_MLKEM512_CLEAN_CRYPTO_ALGNAME "ML-KEM-512"
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++
+ int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair_derand(uint8_t *pk, uint8_t *sk, const uint8_t *coins);
+ 
+ int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(uint8_t *pk, uint8_t *sk);
+@@ -20,4 +24,8 @@
+ 
+ int PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk);
+ 
++#ifdef __cplusplus
++} // extern "C"
++#endif
++
+ #endif
+--- a/crypto_kem/ml-kem-512/clean/verify.c
++++ b/src/pq/ml-kem-512/verify.c
+@@ -1,4 +1,4 @@
+-#include "compat.h"
++#include "../compat.h"
+ #include "verify.h"
+ #include <stddef.h>
+ #include <stdint.h>

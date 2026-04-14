@@ -187,7 +187,6 @@ class WalletBackupTest(BitcoinTestFramework):
         balance0 = self.nodes[0].getbalance()
         balance1 = self.nodes[1].getbalance()
         balance2 = self.nodes[2].getbalance()
-        balance3 = self.nodes[3].getbalance()
         # The meaningful invariant for this test is that restored wallets match
         # their pre-backup balances, validated below.
 

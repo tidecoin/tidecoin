@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_QT_BITCOINAMOUNTFIELD_H
-#define BITCOIN_QT_BITCOINAMOUNTFIELD_H
+#ifndef TIDECOIN_QT_TIDECOINAMOUNTFIELD_H
+#define TIDECOIN_QT_TIDECOINAMOUNTFIELD_H
 
 #include <consensus/amount.h>
 #include <qt/tidecoinunits.h>
@@ -82,4 +82,4 @@ private Q_SLOTS:
 
 };
 
-#endif // BITCOIN_QT_BITCOINAMOUNTFIELD_H
+#endif // TIDECOIN_QT_TIDECOINAMOUNTFIELD_H

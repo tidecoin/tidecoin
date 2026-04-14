@@ -26,7 +26,6 @@ from test_framework.script import (
     OP_EQUALVERIFY,
     OP_HASH160,
     OP_IF,
-    OP_RETURN,
 )
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (

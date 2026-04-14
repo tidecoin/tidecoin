@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_QT_BITCOIN_H
-#define BITCOIN_QT_BITCOIN_H
+#ifndef TIDECOIN_QT_TIDECOIN_H
+#define TIDECOIN_QT_TIDECOIN_H
 
 #include <tidecoin-build-config.h> // IWYU pragma: keep
 
@@ -109,4 +109,4 @@ private:
 
 int GuiMain(int argc, char* argv[]);
 
-#endif // BITCOIN_QT_BITCOIN_H
+#endif // TIDECOIN_QT_TIDECOIN_H

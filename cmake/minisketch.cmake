@@ -5,27 +5,29 @@
 include(CheckSourceCompilesWithFlags)
 
 # Check for clmul instructions support.
-if(MSVC)
-  set(CLMUL_CXXFLAGS "")
-else()
-  set(CLMUL_CXXFLAGS -mpclmul)
-endif()
-check_cxx_source_compiles_with_flags("
-  #include <immintrin.h>
-  #include <cstdint>
+set(HAVE_CLMUL OFF)
+set(CLMUL_CXXFLAGS "")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|x64|amd64|AMD64|i[3-6]86)$")
+  if(NOT MSVC)
+    set(CLMUL_CXXFLAGS -mpclmul)
+  endif()
+  check_cxx_source_compiles_with_flags("
+    #include <immintrin.h>
+    #include <cstdint>
 
-  int main()
-  {
-    __m128i a = _mm_cvtsi64_si128((uint64_t)7);
-    __m128i b = _mm_clmulepi64_si128(a, a, 37);
-    __m128i c = _mm_srli_epi64(b, 41);
-    __m128i d = _mm_xor_si128(b, c);
-    uint64_t e = _mm_cvtsi128_si64(d);
-    return e == 0;
-  }
-  " HAVE_CLMUL
-  CXXFLAGS ${CLMUL_CXXFLAGS}
-)
+    int main()
+    {
+      __m128i a = _mm_cvtsi64_si128((uint64_t)7);
+      __m128i b = _mm_clmulepi64_si128(a, a, 37);
+      __m128i c = _mm_srli_epi64(b, 41);
+      __m128i d = _mm_xor_si128(b, c);
+      uint64_t e = _mm_cvtsi128_si64(d);
+      return e == 0;
+    }
+    " HAVE_CLMUL
+    CXXFLAGS ${CLMUL_CXXFLAGS}
+  )
+endif()
 
 add_library(minisketch_common INTERFACE)
 if(MSVC)

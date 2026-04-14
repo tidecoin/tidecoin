@@ -13,8 +13,6 @@ from test_framework.wallet import (
 )
 from test_framework.wallet_util import generate_keypair
 
-from decimal import Decimal
-
 
 def descriptors(out):
     return sorted(u['desc'] for u in out['unspents'])

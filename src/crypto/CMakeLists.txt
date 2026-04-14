@@ -25,6 +25,10 @@ add_library(tidecoin_crypto STATIC EXCLUDE_FROM_ALL
   yespower/tidecoin_pow.cpp
   ../support/cleanse.cpp
 )
+set_target_properties(tidecoin_crypto PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+)
 
 target_link_libraries(tidecoin_crypto
   PRIVATE

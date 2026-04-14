@@ -1,0 +1,125 @@
+--- a/crypto_sign/falcon-1024/clean/api.h
++++ b/src/pq/falcon-1024/api.h
+@@ -22,6 +22,9 @@
+  */
+ int PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair(
+     uint8_t *pk, uint8_t *sk);
++int PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair_deterministic(
++    uint8_t *pk, uint8_t *sk,
++    const uint8_t *seed, size_t seed_len);
+ 
+ /*
+  * Compute a signature on a provided message (m, mlen), with a given
+--- a/crypto_sign/falcon-1024/clean/inner.h
++++ b/src/pq/falcon-1024/inner.h
+@@ -106,7 +106,7 @@
+  * as part of PQClean.
+  */
+ 
+-#include "fips202.h"
++#include "../fips202.h"
+ 
+ #define inner_shake256_context                shake256incctx
+ #define inner_shake256_init(sc)               shake256_inc_init(sc)
+--- a/crypto_sign/falcon-1024/clean/pqclean.c
++++ b/src/pq/falcon-1024/pqclean.c
+@@ -10,7 +10,7 @@
+ 
+ #define NONCELEN   40
+ 
+-#include "randombytes.h"
++#include "../randombytes.h"
+ 
+ /*
+  * Encoding formats (nnnn = log of degree, 9 for Falcon-512, 10 for Falcon-1024)
+@@ -54,9 +54,6 @@
+     inner_shake256_context rng;
+     size_t u, v;
+ 
+-    /*
+-     * Generate key pair.
+-     */
+     randombytes(seed, sizeof seed);
+     inner_shake256_init(&rng);
+     inner_shake256_inject(&rng, seed, sizeof seed);
+@@ -64,9 +61,6 @@
+     PQCLEAN_FALCON1024_CLEAN_keygen(&rng, f, g, F, NULL, h, 10, tmp.b);
+     inner_shake256_ctx_release(&rng);
+ 
+-    /*
+-     * Encode private key.
+-     */
+     sk[0] = 0x50 + 10;
+     u = 1;
+     v = PQCLEAN_FALCON1024_CLEAN_trim_i8_encode(
+@@ -94,9 +88,67 @@
+         return -1;
+     }
+ 
+-    /*
+-     * Encode public key.
+-     */
++    pk[0] = 0x00 + 10;
++    v = PQCLEAN_FALCON1024_CLEAN_modq_encode(
++            pk + 1, PQCLEAN_FALCON1024_CLEAN_CRYPTO_PUBLICKEYBYTES - 1,
++            h, 10);
++    if (v != PQCLEAN_FALCON1024_CLEAN_CRYPTO_PUBLICKEYBYTES - 1) {
++        return -1;
++    }
++
++    return 0;
++}
++
++int
++PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair_deterministic(
++    uint8_t *pk, uint8_t *sk,
++    const uint8_t *seed, size_t seed_len) {
++    if (seed_len != 48) {
++        return -1;
++    }
++    union {
++        uint8_t b[FALCON_KEYGEN_TEMP_10];
++        uint64_t dummy_u64;
++        fpr dummy_fpr;
++    } tmp;
++    int8_t f[1024], g[1024], F[1024];
++    uint16_t h[1024];
++    inner_shake256_context rng;
++    size_t u, v;
++
++    inner_shake256_init(&rng);
++    inner_shake256_inject(&rng, seed, seed_len);
++    inner_shake256_flip(&rng);
++    PQCLEAN_FALCON1024_CLEAN_keygen(&rng, f, g, F, NULL, h, 10, tmp.b);
++    inner_shake256_ctx_release(&rng);
++
++    sk[0] = 0x50 + 10;
++    u = 1;
++    v = PQCLEAN_FALCON1024_CLEAN_trim_i8_encode(
++            sk + u, PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES - u,
++            f, 10, PQCLEAN_FALCON1024_CLEAN_max_fg_bits[10]);
++    if (v == 0) {
++        return -1;
++    }
++    u += v;
++    v = PQCLEAN_FALCON1024_CLEAN_trim_i8_encode(
++            sk + u, PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES - u,
++            g, 10, PQCLEAN_FALCON1024_CLEAN_max_fg_bits[10]);
++    if (v == 0) {
++        return -1;
++    }
++    u += v;
++    v = PQCLEAN_FALCON1024_CLEAN_trim_i8_encode(
++            sk + u, PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES - u,
++            F, 10, PQCLEAN_FALCON1024_CLEAN_max_FG_bits[10]);
++    if (v == 0) {
++        return -1;
++    }
++    u += v;
++    if (u != PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES) {
++        return -1;
++    }
++
+     pk[0] = 0x00 + 10;
+     v = PQCLEAN_FALCON1024_CLEAN_modq_encode(
+             pk + 1, PQCLEAN_FALCON1024_CLEAN_CRYPTO_PUBLICKEYBYTES - 1,

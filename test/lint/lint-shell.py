@@ -67,7 +67,7 @@ def main():
         '*.sh',
     ]
     files = get_files(files_cmd)
-    reg = re.compile(r'^src/(leveldb|minisketch)/')
+    reg = re.compile(r'^src/(crypto/ctaes|crc32c|ipc/libmultiprocess|leveldb|minisketch)/')
 
     def should_exclude(fname: str) -> bool:
         return bool(reg.match(fname))

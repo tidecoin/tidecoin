@@ -19,6 +19,7 @@
 #include <script/miniscript.h>
 #include <script/script_error.h>
 #include <script/signingprovider.h>
+#include <util/string.h>
 
 #include <algorithm>
 #include <array>
@@ -721,7 +722,7 @@ BOOST_AUTO_TEST_CASE(pq_scheme_keysize_tests)
     multi_keys.resize(3);
     const uint32_t k = 2;
 
-    std::string multi_expr = "multi(" + std::to_string(k);
+    std::string multi_expr = "multi(" + util::ToString(k);
     for (const auto& key : multi_keys) {
         const auto key_str = wsh_converter.ToString(key);
         BOOST_REQUIRE(key_str);

@@ -7,7 +7,6 @@
 This file is modified from python-bitcoinlib.
 """
 
-from collections import namedtuple
 import unittest
 
 from .messages import (

@@ -54,8 +54,6 @@ from test_framework.script import (
     MAX_SCRIPT_ELEMENT_SIZE,
     OP_0,
     OP_1,
-    OP_2,
-    OP_16,
     OP_2DROP,
     OP_CHECKMULTISIG,
     OP_CHECKSIG,
@@ -66,9 +64,6 @@ from test_framework.script import (
     OP_RETURN,
     OP_TRUE,
     SIGHASH_ALL,
-    SIGHASH_ANYONECANPAY,
-    SIGHASH_NONE,
-    SIGHASH_SINGLE,
     hash160,
 )
 from test_framework.script_util import (
@@ -87,7 +82,7 @@ from test_framework.util import (
     softfork_active,
 )
 from test_framework.wallet import MiniWallet
-from test_framework.wallet_util import generate_keypair, sign_tx_with_key
+from test_framework.wallet_util import sign_tx_with_key
 
 
 MAX_SIGOP_COST = 80000
@@ -1434,108 +1429,6 @@ class SegWitTest(BitcoinTestFramework):
         Uncompressed pubkeys are no longer supported in default relay policy,
         but (for now) are still valid in blocks."""
         self.log.info("Skipping uncompressed pubkey segwit test (legacy-key-only)")
-        return
-
-        # Segwit transactions using uncompressed pubkeys are not accepted
-        # under default policy, but should still pass consensus.
-        key, pubkey = generate_keypair()
-        assert_equal(len(pubkey), 65)  # This should be an uncompressed pubkey
-
-        utxo = self.utxo.pop(0)
-
-        # Test 1: P2WPKH
-        # First create a P2WPKH output that uses an uncompressed pubkey
-        pubkeyhash = hash160(pubkey)
-        script_pkh = key_to_p2wpkh_script(pubkey)
-        tx = CTransaction()
-        tx.vin.append(CTxIn(COutPoint(utxo.sha256, utxo.n), b""))
-        tx.vout.append(CTxOut(utxo.nValue - 1000, script_pkh))
-
-        # Confirm it in a block.
-        block = self.build_next_block()
-        self.update_witness_block_with_transactions(block, [tx])
-        test_witness_block(self.nodes[0], self.test_node, block, accepted=True)
-
-        # Now try to spend it. Send it to a P2WSH output, which we'll
-        # use in the next test.
-        witness_script = key_to_p2pk_script(pubkey)
-        script_wsh = script_to_p2wsh_script(witness_script)
-
-        tx2 = CTransaction()
-        tx2.vin.append(CTxIn(COutPoint(tx.txid_int, 0), b""))
-        tx2.vout.append(CTxOut(tx.vout[0].nValue - 1000, script_wsh))
-        script = keyhash_to_p2pkh_script(pubkeyhash)
-        tx2.wit.vtxinwit.append(CTxInWitness())
-        tx2.wit.vtxinwit[0].scriptWitness.stack = [pubkey]
-        prevtx = {
-            "txid": f"{tx.txid_int:064x}",
-            "vout": 0,
-            "scriptPubKey": script_pkh.hex(),
-            "amount": Decimal(tx.vout[0].nValue) / COIN,
-        }
-        tx2 = sign_tx_with_key(self.nodes[0], tx2, [key], [prevtx], sighash_type=SIGHASH_ALL)
-
-        # Should fail policy test.
-        test_transaction_acceptance(self.nodes[0], self.test_node, tx2, True, False, 'mempool-script-verify-flag-failed (Using non-compressed keys in segwit)')
-        # But passes consensus.
-        block = self.build_next_block()
-        self.update_witness_block_with_transactions(block, [tx2])
-        test_witness_block(self.nodes[0], self.test_node, block, accepted=True)
-
-        # Test 2: P2WSH
-        # Try to spend the P2WSH output created in last test.
-        # Send it to a P2SH(P2WSH) output, which we'll use in the next test.
-        script_p2sh = script_to_p2sh_script(script_wsh)
-        script_sig = CScript([script_wsh])
-
-        tx3 = CTransaction()
-        tx3.vin.append(CTxIn(COutPoint(tx2.txid_int, 0), b""))
-        tx3.vout.append(CTxOut(tx2.vout[0].nValue - 1000, script_p2sh))
-        tx3.wit.vtxinwit.append(CTxInWitness())
-        sign_p2pk_witness_input(self.nodes[0], witness_script, tx3, 0, SIGHASH_ALL, tx2.vout[0].nValue, key)
-
-        # Should fail policy test.
-        test_transaction_acceptance(self.nodes[0], self.test_node, tx3, True, False, 'mempool-script-verify-flag-failed (Using non-compressed keys in segwit)')
-        # But passes consensus.
-        block = self.build_next_block()
-        self.update_witness_block_with_transactions(block, [tx3])
-        test_witness_block(self.nodes[0], self.test_node, block, accepted=True)
-
-        # Test 3: P2SH(P2WSH)
-        # Try to spend the P2SH output created in the last test.
-        # Send it to a P2PKH output, which we'll use in the next test.
-        script_pubkey = keyhash_to_p2pkh_script(pubkeyhash)
-        tx4 = CTransaction()
-        tx4.vin.append(CTxIn(COutPoint(tx3.txid_int, 0), script_sig))
-        tx4.vout.append(CTxOut(tx3.vout[0].nValue - 1000, script_pubkey))
-        tx4.wit.vtxinwit.append(CTxInWitness())
-        sign_p2pk_witness_input(self.nodes[0], witness_script, tx4, 0, SIGHASH_ALL, tx3.vout[0].nValue, key)
-
-        # Should fail policy test.
-        test_transaction_acceptance(self.nodes[0], self.test_node, tx4, True, False, 'mempool-script-verify-flag-failed (Using non-compressed keys in segwit)')
-        block = self.build_next_block()
-        self.update_witness_block_with_transactions(block, [tx4])
-        test_witness_block(self.nodes[0], self.test_node, block, accepted=True)
-
-        # Test 4: Uncompressed pubkeys should still be valid in non-segwit
-        # transactions.
-        tx5 = CTransaction()
-        tx5.vin.append(CTxIn(COutPoint(tx4.txid_int, 0), b""))
-        tx5.vout.append(CTxOut(tx4.vout[0].nValue - 1000, CScript([OP_TRUE])))
-        tx5.vin[0].scriptSig = CScript([pubkey])
-        prevtx = {
-            "txid": f"{tx4.txid_int:064x}",
-            "vout": 0,
-            "scriptPubKey": script_pubkey.hex(),
-            "amount": Decimal(tx4.vout[0].nValue) / COIN,
-        }
-        tx5 = sign_tx_with_key(self.nodes[0], tx5, [key], [prevtx], sighash_type=SIGHASH_ALL)
-        # Should pass policy and consensus.
-        test_transaction_acceptance(self.nodes[0], self.test_node, tx5, True, True)
-        block = self.build_next_block()
-        self.update_witness_block_with_transactions(block, [tx5])
-        test_witness_block(self.nodes[0], self.test_node, block, accepted=True)
-        self.utxo.append(UTXO(tx5.txid_int, 0, tx5.vout[0].nValue))
 
     @subtest
     def test_non_standard_witness_blinding(self):
@@ -1594,7 +1487,6 @@ class SegWitTest(BitcoinTestFramework):
         """Test detection of non-standard P2WSH witness"""
         pad = chr(1).encode('latin-1')
         max_std_witness_item_size = 5000
-        max_std_witness_script_size = 65536
 
         # Create scripts for tests
         scripts = []

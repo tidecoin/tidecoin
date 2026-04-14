@@ -64,7 +64,7 @@ class ML_KEM:
         :param bytes seed: random bytes to seed the DRBG with
         """
         try:
-            from ..drbg.aes256_ctr_drbg import AES256_CTR_DRBG
+            from ..drbg.aes256_ctr_drbg import AES256_CTR_DRBG  # type: ignore[import]
 
             self._drbg = AES256_CTR_DRBG(seed)
             self.random_bytes = self._drbg.random_bytes

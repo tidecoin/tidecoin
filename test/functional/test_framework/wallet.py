@@ -33,7 +33,6 @@ from test_framework.messages import (
 )
 from test_framework.script import (
     CScript,
-    OP_0,
     OP_DROP,
     OP_NOP,
     OP_RETURN,
@@ -166,6 +165,7 @@ class MiniWallet:
             self.scan_tx(tx)
 
     def sign_tx(self, tx, fixed_length=True):
+        del fixed_length
         if self._mode == MiniWalletMode.RAW_P2PK:
             utxos = getattr(self, "_last_spent_utxos", None)
             if not utxos:
@@ -344,7 +344,7 @@ class MiniWallet:
 
         self._last_spent_utxos = utxos_to_spend
         self.sign_tx(tx)
-        self._last_spent_utxos = None
+        del self._last_spent_utxos
 
         if target_vsize:
             self._bulk_tx(tx, target_vsize)

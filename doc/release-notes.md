@@ -75,7 +75,7 @@ the BIP-32 HD wallet for post-quantum key derivation:
 - **Configurable default schemes** for receive and change addresses
 - **Encrypted storage** via `PQHDCryptedSeed` for wallet-at-rest security
 
-The PQHD system is documented in detail in the [whitepaper](doc/whitepaper.md).
+The PQHD system is documented in detail in the [whitepaper](whitepaper.md).
 
 ML-KEM-512 Encrypted P2P Transport
 ====================================

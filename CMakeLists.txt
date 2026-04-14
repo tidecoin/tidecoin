@@ -523,10 +523,12 @@ else()
 
   try_append_cxx_flags("-Wstack-protector" TARGET core_interface SKIP_LINK)
   try_append_cxx_flags("-fstack-protector-all" TARGET core_interface)
-  try_append_cxx_flags("-fcf-protection=full" TARGET core_interface)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|x64|amd64|AMD64|i[3-6]86)$")
+    try_append_cxx_flags("-fcf-protection=full" TARGET core_interface)
+  endif()
 
-  if(MINGW)
-    # stack-clash-protection is a no-op for Windows.
+  if(MINGW OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    # stack-clash-protection is a no-op for Windows and unsupported by Apple Clang.
     # See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=90458 for more details.
   else()
     try_append_cxx_flags("-fstack-clash-protection" TARGET core_interface)
@@ -540,27 +542,29 @@ else()
     endif()
   endif()
 
-  try_append_linker_flag("-Wl,--enable-reloc-section" TARGET core_interface)
-  try_append_linker_flag("-Wl,--dynamicbase" TARGET core_interface)
-  try_append_linker_flag("-Wl,--nxcompat" TARGET core_interface)
-  try_append_linker_flag("-Wl,--high-entropy-va" TARGET core_interface)
-  try_append_linker_flag("-Wl,-z,relro" TARGET core_interface)
-  try_append_linker_flag("-Wl,-z,now" TARGET core_interface)
-  # TODO: This can be dropped once Bitcoin Core no longer supports
-  #       NetBSD 10.0 or if upstream fix is backported.
-  # NetBSD's dynamic linker ld.elf_so < 11.0 supports exactly 2
-  # `PT_LOAD` segments and binaries linked with `-z separate-code`
-  # have 4 `PT_LOAD` segments.
-  # Relevant discussions:
-  # - https://github.com/bitcoin/bitcoin/pull/28724#issuecomment-2589347934
-  # - https://mail-index.netbsd.org/tech-userlevel/2023/01/05/msg013666.html
-  if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD" AND CMAKE_SYSTEM_VERSION VERSION_LESS 11.0)
-    try_append_linker_flag("-Wl,-z,noseparate-code" TARGET core_interface)
-  else()
-    try_append_linker_flag("-Wl,-z,separate-code" TARGET core_interface)
-  endif()
-  if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  if(MINGW)
+    try_append_linker_flag("-Wl,--enable-reloc-section" TARGET core_interface)
+    try_append_linker_flag("-Wl,--dynamicbase" TARGET core_interface)
+    try_append_linker_flag("-Wl,--nxcompat" TARGET core_interface)
+    try_append_linker_flag("-Wl,--high-entropy-va" TARGET core_interface)
+  elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     try_append_linker_flag("-Wl,-fixup_chains" TARGET core_interface)
+  else()
+    try_append_linker_flag("-Wl,-z,relro" TARGET core_interface)
+    try_append_linker_flag("-Wl,-z,now" TARGET core_interface)
+    # TODO: This can be dropped once Bitcoin Core no longer supports
+    #       NetBSD 10.0 or if upstream fix is backported.
+    # NetBSD's dynamic linker ld.elf_so < 11.0 supports exactly 2
+    # `PT_LOAD` segments and binaries linked with `-z separate-code`
+    # have 4 `PT_LOAD` segments.
+    # Relevant discussions:
+    # - https://github.com/bitcoin/bitcoin/pull/28724#issuecomment-2589347934
+    # - https://mail-index.netbsd.org/tech-userlevel/2023/01/05/msg013666.html
+    if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD" AND CMAKE_SYSTEM_VERSION VERSION_LESS 11.0)
+      try_append_linker_flag("-Wl,-z,noseparate-code" TARGET core_interface)
+    else()
+      try_append_linker_flag("-Wl,-z,separate-code" TARGET core_interface)
+    endif()
   endif()
 endif()
 

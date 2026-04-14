@@ -84,7 +84,7 @@ def _run_testkeys(*, scheme: str, count: int = 1):
         f"--count={count}",
     ]
     _pq_key_index += count
-    out = subprocess.check_output(cmd, text=True)
+    out = subprocess.check_output(cmd, text=True, encoding="utf8")
     data = json.loads(out)
     return data
 
@@ -118,6 +118,7 @@ def generate_keypair(compressed=True, wif=False, scheme=None):
 
     scheme: optional scheme name/id (e.g. "falcon-512", "ml-dsa-65", "7").
     """
+    del compressed
     use_scheme = scheme if scheme is not None else _pq_default_scheme
     data = _run_testkeys(scheme=use_scheme, count=1)
     item = data[0] if isinstance(data, list) else data
@@ -138,7 +139,7 @@ def generate_keypair_at_index(index, scheme=None):
         f"--index={index}",
         "--count=1",
     ]
-    out = subprocess.check_output(cmd, text=True)
+    out = subprocess.check_output(cmd, text=True, encoding="utf8")
     data = json.loads(out)
     item = data[0] if isinstance(data, list) else data
     return item["privkey_wif"], bytes.fromhex(item["pubkey_hex"])

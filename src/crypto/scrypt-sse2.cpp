@@ -27,10 +27,10 @@
  * online backup system.
  */
 
-#include "crypto/scrypt.h"
-#include <stdlib.h>
-#include <stdint.h>
-#include <string.h>
+#include <crypto/scrypt.h>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 //#include <openssl/sha.h>
 
 #include <emmintrin.h>

@@ -1019,7 +1019,7 @@ static DBErrors LoadPQHDWalletRecords(CWallet* pwallet, DatabaseBatch& batch) EX
                                 expected_seed_id.ToString(), seed_id.ToString());
                 return DBErrors::CORRUPT;
             }
-            if (!pwallet->LoadPQHDSeed(seed_id, std::move(seed))) {
+            if (!WITH_LOCK(pwallet->cs_wallet, return pwallet->LoadPQHDSeed(seed_id, std::move(seed)))) {
                 err = strprintf("Error reading wallet database: duplicate or conflicting PQHD seed record for seed_id=%s",
                                 seed_id.ToString());
                 return DBErrors::CORRUPT;
@@ -1043,7 +1043,7 @@ static DBErrors LoadPQHDWalletRecords(CWallet* pwallet, DatabaseBatch& batch) EX
                 err = strprintf("Error reading wallet database: empty PQHD crypted seed for seed_id=%s", seed_id.ToString());
                 return DBErrors::CORRUPT;
             }
-            if (!pwallet->LoadPQHDCryptedSeed(seed_id, std::move(seed))) {
+            if (!WITH_LOCK(pwallet->cs_wallet, return pwallet->LoadPQHDCryptedSeed(seed_id, std::move(seed)))) {
                 err = strprintf("Error reading wallet database: duplicate or conflicting PQHD crypted seed record for seed_id=%s",
                                 seed_id.ToString());
                 return DBErrors::CORRUPT;
@@ -1062,7 +1062,7 @@ static DBErrors LoadPQHDWalletRecords(CWallet* pwallet, DatabaseBatch& batch) EX
             policy_seen = true;
             PQHDPolicy policy;
             value >> policy;
-            pwallet->LoadPQHDPolicy(std::move(policy));
+            WITH_LOCK(pwallet->cs_wallet, pwallet->LoadPQHDPolicy(std::move(policy)));
             return DBErrors::LOAD_OK;
         });
     result = std::max(result, policy_res.m_result);

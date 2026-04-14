@@ -119,6 +119,7 @@ def target_str(target):
 def create_block(hashprev=None, coinbase=None, ntime=None, *, version=None, tmpl=None, txlist=None,
                  use_auxpow=False, chain_id=CHAIN_ID, auxpow_active=None):
     """Create a block (unsolved by default)."""
+    del auxpow_active
     block = CBlock()
     if tmpl is None:
         tmpl = {}

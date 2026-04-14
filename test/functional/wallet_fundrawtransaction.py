@@ -21,14 +21,12 @@ from test_framework.messages import (
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_not_equal,
-    assert_approx,
     assert_equal,
     assert_fee_amount,
     assert_greater_than,
     assert_greater_than_or_equal,
     assert_raises_rpc_error,
     count_bytes,
-    get_fee,
 )
 from test_framework.wallet_util import generate_keypair, WalletUnlock
 
@@ -362,7 +360,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         self.log.info("Test fundrawtxn with a vin < required amount")
         selected_addr = self.nodes[2].getnewaddress()
         extra_addr = self.nodes[2].getnewaddress()
-        send_res = self.nodes[2].send(outputs=[{selected_addr: Decimal("1.0")}, {extra_addr: Decimal("2.0")}])
+        self.nodes[2].send(outputs=[{selected_addr: Decimal("1.0")}, {extra_addr: Decimal("2.0")}])
         self.generate(self.nodes[0], 1)
         unspents = sorted(self.nodes[2].listunspent(), key=lambda utxo: utxo["amount"])
         assert_greater_than_or_equal(len(unspents), 2)

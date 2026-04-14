@@ -33,7 +33,7 @@
       ]
     },
     "tests": {
-      "description": "Build test_bitcoin.exe executable",
+      "description": "Build test_tidecoin.exe executable",
       "dependencies": [
         "boost-test"
       ]

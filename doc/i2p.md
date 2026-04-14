@@ -62,7 +62,7 @@ Make automatic outbound connections only to I2P addresses. Inbound and manual
 connections are not affected by this option. It can be specified multiple times
 to allow multiple networks, e.g. onlynet=onion, onlynet=i2p.
 
-You can use `tidecoin-cli -addrinfo` to see the number of I2P addresses known 
+You can use `tidecoin-cli -addrinfo` to see the number of I2P addresses known
 to your node.
 
 Another consideration with `onlynet=i2p` is that the initial blocks download

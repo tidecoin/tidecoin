@@ -31,7 +31,6 @@ from .authproxy import (
 from .messages import NODE_P2P_V2
 from .p2p import P2P_SERVICES, P2P_SUBVERSION
 from .util import (
-    MAX_NODES,
     assert_equal,
     assert_not_equal,
     append_config,

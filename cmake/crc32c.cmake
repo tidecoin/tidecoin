@@ -37,49 +37,69 @@ check_cxx_source_compiles("
   " HAVE_MM_PREFETCH
 )
 
-# Check for SSE4.2 support in the compiler.
-if(MSVC)
-  set(SSE42_CXXFLAGS /arch:AVX)
-else()
-  set(SSE42_CXXFLAGS -msse4.2)
+set(_is_x86_target OFF)
+set(_is_arm64_target OFF)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|x64|amd64|AMD64|i[3-6]86)$")
+  set(_is_x86_target ON)
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+  set(_is_arm64_target ON)
 endif()
-check_cxx_source_compiles_with_flags("
-  #include <cstdint>
-  #if defined(_MSC_VER)
-  #include <intrin.h>
-  #elif defined(__GNUC__) && defined(__SSE4_2__)
-  #include <nmmintrin.h>
-  #endif
 
-  int main() {
-    uint64_t l = 0;
-    l = _mm_crc32_u8(l, 0);
-    l = _mm_crc32_u32(l, 0);
-    l = _mm_crc32_u64(l, 0);
-    return l;
-  }
-  " HAVE_SSE42
-  CXXFLAGS ${SSE42_CXXFLAGS}
-)
+# Check for SSE4.2 support in the compiler.
+set(HAVE_SSE42 OFF)
+set(SSE42_CXXFLAGS "")
+if(_is_x86_target)
+  if(MSVC)
+    set(SSE42_CXXFLAGS /arch:AVX)
+  else()
+    set(SSE42_CXXFLAGS -msse4.2)
+  endif()
+  check_cxx_source_compiles_with_flags("
+    #include <cstdint>
+    #if defined(_MSC_VER)
+    #include <intrin.h>
+    #elif defined(__GNUC__) && defined(__SSE4_2__)
+    #include <nmmintrin.h>
+    #endif
+
+    int main() {
+      uint64_t l = 0;
+      l = _mm_crc32_u8(l, 0);
+      l = _mm_crc32_u32(l, 0);
+      l = _mm_crc32_u64(l, 0);
+      return l;
+    }
+    " HAVE_SSE42
+    CXXFLAGS ${SSE42_CXXFLAGS}
+  )
+endif()
 
 # Check for ARMv8 w/ CRC and CRYPTO extensions support in the compiler.
-set(ARM64_CRC_CXXFLAGS -march=armv8-a+crc+crypto)
-check_cxx_source_compiles_with_flags("
-  #include <arm_acle.h>
-  #include <arm_neon.h>
+set(HAVE_ARM64_CRC32C OFF)
+set(ARM64_CRC_CXXFLAGS "")
+if(_is_arm64_target)
+  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set(ARM64_CRC_CXXFLAGS -march=armv8-a+crc+crypto)
+  endif()
+  check_cxx_source_compiles_with_flags("
+    #include <arm_acle.h>
+    #include <arm_neon.h>
 
-  int main() {
-  #ifdef __aarch64__
-    __crc32cb(0, 0); __crc32ch(0, 0); __crc32cw(0, 0); __crc32cd(0, 0);
-    vmull_p64(0, 0);
-  #else
-  #error crc32c library does not support hardware acceleration on 32-bit ARM
-  #endif
-    return 0;
-  }
-  " HAVE_ARM64_CRC32C
-  CXXFLAGS ${ARM64_CRC_CXXFLAGS}
-)
+    int main() {
+    #ifdef __aarch64__
+      __crc32cb(0, 0); __crc32ch(0, 0); __crc32cw(0, 0); __crc32cd(0, 0);
+      vmull_p64(0, 0);
+    #else
+    #error crc32c library does not support hardware acceleration on 32-bit ARM
+    #endif
+      return 0;
+    }
+    " HAVE_ARM64_CRC32C
+    CXXFLAGS ${ARM64_CRC_CXXFLAGS}
+  )
+endif()
+unset(_is_x86_target)
+unset(_is_arm64_target)
 
 add_library(crc32c STATIC EXCLUDE_FROM_ALL
   ${PROJECT_SOURCE_DIR}/src/crc32c/src/crc32c.cc

@@ -1,0 +1,76 @@
+--- a/crypto_sign/ml-dsa-65/clean/api.h
++++ b/src/pq/ml-dsa-65/api.h
+@@ -10,6 +10,9 @@
+ #define PQCLEAN_MLDSA65_CLEAN_CRYPTO_ALGNAME "ML-DSA-65"
+ 
+ int PQCLEAN_MLDSA65_CLEAN_crypto_sign_keypair(uint8_t *pk, uint8_t *sk);
++int PQCLEAN_MLDSA65_CLEAN_crypto_sign_keypair_deterministic(
++    uint8_t *pk, uint8_t *sk,
++    const uint8_t *seed, size_t seed_len);
+ 
+ int PQCLEAN_MLDSA65_CLEAN_crypto_sign_signature_ctx(uint8_t *sig, size_t *siglen,
+         const uint8_t *m, size_t mlen,
+--- a/crypto_sign/ml-dsa-65/clean/sign.c
++++ b/src/pq/ml-dsa-65/sign.c
+@@ -3,9 +3,10 @@
+ #include "params.h"
+ #include "poly.h"
+ #include "polyvec.h"
+-#include "randombytes.h"
++#include "../randombytes.h"
+ #include "sign.h"
+ #include "symmetric.h"
++#include <string.h>
+ #include <stdint.h>
+ 
+ /*************************************************
+@@ -63,6 +64,49 @@
+     shake256(tr, TRBYTES, pk, PQCLEAN_MLDSA65_CLEAN_CRYPTO_PUBLICKEYBYTES);
+     PQCLEAN_MLDSA65_CLEAN_pack_sk(sk, rho, tr, key, &t0, &s1, &s2);
+ 
++    return 0;
++}
++
++int PQCLEAN_MLDSA65_CLEAN_crypto_sign_keypair_deterministic(uint8_t *pk, uint8_t *sk,
++                                                           const uint8_t *seed, size_t seed_len)
++{
++    if (seed_len != SEEDBYTES) {
++        return -1;
++    }
++    uint8_t seedbuf[2 * SEEDBYTES + CRHBYTES];
++    uint8_t tr[TRBYTES];
++    const uint8_t *rho, *rhoprime, *key;
++    polyvecl mat[K];
++    polyvecl s1, s1hat;
++    polyveck s2, t1, t0;
++
++    memcpy(seedbuf, seed, SEEDBYTES);
++    seedbuf[SEEDBYTES + 0] = K;
++    seedbuf[SEEDBYTES + 1] = L;
++    shake256(seedbuf, 2 * SEEDBYTES + CRHBYTES, seedbuf, SEEDBYTES + 2);
++    rho = seedbuf;
++    rhoprime = rho + SEEDBYTES;
++    key = rhoprime + CRHBYTES;
++
++    PQCLEAN_MLDSA65_CLEAN_polyvec_matrix_expand(mat, rho);
++    PQCLEAN_MLDSA65_CLEAN_polyvecl_uniform_eta(&s1, rhoprime, 0);
++    PQCLEAN_MLDSA65_CLEAN_polyveck_uniform_eta(&s2, rhoprime, L);
++
++    s1hat = s1;
++    PQCLEAN_MLDSA65_CLEAN_polyvecl_ntt(&s1hat);
++    PQCLEAN_MLDSA65_CLEAN_polyvec_matrix_pointwise_montgomery(&t1, mat, &s1hat);
++    PQCLEAN_MLDSA65_CLEAN_polyveck_reduce(&t1);
++    PQCLEAN_MLDSA65_CLEAN_polyveck_invntt_tomont(&t1);
++
++    PQCLEAN_MLDSA65_CLEAN_polyveck_add(&t1, &t1, &s2);
++
++    PQCLEAN_MLDSA65_CLEAN_polyveck_caddq(&t1);
++    PQCLEAN_MLDSA65_CLEAN_polyveck_power2round(&t1, &t0, &t1);
++    PQCLEAN_MLDSA65_CLEAN_pack_pk(pk, rho, &t1);
++
++    shake256(tr, TRBYTES, pk, PQCLEAN_MLDSA65_CLEAN_CRYPTO_PUBLICKEYBYTES);
++    PQCLEAN_MLDSA65_CLEAN_pack_sk(sk, rho, tr, key, &t0, &s1, &s2);
++
+     return 0;
+ }
+ 

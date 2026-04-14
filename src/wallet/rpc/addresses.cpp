@@ -10,6 +10,7 @@
 #include <script/descriptor.h>
 #include <script/script.h>
 #include <script/solver.h>
+#include <util/string.h>
 #include <util/translation.h>
 #include <wallet/receive.h>
 #include <wallet/rpc/util.h>
@@ -45,7 +46,7 @@ static std::string WritePQHDPath(const std::vector<uint32_t>& path)
     std::string out = "m";
     for (const uint32_t elem : path) {
         out += "/";
-        out += std::to_string(elem & 0x7FFFFFFFU);
+        out += util::ToString(elem & 0x7FFFFFFFU);
         if ((elem & 0x80000000U) != 0) {
             out += "h";
         }

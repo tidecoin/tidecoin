@@ -170,7 +170,7 @@ static UniValue generateBlocks(ChainstateManager& chainman, Mining& miner, const
         CHECK_NONFATAL(block_template);
 
         std::shared_ptr<const CBlock> block_out;
-        const int height = chainman.ActiveChain().Height() + 1;
+        const int height{WITH_LOCK(chainman.GetMutex(), return chainman.ActiveChain().Height() + 1)};
         if (!GenerateBlock(chainman, block_template->getBlock(), nMaxTries, block_out, /*process_new_block=*/true, height)) {
             break;
         }
@@ -398,7 +398,7 @@ static RPCHelpMan generateblock()
     std::shared_ptr<const CBlock> block_out;
     uint64_t max_tries{DEFAULT_MAX_TRIES};
 
-    const int height = chainman.ActiveChain().Height() + 1;
+    const int height{WITH_LOCK(chainman.GetMutex(), return chainman.ActiveChain().Height() + 1)};
     if (!GenerateBlock(chainman, std::move(block), max_tries, block_out, process_new_block, height) || !block_out) {
         throw JSONRPCError(RPC_MISC_ERROR, "Failed to make block.");
     }

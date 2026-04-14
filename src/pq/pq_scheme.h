@@ -1,5 +1,5 @@
-#ifndef TIDECOIN_PQ_SCHEME_H
-#define TIDECOIN_PQ_SCHEME_H
+#ifndef TIDECOIN_PQ_PQ_SCHEME_H
+#define TIDECOIN_PQ_PQ_SCHEME_H
 
 #include <consensus/params.h>
 
@@ -175,4 +175,4 @@ inline bool IsSchemeAllowedAtHeight(SchemeId id, const Consensus::Params& params
 
 } // namespace pq
 
-#endif // TIDECOIN_PQ_SCHEME_H
+#endif // TIDECOIN_PQ_PQ_SCHEME_H

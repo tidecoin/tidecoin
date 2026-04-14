@@ -133,7 +133,7 @@ std::optional<uint8_t> ParsePQSchemePrefix(const UniValue& value)
         normalized.reserve(input.size());
         for (char ch : input) {
             if (ch == '-' || ch == '_' || ch == ' ') continue;
-            normalized.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+            normalized.push_back(ToLower(ch));
         }
         if (auto parsed = ToIntegral<uint64_t>(normalized)) {
             scheme = *parsed;
@@ -167,7 +167,8 @@ std::optional<uint8_t> ParsePQSchemePrefix(const UniValue& value)
 void PushParentDescriptors(const CWallet& wallet, const CScript& script_pubkey, UniValue& entry)
 {
     UniValue parent_descs(UniValue::VARR);
-    for (const auto& desc: wallet.GetWalletDescriptors(script_pubkey)) {
+    const auto descs{WITH_LOCK(wallet.cs_wallet, return wallet.GetWalletDescriptors(script_pubkey))};
+    for (const auto& desc: descs) {
         std::string desc_str;
         FlatSigningProvider dummy_provider;
         if (!CHECK_NONFATAL(desc.descriptor->ToNormalizedString(dummy_provider, desc_str, &desc.cache))) continue;

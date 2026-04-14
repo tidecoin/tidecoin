@@ -17,6 +17,7 @@
 *.patch
 !contrib/guix/patches/*.patch
 !depends/patches/**/*.patch
+!src/pq/patches/*.patch
 
 /CMakeUserPresets.json
 

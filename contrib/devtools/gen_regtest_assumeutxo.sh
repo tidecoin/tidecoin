@@ -8,6 +8,8 @@
 # Usage:
 #   ./contrib/devtools/gen_regtest_assumeutxo.sh
 #
+export LC_ALL=C
+
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -18,9 +20,9 @@ OUT="$(./build/bin/test_tidecoin \
   -- \
   --printtoconsole=1 2>&1 || true)"
 
-python3 - <<'PY'
-import json, re, sys
-text = sys.stdin.read()
+SNAPSHOT_OUTPUT="$OUT" python3 - <<'PY'
+import json, os, re, sys
+text = os.environ["SNAPSHOT_OUTPUT"]
 m = re.search(r'Wrote UTXO snapshot to .*?: (\{.*\})\s*$', text, re.M)
 if not m:
     print("error: could not find snapshot JSON in test output", file=sys.stderr)
@@ -30,5 +32,3 @@ print("Add this to CRegTestParams::m_assumeutxo_data in src/kernel/chainparams.c
 print()
 print(f'{{.height = {obj["base_height"]}, .hash_serialized = AssumeutxoHash{{uint256{{"{obj["txoutset_hash"]}"}}}}, .m_chain_tx_count = {obj["nchaintx"]}U, .blockhash = consteval_ctor(uint256{{"{obj["base_hash"]}"}})}},')
 PY
-<<<"$OUT"
-

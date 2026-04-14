@@ -108,7 +108,9 @@
 
 #include "yespower-platform.c"
 
-#if __STDC_VERSION__ >= 199901L
+#ifdef _MSC_VER
+#define restrict
+#elif __STDC_VERSION__ >= 199901L
 /* Have restrict */
 #elif defined(__GNUC__)
 #define restrict __restrict

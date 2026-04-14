@@ -253,11 +253,10 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
     }
     int nOpCount = 0;
     bool fRequireMinimal = (flags & SCRIPT_VERIFY_MINIMALDATA) != 0;
-    uint32_t opcode_pos = 0;
 
     try
     {
-        for (; pc < pend; ++opcode_pos) {
+        for (; pc < pend;) {
             bool fExec = vfExec.all_true();
 
             //

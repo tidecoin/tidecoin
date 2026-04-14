@@ -1011,7 +1011,7 @@ public:
 
     //! Get the ScriptPubKeyMan for the given OutputType and internal/external chain.
     ScriptPubKeyMan* GetScriptPubKeyMan(const OutputType& type, bool internal) const;
-    ScriptPubKeyMan* GetScriptPubKeyMan(const OutputType& type, bool internal, std::optional<uint8_t> scheme_override);
+    ScriptPubKeyMan* GetScriptPubKeyMan(const OutputType& type, bool internal, std::optional<uint8_t> scheme_override) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
     //! Get all the ScriptPubKeyMans for a script
     std::set<ScriptPubKeyMan*> GetScriptPubKeyMans(const CScript& script) const;
@@ -1023,10 +1023,10 @@ public:
     std::unique_ptr<SigningProvider> GetSolvingProvider(const CScript& script, SignatureData& sigdata) const;
 
     //! Resolve a unique PQ scheme prefix for a wallet-owned address if known.
-    std::optional<uint8_t> GetAddressSchemePrefix(const CTxDestination& dest) const;
+    std::optional<uint8_t> GetAddressSchemePrefix(const CTxDestination& dest) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
     //! Get the wallet descriptors for a script.
-    std::vector<WalletDescriptor> GetWalletDescriptors(const CScript& script) const;
+    std::vector<WalletDescriptor> GetWalletDescriptors(const CScript& script) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
     //! Get the LegacyScriptPubKeyMan which is used for all types, internal, and external.
     LegacyDataSPKM* GetLegacyDataSPKM() const;

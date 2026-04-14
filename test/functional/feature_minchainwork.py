@@ -48,7 +48,6 @@ class MinimumChainWorkTest(BitcoinTestFramework):
     def run_test(self):
         # Start building a chain on node0.  node2 shouldn't be able to sync until node1's
         # minchainwork is exceeded
-        starting_chain_work = int(self.nodes[0].getblockheader(self.nodes[0].getbestblockhash())['chainwork'], 16)
         self.log.info(f"Testing relay across node 1 (minChainWork = {self.node_min_work[1]})")
 
         starting_blockcount = self.nodes[2].getblockcount()

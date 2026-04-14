@@ -60,8 +60,7 @@ static unsigned int GetCurrentScriptVerifyFlags(const std::any& context)
     unsigned int script_verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
     NodeContext& node = EnsureAnyNodeContext(context);
     ChainstateManager& chainman = EnsureChainman(node);
-    const CBlockIndex* tip = chainman.ActiveChain().Tip();
-    const int next_height = tip ? tip->nHeight + 1 : 0;
+    const int next_height{WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight() + 1)};
     if (next_height >= chainman.GetConsensus().nAuxpowStartHeight) {
         script_verify_flags |= SCRIPT_VERIFY_PQ_STRICT;
         script_verify_flags |= SCRIPT_VERIFY_WITNESS_V1_512;

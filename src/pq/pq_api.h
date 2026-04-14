@@ -1,5 +1,5 @@
-#ifndef TIDECOIN_PQ_API_H
-#define TIDECOIN_PQ_API_H
+#ifndef TIDECOIN_PQ_PQ_API_H
+#define TIDECOIN_PQ_PQ_API_H
 
 #include <pq/pq_scheme.h>
 #include <pq/pqhd_kdf.h>
@@ -647,4 +647,4 @@ inline bool VerifyPrefixed64(std::span<const unsigned char> msg64,
 
 } // namespace pq
 
-#endif // TIDECOIN_PQ_API_H
+#endif // TIDECOIN_PQ_PQ_API_H

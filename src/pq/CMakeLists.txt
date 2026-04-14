@@ -62,6 +62,10 @@ add_library(tidecoin_quantum STATIC EXCLUDE_FROM_ALL
   ml-kem-512/symmetric-shake.c
   ml-kem-512/verify.c
 )
+set_target_properties(tidecoin_quantum PROPERTIES
+  C_STANDARD 11
+  C_STANDARD_REQUIRED ON
+)
 
 target_link_libraries(tidecoin_quantum
   PRIVATE

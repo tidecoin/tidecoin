@@ -1,5 +1,5 @@
-#ifndef TIDECOIN_PQ_TXSIZE_H
-#define TIDECOIN_PQ_TXSIZE_H
+#ifndef TIDECOIN_PQ_PQ_TXSIZE_H
+#define TIDECOIN_PQ_PQ_TXSIZE_H
 
 #include <consensus/consensus.h>
 #include <pq/pq_scheme.h>
@@ -59,4 +59,4 @@ inline int64_t VSizeP2SH_P2WPKHInput(size_t sig_len, size_t pubkey_len)
 
 } // namespace pq
 
-#endif // TIDECOIN_PQ_TXSIZE_H
+#endif // TIDECOIN_PQ_PQ_TXSIZE_H

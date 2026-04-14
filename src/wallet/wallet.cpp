@@ -1937,7 +1937,7 @@ std::optional<PQHDPolicy> CWallet::GetPQHDPolicy() const
 }
 
 util::Result<void> CWallet::SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
-                                          std::optional<uint8_t> change_scheme)
+                                          std::optional<uint8_t> change_scheme) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
 {
     AssertLockHeld(cs_wallet);
     if (!IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS)) {
@@ -1990,7 +1990,7 @@ util::Result<void> CWallet::SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
     const std::optional<PQHDPolicy> previous_policy = m_pqhd_policy;
     const uint64_t previous_wallet_flags = m_wallet_flags;
     m_pqhd_policy = policy;
-    const auto restore_previous_policy = [&] {
+    const auto restore_previous_policy = [&]() NO_THREAD_SAFETY_ANALYSIS {
         m_pqhd_policy = previous_policy;
         m_wallet_flags = previous_wallet_flags;
     };
@@ -2132,7 +2132,7 @@ util::Result<CWallet::ImportPQHDSeedResult> CWallet::ImportPQHDSeed(const std::a
     return ImportPQHDSeedResult{seed_id, /*inserted=*/true};
 }
 
-util::Result<void> CWallet::SetPQHDSeedDefaults(const uint256& receive_seed_id, const uint256& change_seed_id)
+util::Result<void> CWallet::SetPQHDSeedDefaults(const uint256& receive_seed_id, const uint256& change_seed_id) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
 {
     AssertLockHeld(cs_wallet);
     if (!IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS)) {
@@ -2155,7 +2155,7 @@ util::Result<void> CWallet::SetPQHDSeedDefaults(const uint256& receive_seed_id, 
     const std::optional<PQHDPolicy> previous_policy = m_pqhd_policy;
     const uint64_t previous_wallet_flags = m_wallet_flags;
     m_pqhd_policy = policy;
-    const auto restore_previous_policy = [&] {
+    const auto restore_previous_policy = [&]() NO_THREAD_SAFETY_ANALYSIS {
         m_pqhd_policy = previous_policy;
         m_wallet_flags = previous_wallet_flags;
     };
@@ -2211,7 +2211,11 @@ util::Result<void> CWallet::RemovePQHDSeed(const uint256& seed_id)
     for (const auto& [_, spk_man] : m_spk_managers) {
         auto* desc_spk_man = dynamic_cast<DescriptorScriptPubKeyMan*>(spk_man.get());
         if (!desc_spk_man) continue;
-        const auto& wallet_desc = desc_spk_man->GetWalletDescriptor();
+        WalletDescriptor wallet_desc;
+        {
+            LOCK(desc_spk_man->cs_desc_man);
+            wallet_desc = desc_spk_man->GetWalletDescriptor();
+        }
         if (!wallet_desc.descriptor) continue;
         const auto seed_ids = wallet_desc.descriptor->GetPQHDSeedIDs();
         if (seed_ids.contains(seed_id)) {
@@ -3166,6 +3170,7 @@ std::set<std::string> CWallet::ListAddrBookLabels(const std::optional<AddressPur
 
 util::Result<CTxDestination> ReserveDestination::GetReservedDestination(bool internal)
 {
+    LOCK(pwallet->cs_wallet);
     fInternal = internal;
     m_spk_man = pwallet->GetScriptPubKeyMan(type, internal, m_scheme_override);
     if (!m_spk_man) {
@@ -3989,7 +3994,11 @@ DescriptorScriptPubKeyMan* CWallet::FindPQHDDescriptorForPath(const OutputType& 
     const uint32_t scheme_u32 = scheme_prefix;
     auto matches = [&](DescriptorScriptPubKeyMan* desc_spk_man) -> bool {
         if (desc_spk_man == nullptr) return false;
-        const auto& wallet_desc = desc_spk_man->GetWalletDescriptor();
+        WalletDescriptor wallet_desc;
+        {
+            LOCK(desc_spk_man->cs_desc_man);
+            wallet_desc = desc_spk_man->GetWalletDescriptor();
+        }
         if (!wallet_desc.descriptor) return false;
         const auto out_type = wallet_desc.descriptor->GetOutputType();
         if (!out_type || *out_type != type) return false;
@@ -4150,7 +4159,7 @@ ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool intern
     return it->second;
 }
 
-ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool internal, std::optional<uint8_t> scheme_override)
+ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool internal, std::optional<uint8_t> scheme_override) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
 {
     AssertLockHeld(cs_wallet);
     const int target_height = GetTargetHeightForOutputs();
@@ -4278,7 +4287,7 @@ std::unique_ptr<SigningProvider> CWallet::GetSolvingProvider(const CScript& scri
     return nullptr;
 }
 
-std::optional<uint8_t> CWallet::GetAddressSchemePrefix(const CTxDestination& dest) const
+std::optional<uint8_t> CWallet::GetAddressSchemePrefix(const CTxDestination& dest) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
 {
     AssertLockHeld(cs_wallet);
 
@@ -4338,7 +4347,7 @@ std::optional<uint8_t> CWallet::GetAddressSchemePrefix(const CTxDestination& des
     return scheme_prefix;
 }
 
-std::vector<WalletDescriptor> CWallet::GetWalletDescriptors(const CScript& script) const
+std::vector<WalletDescriptor> CWallet::GetWalletDescriptors(const CScript& script) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
 {
     AssertLockHeld(cs_wallet);
     std::vector<WalletDescriptor> descs;

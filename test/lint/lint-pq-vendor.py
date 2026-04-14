@@ -13,9 +13,9 @@ import re
 import sys
 
 try:
-    import tomllib  # type: ignore[attr-defined]
+    import tomllib  # type: ignore[attr-defined,import]
 except ModuleNotFoundError:  # pragma: no cover
-    import tomli as tomllib  # type: ignore[no-redef]
+    import tomli as tomllib  # type: ignore[import,no-redef]
 
 
 ROOT = Path(__file__).resolve().parents[2]

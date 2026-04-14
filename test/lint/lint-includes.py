@@ -18,6 +18,12 @@ from lint_ignore_dirs import SHARED_EXCLUDED_SUBTREES
 
 
 EXCLUDED_DIRS = ["contrib/devtools/tidecoin-tidy/",
+                 "src/pq/falcon-1024/",
+                 "src/pq/falcon-512/",
+                 "src/pq/ml-dsa-44/",
+                 "src/pq/ml-dsa-65/",
+                 "src/pq/ml-dsa-87/",
+                 "src/pq/ml-kem-512/",
                 ] + SHARED_EXCLUDED_SUBTREES
 
 EXPECTED_BOOST_INCLUDES = [

@@ -27,11 +27,11 @@
  * online backup system.
  */
 
-#include "crypto/scrypt.h"
-#include "crypto/hmac_sha256.h"
-#include <stdlib.h>
-#include <stdint.h>
-#include <string.h>
+#include <crypto/scrypt.h>
+#include <crypto/hmac_sha256.h>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
 //#include <openssl/sha.h>
 
 #if defined(USE_SSE2) && !defined(USE_SSE2_ALWAYS)
@@ -45,13 +45,6 @@
 #endif
 
 #ifndef __FreeBSD__
-static inline uint32_t be32dec(const void *pp)
-{
-	const uint8_t *p = (uint8_t const *)pp;
-	return ((uint32_t)(p[3]) + ((uint32_t)(p[2]) << 8) +
-	    ((uint32_t)(p[1]) << 16) + ((uint32_t)(p[0]) << 24));
-}
-
 static inline void be32enc(void *pp, uint32_t x)
 {
 	uint8_t *p = (uint8_t *)pp;

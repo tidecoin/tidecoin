@@ -51,6 +51,7 @@ KNOWN_VIOLATIONS = [
 
 REGEXP_EXTERNAL_DEPENDENCIES_EXCLUSIONS = [
     "src/crypto/ctaes/",
+    "src/crypto/scrypt.cpp",
     "src/ipc/libmultiprocess/",
     "src/leveldb/",
     "src/minisketch/",

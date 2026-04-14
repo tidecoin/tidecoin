@@ -1,7 +1,8 @@
 #ifndef SCRYPT_H
 #define SCRYPT_H
-#include <stdlib.h>
-#include <stdint.h>
+
+#include <cstddef>
+#include <cstdint>
 
 static const int SCRYPT_SCRATCHPAD_SIZE = 131072 + 63;
 

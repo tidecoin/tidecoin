@@ -46,13 +46,11 @@ from test_framework.util import (
     assert_greater_than,
     assert_greater_than_or_equal,
     assert_raises_rpc_error,
-    find_vout_for_address,
     wallet_importprivkey,
 )
 from test_framework.wallet_util import (
     calculate_input_weight,
     generate_keypair,
-    get_generate_key,
 )
 
 import json
@@ -1063,7 +1061,6 @@ class PSBTTest(BitcoinTestFramework):
         # Newly created PSBT needs UTXOs and updating
         addr = self.nodes[1].getnewaddress("", "p2sh-segwit")
         utxo = self.create_outpoints(self.nodes[0], outputs=[{addr: 7}])[0]
-        addrinfo = self.nodes[1].getaddressinfo(addr)
         self.generate(self.nodes[0], 6)[0]
         psbt = self.nodes[1].createpsbt([utxo], {self.nodes[0].getnewaddress("", "p2sh-segwit"):Decimal('6.999')})
         analyzed = self.nodes[0].analyzepsbt(psbt)

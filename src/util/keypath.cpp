@@ -3,13 +3,14 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <util/keypath.h>
+#include <util/string.h>
 
 namespace {
 std::string FormatPathElem(uint32_t elem, bool hardened_suffix)
 {
     const bool hardened = (elem & 0x80000000U) != 0;
     const uint32_t index = elem & 0x7fffffffU;
-    std::string out = std::to_string(index);
+    std::string out = util::ToString(index);
     if (hardened) out += (hardened_suffix ? "h" : "'");
     return out;
 }

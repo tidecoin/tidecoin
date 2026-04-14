@@ -58,7 +58,7 @@ static const char* SettingName(OptionsModel::OptionID option)
 
 static void UpdateRwSetting(interfaces::Node& node, OptionsModel::OptionID option, const std::string& suffix, const common::SettingsValue& value)
 {
-    node.updateRwSetting(SettingName(option) + suffix, value);    
+    node.updateRwSetting(SettingName(option) + suffix, value);
 }
 
 //! Convert enabled/size values to bitcoin -prune setting.

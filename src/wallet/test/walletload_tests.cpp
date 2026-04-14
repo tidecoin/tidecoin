@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php.
 
+#include <tidecoin-build-config.h> // IWYU pragma: keep
+
 #include <test/util/logging.h>
 #include <test/util/setup_common.h>
 #include <util/fs.h>

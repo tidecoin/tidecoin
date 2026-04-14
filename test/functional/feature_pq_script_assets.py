@@ -175,9 +175,11 @@ class PQScriptAssetsDumper(BitcoinTestFramework):
         comment,
         success_witness,
         failure_witness,
-        success_script_sig=CScript([]),
-        failure_script_sig=CScript([]),
+        success_script_sig=None,
+        failure_script_sig=None,
     ):
+        success_script_sig = success_script_sig or CScript([])
+        failure_script_sig = failure_script_sig or CScript([])
         prevout = CTxOut(nValue=1000, scriptPubKey=script_pub_key).serialize().hex()
         return {
             "tx": tx_hex,

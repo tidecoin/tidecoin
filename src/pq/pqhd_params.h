@@ -1,5 +1,5 @@
-#ifndef TIDECOIN_PQHD_PARAMS_H
-#define TIDECOIN_PQHD_PARAMS_H
+#ifndef TIDECOIN_PQ_PQHD_PARAMS_H
+#define TIDECOIN_PQ_PQHD_PARAMS_H
 
 #include <cstdint>
 
@@ -13,4 +13,4 @@ constexpr uint32_t COIN_TYPE{6868};
 
 } // namespace pqhd
 
-#endif // TIDECOIN_PQHD_PARAMS_H
+#endif // TIDECOIN_PQ_PQHD_PARAMS_H
