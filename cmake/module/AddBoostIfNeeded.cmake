@@ -56,7 +56,7 @@ function(add_boost_if_needed)
   # and will generate warnings with newer compilers for Boost
   # older than 1.80.
   # See: https://github.com/boostorg/config/pull/430.
-  set(CMAKE_REQUIRED_DEFINITIONS -DBOOST_NO_CXX98_FUNCTION_BASE)
+  set(CMAKE_REQUIRED_DEFINITIONS -DBOOST_NO_CXX98_FUNCTION_BASE=)
   get_target_property(CMAKE_REQUIRED_INCLUDES Boost::headers INTERFACE_INCLUDE_DIRECTORIES)
   set(CMAKE_REQUIRED_FLAGS ${working_compiler_werror_flag})
   set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
@@ -67,7 +67,7 @@ function(add_boost_if_needed)
   )
   if(NO_DIAGNOSTICS_BOOST_NO_CXX98_FUNCTION_BASE)
     target_compile_definitions(Boost::headers INTERFACE
-      BOOST_NO_CXX98_FUNCTION_BASE
+      BOOST_NO_CXX98_FUNCTION_BASE=
     )
   endif()
 

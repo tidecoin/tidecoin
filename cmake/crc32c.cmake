@@ -9,6 +9,18 @@
 include(CheckCXXSourceCompiles)
 include(CheckSourceCompilesWithFlags)
 
+set(_target_arch_inputs "${CMAKE_SYSTEM_PROCESSOR};${CMAKE_OSX_ARCHITECTURES};${CMAKE_CXX_COMPILER_ARCHITECTURE_ID};${CMAKE_CXX_COMPILER_TARGET}")
+string(TOLOWER "${_target_arch_inputs}" _target_arch_inputs_lower)
+
+set(_is_x86_target OFF)
+set(_is_arm64_target OFF)
+if(_target_arch_inputs_lower MATCHES "(^|[;,_ -])(x86_64|x64|amd64|i[3-6]86)([;,_ -]|$)")
+  set(_is_x86_target ON)
+endif()
+if(_target_arch_inputs_lower MATCHES "(^|[;,_ -])(aarch64|arm64)([;,_ -]|$)")
+  set(_is_arm64_target ON)
+endif()
+
 # Check for __builtin_prefetch support in the compiler.
 check_cxx_source_compiles("
   int main() {
@@ -21,28 +33,23 @@ check_cxx_source_compiles("
 )
 
 # Check for _mm_prefetch support in the compiler.
-check_cxx_source_compiles("
-  #if defined(_MSC_VER)
-  #include <intrin.h>
-  #else
-  #include <xmmintrin.h>
-  #endif
+set(HAVE_MM_PREFETCH OFF)
+if(_is_x86_target)
+  check_cxx_source_compiles("
+    #if defined(_MSC_VER)
+    #include <intrin.h>
+    #else
+    #include <xmmintrin.h>
+    #endif
 
-  int main() {
-    char data = 0;
-    const char* address = &data;
-    _mm_prefetch(address, _MM_HINT_NTA);
-    return 0;
-  }
-  " HAVE_MM_PREFETCH
-)
-
-set(_is_x86_target OFF)
-set(_is_arm64_target OFF)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|x64|amd64|AMD64|i[3-6]86)$")
-  set(_is_x86_target ON)
-elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
-  set(_is_arm64_target ON)
+    int main() {
+      char data = 0;
+      const char* address = &data;
+      _mm_prefetch(address, _MM_HINT_NTA);
+      return 0;
+    }
+    " HAVE_MM_PREFETCH
+  )
 endif()
 
 # Check for SSE4.2 support in the compiler.

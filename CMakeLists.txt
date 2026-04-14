@@ -442,24 +442,28 @@ else()
   # Some compilers will ignore -Wformat-security without -Wformat, so just combine the two here.
   try_append_cxx_flags("-Wformat -Wformat-security" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wvla" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wshadow-field" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wthread-safety" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wthread-safety-pointer" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wloop-analysis" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wredundant-decls" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wunused-member-function" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wdate-time" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wconditional-uninitialized" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wduplicated-branches" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wduplicated-cond" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wlogical-op" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Woverloaded-virtual" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wsuggest-override" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wimplicit-fallthrough" TARGET warn_interface SKIP_LINK)
   try_append_cxx_flags("-Wunreachable-code" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wdocumentation" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wself-assign" TARGET warn_interface SKIP_LINK)
-  try_append_cxx_flags("-Wbidi-chars=any" TARGET warn_interface SKIP_LINK)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    try_append_cxx_flags("-Wshadow-field" TARGET warn_interface SKIP_LINK)
+    try_append_cxx_flags("-Wthread-safety" TARGET warn_interface SKIP_LINK)
+    try_append_cxx_flags("-Wthread-safety-pointer" TARGET warn_interface SKIP_LINK)
+    try_append_cxx_flags("-Wloop-analysis" TARGET warn_interface SKIP_LINK)
+    try_append_cxx_flags("-Wunused-member-function" TARGET warn_interface SKIP_LINK)
+    try_append_cxx_flags("-Wconditional-uninitialized" TARGET warn_interface SKIP_LINK)
+    try_append_cxx_flags("-Wdocumentation" TARGET warn_interface SKIP_LINK)
+    try_append_cxx_flags("-Wself-assign" TARGET warn_interface SKIP_LINK)
+  endif()
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    try_append_cxx_flags("-Wduplicated-branches" TARGET warn_interface SKIP_LINK)
+    try_append_cxx_flags("-Wduplicated-cond" TARGET warn_interface SKIP_LINK)
+    try_append_cxx_flags("-Wlogical-op" TARGET warn_interface SKIP_LINK)
+    try_append_cxx_flags("-Wbidi-chars=any" TARGET warn_interface SKIP_LINK)
+  endif()
   try_append_cxx_flags("-Wundef" TARGET warn_interface SKIP_LINK)
 
   # Some compilers (gcc) ignore unknown -Wno-* options, but warn about all
@@ -477,7 +481,9 @@ configure_file(cmake/script/cov_tool_wrapper.sh.in cov_tool_wrapper.sh.in USE_SO
 configure_file(contrib/filter-lcov.py filter-lcov.py USE_SOURCE_PERMISSIONS COPYONLY)
 
 # Don't allow extended (non-ASCII) symbols in identifiers. This is easier for code review.
-try_append_cxx_flags("-fno-extended-identifiers" TARGET core_interface SKIP_LINK)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  try_append_cxx_flags("-fno-extended-identifiers" TARGET core_interface SKIP_LINK)
+endif()
 
 # Avoiding the `-ffile-prefix-map` compiler option because it implies
 # `-fcoverage-prefix-map` on Clang or `-fprofile-prefix-map` on GCC,
@@ -495,7 +501,9 @@ try_append_cxx_flags("-fmacro-prefix-map=A=B" TARGET core_interface SKIP_LINK
 # gccbug_90348 test case (only reproduces on GCC 11 and earlier) and
 # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111843. To work around that, set
 # -fstack-reuse=none for all gcc builds. (Only gcc understands this flag).
-try_append_cxx_flags("-fstack-reuse=none" TARGET core_interface)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  try_append_cxx_flags("-fstack-reuse=none" TARGET core_interface)
+endif()
 
 if(MSVC)
   try_append_linker_flag("/DYNAMICBASE" TARGET core_interface)
@@ -570,8 +578,11 @@ endif()
 
 if(REDUCE_EXPORTS)
   set(CMAKE_CXX_VISIBILITY_PRESET hidden)
-  try_append_linker_flag("-Wl,--exclude-libs,ALL" TARGET core_interface)
-  try_append_linker_flag("-Wl,-no_exported_symbols" VAR CMAKE_EXE_LINKER_FLAGS)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    try_append_linker_flag("-Wl,-no_exported_symbols" VAR CMAKE_EXE_LINKER_FLAGS)
+  else()
+    try_append_linker_flag("-Wl,--exclude-libs,ALL" TARGET core_interface)
+  endif()
 endif()
 
 if(WERROR)

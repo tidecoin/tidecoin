@@ -128,9 +128,9 @@ We can also log custom events to the logger.
 **Note: Please also consider the functional test
 [readme](README.md), which provides an overview of the
 test-framework**. Modules such as
-[key.py](test_framework/key.py),
-[script.py](test_framework/script.py) and
-[messages.py](test_framework/messages.py) are particularly
+[key.py](/test/functional/test_framework/key.py),
+[script.py](/test/functional/test_framework/script.py) and
+[messages.py](/test/functional/test_framework/messages.py) are particularly
 useful in constructing objects which can be passed to the tidecoind nodes managed
 by a running `TestShell` object.
 

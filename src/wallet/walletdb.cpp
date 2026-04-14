@@ -57,7 +57,6 @@ const std::string SETTINGS{"settings"};
 const std::string TX{"tx"};
 const std::string VERSION{"version"};
 const std::string WALLETDESCRIPTOR{"walletdescriptor"};
-const std::string WALLETDESCRIPTORCACHE{"walletdescriptorcache"};
 const std::string WALLETDESCRIPTORPUBKEYCACHE{"walletdescriptorpubkeycache"};
 const std::string WALLETDESCRIPTORLHCACHE{"walletdescriptorlhcache"};
 const std::string WALLETDESCRIPTORCKEY{"walletdescriptorckey"};

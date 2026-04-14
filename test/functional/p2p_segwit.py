@@ -63,13 +63,9 @@ from test_framework.script import (
     OP_IF,
     OP_RETURN,
     OP_TRUE,
-    SIGHASH_ALL,
     hash160,
 )
 from test_framework.script_util import (
-    key_to_p2pk_script,
-    key_to_p2wpkh_script,
-    keyhash_to_p2pkh_script,
     script_to_p2sh_script,
     script_to_p2wsh_script,
 )

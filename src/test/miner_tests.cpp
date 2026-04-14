@@ -721,7 +721,7 @@ BOOST_AUTO_TEST_CASE(CreateNewBlock_validity)
         {
             // A block template does not have proof-of-work, but it might pass
             // verification by coincidence. Grind the nonce if needed:
-            const int next_height = Assert(m_node.chainman)->ActiveChain().Tip()->nHeight + 1;
+            const int next_height = WITH_LOCK(cs_main, return Assert(m_node.chainman)->ActiveChain().Tip()->nHeight + 1);
             while (CheckProofOfWork(block, Assert(m_node.chainman)->GetParams().GetConsensus(), next_height)) {
                 block.nNonce++;
             }

@@ -4,19 +4,33 @@
 
 #include <test/fuzz/util/descriptor.h>
 
+#include <crypto/sha512.h>
+#include <pq/pq_api.h>
+
+#include <cassert>
+#include <cstdlib>
 #include <ranges>
 #include <stack>
 
 void MockedDescriptorConverter::Init() {
     // The data to use as a private key.
-    std::array<std::byte, 32> key_data{std::byte{1}};
+    std::array<unsigned char, 32> key_data{1};
     // Generate keys of all kinds and store them in the keys array.
     for (size_t i{0}; i < TOTAL_KEYS_GENERATED; i++) {
-        key_data[31] = std::byte(i);
+        key_data[31] = static_cast<unsigned char>(i);
 
+        std::array<unsigned char, 64> material{};
+        CSHA512().Write(key_data.data(), key_data.size()).Finalize(material.data());
+        std::vector<unsigned char> pubkey_bytes;
+        pq::SecureKeyBytes seckey_bytes;
+        const bool keygen_ok{pq::KeyGenFromSeed(1, pq::SchemeId::FALCON_512, material, pubkey_bytes, seckey_bytes)};
+        assert(keygen_ok);
+        if (!keygen_ok) std::abort();
         CKey privkey;
-        // PQ keys don't have compressed/uncompressed distinction
-        privkey.Set(key_data.begin(), key_data.end());
+        privkey.Set(seckey_bytes.begin(), seckey_bytes.end());
+        const bool key_valid{privkey.IsValid()};
+        assert(key_valid);
+        if (!key_valid) std::abort();
         if (IdIsCompPubKey(i) || IdIsUnCompPubKey(i)) {
             CPubKey pubkey{privkey.GetPubKey()};
             keys_str[i] = HexStr(pubkey);
