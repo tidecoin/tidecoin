@@ -4,6 +4,8 @@
 #define VER_PRODUCTVERSION     CLIENT_VERSION_MAJOR,CLIENT_VERSION_MINOR,CLIENT_VERSION_BUILD
 #define VER_FILEVERSION        VER_PRODUCTVERSION
 
+IDI_ICON1 ICON DISCARDABLE "../share/pixmaps/tidecoin.ico"
+
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION     VER_FILEVERSION
 PRODUCTVERSION  VER_PRODUCTVERSION
@@ -15,13 +17,13 @@ BEGIN
         BLOCK "040904E4" // U.S. English - multilingual (hex)
         BEGIN
             VALUE "CompanyName",        CLIENT_NAME " project"
-            VALUE "FileDescription",    "bitcoin (Bitcoin wrapper executable that can call other executables)"
+            VALUE "FileDescription",    "tidecoin (Tidecoin wrapper executable that can call other executables)"
             VALUE "FileVersion",        CLIENT_VERSION_STRING
-            VALUE "InternalName",       "bitcoin"
+            VALUE "InternalName",       "tidecoin"
             VALUE "LegalCopyright",     COPYRIGHT_STR
             VALUE "LegalTrademarks1",   "Distributed under the MIT software license, see the accompanying file COPYING or http://www.opensource.org/licenses/mit-license.php."
-            VALUE "OriginalFilename",   "bitcoin.exe"
-            VALUE "ProductName",        "bitcoin"
+            VALUE "OriginalFilename",   "tidecoin.exe"
+            VALUE "ProductName",        "tidecoin"
             VALUE "ProductVersion",     CLIENT_VERSION_STRING
         END
     END
