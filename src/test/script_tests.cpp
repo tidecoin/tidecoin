@@ -314,18 +314,6 @@ public:
         return AsWit();
     }
 
-    TestBuilder& EditPush(unsigned int pos, const std::string& hexin, const std::string& hexout)
-    {
-        assert(havePush);
-        std::vector<unsigned char> datain = ParseHex(hexin);
-        std::vector<unsigned char> dataout = ParseHex(hexout);
-        assert(pos + datain.size() <= push.size());
-        BOOST_CHECK_MESSAGE(std::vector<unsigned char>(push.begin() + pos, push.begin() + pos + datain.size()) == datain, comment);
-        push.erase(push.begin() + pos, push.begin() + pos + datain.size());
-        push.insert(push.begin() + pos, dataout.begin(), dataout.end());
-        return *this;
-    }
-
     TestBuilder& DamagePush(unsigned int pos)
     {
         assert(havePush);
@@ -1475,7 +1463,10 @@ static TxoutType GetTxoutType(const CScript& output_script)
 
 BOOST_AUTO_TEST_CASE(script_size_and_capacity_test)
 {
-    BOOST_CHECK_EQUAL(sizeof(CompressedScript), 32);
+    // CompressedScript is prevector<21>. It is 32 bytes on 64-bit hosts and
+    // 28 bytes on 32-bit hosts because the internal pointer-sized storage has
+    // different alignment.
+    BOOST_CHECK_EQUAL(sizeof(CompressedScript), sizeof(void*) == 4 ? 28 : 32);
     BOOST_CHECK_EQUAL(sizeof(CScriptBase), 40);
     BOOST_CHECK_NE(sizeof(CScriptBase), sizeof(prevector<CScriptBase::STATIC_SIZE + 1, uint8_t>)); // CScriptBase size should be set to avoid wasting space in padding
     BOOST_CHECK_EQUAL(sizeof(CScript), 40);

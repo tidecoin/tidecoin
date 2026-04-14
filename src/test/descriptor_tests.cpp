@@ -6,6 +6,7 @@
 #include <script/signingprovider.h>
 #include <pq/pq_scheme.h>
 #include <key.h>
+#include <key_io.h>
 #include <test/util/setup_common.h>
 #include <util/strencodings.h>
 
@@ -101,12 +102,23 @@ BOOST_AUTO_TEST_CASE(descriptor_explicit_pq_pubkey_matrix)
     FlatSigningProvider out;
     std::string error;
 
-    auto parse_ok = [&](const std::string& desc) {
+    auto parse_ok = [&](const std::string& desc, bool expect_same_public_string = true) {
         out = FlatSigningProvider{};
         error.clear();
         auto parsed = Parse(desc, out, error);
         BOOST_REQUIRE_MESSAGE(!parsed.empty(), error);
-        BOOST_CHECK_MESSAGE(EqualDescriptor(desc, parsed.at(0)->ToString()), parsed.at(0)->ToString());
+        if (expect_same_public_string) {
+            BOOST_CHECK_MESSAGE(EqualDescriptor(desc, parsed.at(0)->ToString()), parsed.at(0)->ToString());
+        }
+        std::vector<CScript> scripts;
+        FlatSigningProvider scripts_out;
+        DescriptorCache cache;
+        BOOST_REQUIRE(parsed.at(0)->Expand(0, out, scripts, scripts_out, &cache));
+        BOOST_REQUIRE(!scripts.empty());
+        if (parsed.at(0)->IsSingleType()) {
+            BOOST_REQUIRE(parsed.at(0)->ScriptSize().has_value());
+            BOOST_CHECK_EQUAL(*parsed.at(0)->ScriptSize(), scripts.back().size());
+        }
         return parsed;
     };
 
@@ -142,6 +154,7 @@ BOOST_AUTO_TEST_CASE(descriptor_explicit_pq_pubkey_matrix)
 
         // Explicit PQ raw-hex key expressions should parse across wrappers.
         parse_ok("pk(" + hex + ")");
+        parse_ok("pk(" + EncodeSecret(key) + ")", /*expect_same_public_string=*/false);
         parse_ok("pkh(" + hex + ")");
         parse_ok("wpkh(" + hex + ")");
         parse_ok("sh(wpkh(" + hex + "))");

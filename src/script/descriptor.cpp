@@ -834,7 +834,7 @@ public:
     bool IsSingleType() const final { return true; }
 
     std::optional<int64_t> ScriptSize() const override {
-        return 1 + m_pubkey_args[0]->GetSize() + 1;
+        return DataElemSize(m_pubkey_args[0]->GetSize()) + 1;
     }
 
     std::optional<int64_t> MaxSatSize(bool use_max_sig) const override {
@@ -963,7 +963,7 @@ public:
 
     std::optional<int64_t> ScriptSize() const override {
         const auto n_keys = m_pubkey_args.size();
-        auto op = [](int64_t acc, const std::unique_ptr<PubkeyProvider>& pk) { return acc + 1 + pk->GetSize();};
+        auto op = [](int64_t acc, const std::unique_ptr<PubkeyProvider>& pk) { return acc + DataElemSize(pk->GetSize());};
         const auto pubkeys_size{std::accumulate(m_pubkey_args.begin(), m_pubkey_args.end(), int64_t{0}, op)};
         return 1 + BuildScript(n_keys).size() + BuildScript(m_threshold).size() + pubkeys_size;
     }

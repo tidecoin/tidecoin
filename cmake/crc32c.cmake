@@ -19,6 +19,7 @@ if(_target_arch_inputs_lower MATCHES "(^|[;,_ -])(x86_64|x64|amd64|i[3-6]86)([;,
 endif()
 if(_target_arch_inputs_lower MATCHES "(^|[;,_ -])(aarch64|arm64)([;,_ -]|$)")
   set(_is_arm64_target ON)
+  set(_is_x86_target OFF)
 endif()
 
 # Check for __builtin_prefetch support in the compiler.

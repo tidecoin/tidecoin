@@ -1094,9 +1094,11 @@ void BitcoinGUI::openOptionsDialogWithTab(OptionsDialog::Tab tab)
     connect(dlg, &OptionsDialog::quitOnReset, this, &BitcoinGUI::quitRequested);
     dlg->setCurrentTab(tab);
     dlg->setClientModel(clientModel);
+#ifdef ENABLE_WALLET
     if (walletFrame && walletFrame->currentWalletModel()) {
         dlg->setWalletModel(walletFrame->currentWalletModel());
     }
+#endif // ENABLE_WALLET
     dlg->setModel(clientModel->getOptionsModel());
     GUIUtil::ShowModalDialogAsynchronously(dlg);
 }

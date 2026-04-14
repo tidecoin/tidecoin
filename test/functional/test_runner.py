@@ -84,6 +84,7 @@ EXTENDED_SCRIPTS = [
     'feature_pruning.py',
     'feature_dbcrash.py',
     'feature_index_prune.py',
+    'feature_pq_script_assets.py',
 ]
 
 BASE_SCRIPTS = [

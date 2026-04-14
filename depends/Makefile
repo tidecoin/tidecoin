@@ -42,8 +42,7 @@ NO_USDT ?=
 # Default NO_IPC value is 1 on Windows
 NO_IPC ?= $(if $(findstring mingw32,$(HOST)),1,)
 LTO ?=
-# Optional fallback mirror for source tarballs. Empty by default.
-FALLBACK_DOWNLOAD_PATH ?=
+FALLBACK_DOWNLOAD_PATH ?= https://bitcoincore.org/depends-sources
 
 C_STANDARD ?= c11
 CXX_STANDARD ?= c++20

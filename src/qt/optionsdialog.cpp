@@ -12,14 +12,18 @@
 #include <qt/guiconstants.h>
 #include <qt/guiutil.h>
 #include <qt/optionsmodel.h>
+#ifdef ENABLE_WALLET
 #include <qt/walletmodel.h>
+#endif
 
 #include <common/system.h>
 #include <interfaces/node.h>
 #include <netbase.h>
 #include <node/caches.h>
 #include <node/chainstatemanager_args.h>
+#ifdef ENABLE_WALLET
 #include <pq/pq_scheme.h>
+#endif
 #include <util/strencodings.h>
 
 #include <chrono>
@@ -36,6 +40,7 @@
 #include <QTimer>
 
 namespace {
+#ifdef ENABLE_WALLET
 std::vector<const pq::SchemeInfo*> GetPQSchemeInfos()
 {
     return {
@@ -59,6 +64,7 @@ int FindPQSchemeIndex(const QComboBox* combo, uint8_t prefix)
 {
     return combo->findData(static_cast<int>(prefix));
 }
+#endif // ENABLE_WALLET
 } // namespace
 
 int setFontChoice(QComboBox* cb, const OptionsModel::FontChoice& fc)
@@ -508,6 +514,7 @@ void OptionsDialog::updateDefaultProxyNets()
 void OptionsDialog::updatePQHDPolicyControls()
 {
     if (!ui->groupBoxPqhdPolicy) return;
+#ifdef ENABLE_WALLET
     if (!walletModel) {
         ui->groupBoxPqhdPolicy->setEnabled(false);
         return;
@@ -535,10 +542,14 @@ void OptionsDialog::updatePQHDPolicyControls()
     if (change_index >= 0) {
         ui->pqhdDefaultChangeScheme->setCurrentIndex(change_index);
     }
+#else
+    ui->groupBoxPqhdPolicy->setEnabled(false);
+#endif // ENABLE_WALLET
 }
 
 bool OptionsDialog::applyPQHDPolicyChanges()
 {
+#ifdef ENABLE_WALLET
     if (!walletModel || !ui->groupBoxPqhdPolicy || !ui->groupBoxPqhdPolicy->isEnabled()) return true;
 
     const auto policy = walletModel->getPQHDPolicy();
@@ -554,6 +565,9 @@ bool OptionsDialog::applyPQHDPolicyChanges()
         return false;
     }
     return true;
+#else
+    return true;
+#endif // ENABLE_WALLET
 }
 
 ProxyAddressValidator::ProxyAddressValidator(QObject *parent) :
