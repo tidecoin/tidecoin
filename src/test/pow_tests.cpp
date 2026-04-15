@@ -130,7 +130,7 @@ BOOST_AUTO_TEST_CASE(get_next_work_lower_limit_actual)
     consensus.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
     CBlockIndex pindexLast;
     const arith_uint256 pow_limit = UintToArith256(consensus.powLimit);
-    arith_uint256 start_target = pow_limit >> 4;
+    arith_uint256 start_target = pow_limit >> 16;
     pindexLast.nHeight = consensus.DifficultyAdjustmentInterval() - 1;
     pindexLast.nTime = 3'000'000;
     pindexLast.nBits = start_target.GetCompact();
@@ -155,7 +155,7 @@ BOOST_AUTO_TEST_CASE(get_next_work_upper_limit_actual)
     consensus.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
     CBlockIndex pindexLast;
     const arith_uint256 pow_limit = UintToArith256(consensus.powLimit);
-    arith_uint256 start_target = pow_limit >> 6;
+    arith_uint256 start_target = pow_limit >> 16;
     pindexLast.nHeight = consensus.DifficultyAdjustmentInterval() - 1;
     pindexLast.nTime = consensus.nPowTargetTimespan * 12;
     pindexLast.nBits = start_target.GetCompact();
