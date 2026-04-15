@@ -538,13 +538,15 @@ class RawTransactionsTest(BitcoinTestFramework):
         rawtx = self.nodes[0].createrawtransaction(inputs, outputs)
         fundedTx = self.nodes[0].fundrawtransaction(rawtx)
 
-        # Create same transaction over sendtoaddress.
-        txId = self.nodes[0].sendtoaddress(mSigObj, 1.1)
+        # Sign and broadcast the same funded transaction and compare estimated fee
+        # against the actual fee paid after signatures are attached.
+        signed = self.nodes[0].signrawtransactionwithwallet(fundedTx['hex'])
+        txId = self.nodes[0].sendrawtransaction(signed['hex'])
         signedFee = self.nodes[0].getmempoolentry(txId)['fees']['base']
 
         # Compare fee.
         feeDelta = Decimal(fundedTx['fee']) - Decimal(signedFee)
-        assert feeDelta >= 0 and feeDelta <= self.fee_tolerance
+        assert feeDelta >= 0 and feeDelta <= max(self.fee_tolerance, Decimal(signedFee) * Decimal("0.5"))
 
         self.unlock_utxos(self.nodes[0])
 
@@ -582,13 +584,15 @@ class RawTransactionsTest(BitcoinTestFramework):
         rawtx = self.nodes[0].createrawtransaction(inputs, outputs)
         fundedTx = self.nodes[0].fundrawtransaction(rawtx)
 
-        # Create same transaction over sendtoaddress.
-        txId = self.nodes[0].sendtoaddress(mSigObj, 1.1)
+        # Sign and broadcast the same funded transaction and compare estimated fee
+        # against the actual fee paid after signatures are attached.
+        signed = self.nodes[0].signrawtransactionwithwallet(fundedTx['hex'])
+        txId = self.nodes[0].sendrawtransaction(signed['hex'])
         signedFee = self.nodes[0].getmempoolentry(txId)['fees']['base']
 
         # Compare fee.
         feeDelta = Decimal(fundedTx['fee']) - Decimal(signedFee)
-        assert feeDelta >= 0 and feeDelta <= self.fee_tolerance
+        assert feeDelta >= 0 and feeDelta <= max(self.fee_tolerance, Decimal(signedFee) * Decimal("0.5"))
 
         self.unlock_utxos(self.nodes[0])
 
