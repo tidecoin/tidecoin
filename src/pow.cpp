@@ -26,6 +26,16 @@ arith_uint256 ScaleTargetLegacyOverflow(arith_uint256 target, int64_t actual_tim
     }
     return target;
 }
+
+bool LegacyRetargetMayOverflow(arith_uint256 target, int64_t actual_timespan, const arith_uint256& pow_limit)
+{
+    if (actual_timespan <= 0) return false;
+    if (target.bits() > pow_limit.bits() - 1) {
+        target >>= 1;
+    }
+    const arith_uint256 max_uint{~arith_uint256{0}};
+    return target > max_uint / arith_uint256{static_cast<uint64_t>(actual_timespan)};
+}
 } // namespace
 
 unsigned int CalculateNextWorkRequiredOld(const CBlockIndex* pindexLast, int64_t nFirstBlockTime, const Consensus::Params& params);
@@ -236,6 +246,13 @@ bool PermittedDifficultyTransition(const Consensus::Params& params, int64_t heig
             // Calculate the largest difficulty value possible:
             arith_uint256 largest_difficulty_target;
             largest_difficulty_target.SetCompact(old_nbits);
+            // The legacy retarget calculation uses historical uint256 wrapping
+            // behavior. Once multiplication can overflow, target changes are
+            // not monotonic, so this non-consensus precheck cannot derive a
+            // reliable min/max bound.
+            if (LegacyRetargetMayOverflow(largest_difficulty_target, largest_timespan, pow_limit)) {
+                return true;
+            }
             largest_difficulty_target = ScaleTargetLegacyOverflow(largest_difficulty_target, largest_timespan, params.nPowTargetTimespan, pow_limit);
 
             if (largest_difficulty_target > pow_limit) {

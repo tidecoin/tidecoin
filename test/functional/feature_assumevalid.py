@@ -74,16 +74,21 @@ class AssumeValidTest(BitcoinTestFramework):
         # signature so we can pass in the block hash as assumevalid.
         self.start_node(0)
 
-    def send_blocks_until_disconnected(self, p2p_conn):
-        """Keep sending blocks to the node until we're disconnected."""
-        for i in range(len(self.blocks)):
-            if not p2p_conn.is_connected:
-                break
-            try:
-                p2p_conn.send_without_ping(msg_block(self.blocks[i]))
-            except IOError:
-                assert not p2p_conn.is_connected
-                break
+    def send_blocks(self, p2p_conn, blocks, *, sync_every=25, timeout=240):
+        """Send blocks with periodic pings so slow CI nodes keep up."""
+        for i, block in enumerate(blocks, start=1):
+            p2p_conn.send_without_ping(msg_block(block))
+            if sync_every and i % sync_every == 0:
+                p2p_conn.sync_with_ping(timeout=timeout)
+        p2p_conn.sync_with_ping(timeout=timeout)
+
+    def send_rejected_block(self, p2p_conn, block):
+        """Send one rejected block and wait until the node disconnects us."""
+        try:
+            p2p_conn.send_without_ping(msg_block(block))
+            self.wait_until(lambda: not p2p_conn.is_connected)
+        except IOError:
+            assert not p2p_conn.is_connected
 
     @staticmethod
     def send_headers_in_chunks(p2p_conn, blocks, chunk_size=2000):
@@ -149,30 +154,33 @@ class AssumeValidTest(BitcoinTestFramework):
         self.start_node(1, extra_args=["-assumevalid=" + block102.hash_hex])
         self.start_node(2, extra_args=["-assumevalid=" + block102.hash_hex])
 
+        invalid_block_chain = self.blocks[:COINBASE_MATURITY + 2]
+        valid_blocks = invalid_block_chain[:-1]
+        invalid_block = invalid_block_chain[-1]
+
         p2p0 = self.nodes[0].add_p2p_connection(BaseNode())
-        self.send_headers_in_chunks(p2p0, self.blocks)
+        self.send_headers_in_chunks(p2p0, invalid_block_chain)
 
         # Send blocks to node0. Block 102 will be rejected.
-        self.send_blocks_until_disconnected(p2p0)
-        self.wait_until(lambda: self.nodes[0].getblockcount() >= COINBASE_MATURITY + 1)
+        self.send_blocks(p2p0, valid_blocks)
+        assert_equal(self.nodes[0].getblockcount(), COINBASE_MATURITY + 1)
+        self.send_rejected_block(p2p0, invalid_block)
         assert_equal(self.nodes[0].getblockcount(), COINBASE_MATURITY + 1)
 
         p2p1 = self.nodes[1].add_p2p_connection(BaseNode())
         self.send_headers_in_chunks(p2p1, self.blocks)
         with self.nodes[1].assert_debug_log(expected_msgs=['Disabling signature validations at block #1', 'Enabling signature validations at block #103']):
             # Send all blocks to node1. All blocks will be accepted.
-            for i in range(len(self.blocks)):
-                p2p1.send_without_ping(msg_block(self.blocks[i]))
-            # Syncing this chain can take a while on slow systems. Give it plenty of time to sync.
-            p2p1.sync_with_ping(timeout=960)
+            self.send_blocks(p2p1, self.blocks, sync_every=1000, timeout=960)
         assert_equal(self.nodes[1].getblock(self.nodes[1].getbestblockhash())['height'], len(self.blocks))
 
         p2p2 = self.nodes[2].add_p2p_connection(BaseNode())
         p2p2.send_header_for_blocks(self.blocks[0:200])
 
         # Send blocks to node2. Block 102 will be rejected.
-        self.send_blocks_until_disconnected(p2p2)
-        self.wait_until(lambda: self.nodes[2].getblockcount() >= COINBASE_MATURITY + 1)
+        self.send_blocks(p2p2, valid_blocks)
+        assert_equal(self.nodes[2].getblockcount(), COINBASE_MATURITY + 1)
+        self.send_rejected_block(p2p2, invalid_block)
         assert_equal(self.nodes[2].getblockcount(), COINBASE_MATURITY + 1)
 
 

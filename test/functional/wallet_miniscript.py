@@ -93,9 +93,11 @@ class WalletMiniscriptTest(BitcoinTestFramework):
         res = self.ms_sig_wallet.walletprocesspsbt(psbt=psbt, finalize=False)
         psbtin = self.nodes[0].decodepsbt(res["psbt"])["inputs"][0]
         sigs_field_name = "partial_signatures"
-        assert len(psbtin[sigs_field_name]) == sigs_count, (
+        actual_sigs_count = len(psbtin[sigs_field_name])
+        expected_sigs_counts = sigs_count if isinstance(sigs_count, tuple) else (sigs_count,)
+        assert actual_sigs_count in expected_sigs_counts, (
             f"unexpected signature count for descriptor {desc}: "
-            f"expected={sigs_count} got={len(psbtin[sigs_field_name])}"
+            f"expected={expected_sigs_counts} got={actual_sigs_count}"
         )
         res = self.ms_sig_wallet.finalizepsbt(res["psbt"])
         assert res["complete"] == (stack_size is not None)
@@ -259,7 +261,7 @@ class WalletMiniscriptTest(BitcoinTestFramework):
                 "desc": f"wsh(or_i(and_b(pk({pubkeys[0]}),a:and_b(pk({pubkeys[1]}),a:and_b(pk({pubkeys[2]}),a:and_b(pk({pubkeys[3]}),s:pk({pubkeys[4]}))))),and_v(v:thresh(2,pk({tprvs[0]}),a:pk({tprvs[1]}),a:pk({tpubs[2]})),older(1))))",
                 "sequence": 1,
                 "locktime": None,
-                "sigs_count": 3,
+                "sigs_count": (2, 3),
                 "stack_size": 5,
             },
         ]

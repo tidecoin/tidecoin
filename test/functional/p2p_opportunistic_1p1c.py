@@ -81,13 +81,14 @@ class PackageRelayTest(BitcoinTestFramework):
         ]]
 
     def create_tx_below_mempoolminfee(self, wallet, utxo_to_spend=None):
-        """Create a 1-input 0.1sat/vB transaction using a confirmed UTXO. Decrement and use
+        """Create a 1-input low-fee transaction using a confirmed UTXO. Decrement and use
         self.sequence so that subsequent calls to this function result in unique transactions."""
 
         self.sequence -= 1
-        assert_greater_than(self.nodes[0].getmempoolinfo()["mempoolminfee"], Decimal(DEFAULT_MIN_RELAY_TX_FEE) / COIN)
+        low_fee_rate = 2 * Decimal(DEFAULT_MIN_RELAY_TX_FEE) / COIN
+        assert_greater_than(self.nodes[0].getmempoolinfo()["mempoolminfee"], low_fee_rate)
 
-        return wallet.create_self_transfer(fee_rate=Decimal(DEFAULT_MIN_RELAY_TX_FEE) / COIN, sequence=self.sequence, utxo_to_spend=utxo_to_spend, confirmed_only=True)
+        return wallet.create_self_transfer(fee_rate=low_fee_rate, sequence=self.sequence, utxo_to_spend=utxo_to_spend, confirmed_only=True)
 
     @cleanup
     def test_basic_child_then_parent(self):

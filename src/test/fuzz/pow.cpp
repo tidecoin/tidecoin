@@ -98,12 +98,11 @@ FUZZ_TARGET(pow_transition, .init = initialize_pow)
     const int32_t version{fuzzed_data_provider.ConsumeIntegral<int32_t>()};
     uint32_t nbits{fuzzed_data_provider.ConsumeIntegral<uint32_t>()};
 
-    const arith_uint256 pow_limit = UintToArith256(consensus_params.powLimit);
-    arith_uint256 old_target;
-    old_target.SetCompact(nbits);
-    if (old_target > pow_limit) {
-        nbits = pow_limit.GetCompact();
+    const std::optional<arith_uint256> old_target{DeriveTarget(nbits, consensus_params.powLimit)};
+    if (!old_target) {
+        return;
     }
+    nbits = old_target->GetCompact();
     // Create one difficulty adjustment period worth of headers
     for (int height = 0; height < consensus_params.DifficultyAdjustmentInterval(); ++height) {
         CBlockHeader header;

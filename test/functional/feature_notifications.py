@@ -32,10 +32,6 @@ class NotificationsTest(BitcoinTestFramework):
         self.setup_clean_chain = True
         self.uses_wallet = None
 
-    def skip_test_if_missing_module(self):
-        if not self.is_wallet_compiled():
-            self.skip_test("wallet has not been compiled.")
-
     def setup_network(self):
         self.null_addr, _ = create_deterministic_address_p2wsh_op_true(self.chain)
         self.wallet = ''.join(chr(i) for i in range(FILE_CHAR_START, FILE_CHAR_END) if chr(i) not in FILE_CHARS_DISALLOWED)

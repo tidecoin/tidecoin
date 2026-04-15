@@ -5340,8 +5340,14 @@ util::Result<MigrationResult> MigrateLegacyToDescriptor(std::shared_ptr<CWallet>
         return fs::PathToString(legacy_wallet_path.filename());
     }();
 
-    fs::path backup_filename = fs::PathFromString(strprintf("%s_%d.legacy.bak", backup_prefix, GetTime()));
-    fs::path backup_path = fsbridge::AbsPathJoin(GetWalletDir(), backup_filename);
+    fs::path backup_path;
+    const int64_t backup_time{GetTime()};
+    for (int i = 0; /* no condition */; ++i) {
+        const std::string suffix{i == 0 ? "" : strprintf("_%d", i)};
+        const fs::path backup_filename{fs::PathFromString(strprintf("%s_%d%s.legacy.bak", backup_prefix, backup_time, suffix))};
+        backup_path = fsbridge::AbsPathJoin(GetWalletDir(), backup_filename);
+        if (!fs::exists(backup_path)) break;
+    }
     if (!local_wallet->BackupWallet(fs::PathToString(backup_path))) {
         return util::Error{_("Error: Unable to make a backup of your wallet")};
     }

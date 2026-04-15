@@ -1349,9 +1349,14 @@ class RawTransactionsTest(BitcoinTestFramework):
         baseline_decoded = wallet.decoderawtransaction(funded_baseline["hex"])
         assert_greater_than(len(baseline_decoded["vin"]), 0)
 
-        # Build an external input and verify solving_data impacts funding.
-        ext_unspent = self.nodes[0].listunspent(minconf=1)[0]
+        # Build an external input that is too small to fund the target by itself,
+        # so the wallet must account for its weight and add one of its own inputs.
+        ext_addr = self.nodes[0].getnewaddress()
+        self.nodes[0].sendtoaddress(ext_addr, 1)
+        self.generate(self.nodes[0], 1)
+        ext_unspent = self.nodes[0].listunspent(minconf=1, addresses=[ext_addr])[0]
         ext_utxo = {"txid": ext_unspent["txid"], "vout": ext_unspent["vout"]}
+        self.nodes[0].lockunspent(False, [ext_utxo])
         ext_desc = ext_unspent["desc"]
         rawtx = wallet.createrawtransaction([ext_utxo], [{self.nodes[0].getnewaddress(): 13}])
         try:
