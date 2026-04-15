@@ -13,7 +13,17 @@ export LSAN_OPTIONS="suppressions=${BASE_ROOT_DIR}/test/sanitizer_suppressions/l
 export TSAN_OPTIONS="suppressions=${BASE_ROOT_DIR}/test/sanitizer_suppressions/tsan:halt_on_error=1:second_deadlock_stack=1"
 export UBSAN_OPTIONS="suppressions=${BASE_ROOT_DIR}/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1"
 
-echo "Number of available processing units: $(nproc)"
+ci_nproc() {
+  if command -v nproc > /dev/null 2>&1; then
+    nproc
+  elif command -v sysctl > /dev/null 2>&1 && sysctl -n hw.logicalcpu > /dev/null 2>&1; then
+    sysctl -n hw.logicalcpu
+  else
+    echo 1
+  fi
+}
+CI_NUM_PROCS="$(ci_nproc)"
+echo "Number of available processing units: ${CI_NUM_PROCS}"
 if [ "$CI_OS_NAME" == "macos" ]; then
   top -l 1 -s 0 | awk ' /PhysMem/ {print}'
 else
@@ -67,19 +77,23 @@ EOF
 if [ "$RUN_FUZZ_TESTS" = "true" ]; then
   export DIR_FUZZ_IN=${DIR_QA_ASSETS}/fuzz_corpora/
   if [ ! -d "$DIR_FUZZ_IN" ]; then
-    ${CI_RETRY_EXE} git clone --depth=1 https://github.com/bitcoin-core/qa-assets "${DIR_QA_ASSETS}"
+    if [ -n "$TIDECOIN_QA_ASSETS_REPO" ]; then
+      ${CI_RETRY_EXE} git clone --depth=1 "$TIDECOIN_QA_ASSETS_REPO" "${DIR_QA_ASSETS}"
+    else
+      mkdir -p "$DIR_FUZZ_IN"
+    fi
   fi
-  (
-    cd "${DIR_QA_ASSETS}"
-    echo "Using qa-assets repo from commit ..."
-    git log -1
-  )
+  if [ -d "${DIR_QA_ASSETS}/.git" ]; then
+    (
+      cd "${DIR_QA_ASSETS}"
+      echo "Using Tidecoin qa-assets repo from commit ..."
+      git log -1
+    )
+  else
+    echo "No Tidecoin qa-assets repo configured; running fuzz targets with an empty local corpus."
+  fi
 elif [ "$RUN_UNIT_TESTS" = "true" ]; then
-  export DIR_UNIT_TEST_DATA=${DIR_QA_ASSETS}/unit_test_data/
-  if [ ! -d "$DIR_UNIT_TEST_DATA" ]; then
-    mkdir -p "$DIR_UNIT_TEST_DATA"
-    ${CI_RETRY_EXE} curl --location --fail https://github.com/bitcoin-core/qa-assets/raw/main/unit_test_data/script_assets_test.json -o "${DIR_UNIT_TEST_DATA}/script_assets_test.json"
-  fi
+  export DIR_UNIT_TEST_DATA=${BASE_ROOT_DIR}/src/test/data/
 fi
 
 if [ "$USE_BUSY_BOX" = "true" ]; then
@@ -99,7 +113,7 @@ else
 fi
 
 if [ -z "$NO_DEPENDS" ]; then
-  if [[ $CI_IMAGE_NAME_TAG == *centos* ]]; then
+  if [[ $CI_IMAGE_NAME_TAG == *centos* ]] && [ -x /bin/dash ]; then
     SHELL_OPTS="CONFIG_SHELL=/bin/dash"
   else
     SHELL_OPTS="CONFIG_SHELL="
@@ -115,8 +129,12 @@ if [ -z "$NO_WERROR" ]; then
   TIDECOIN_CONFIG_ALL="${TIDECOIN_CONFIG_ALL} -DWERROR=ON"
 fi
 
-ccache --zero-stats
-PRINT_CCACHE_STATISTICS="ccache --version | head -n 1 && ccache --show-stats"
+if command -v ccache >/dev/null; then
+  ccache --zero-stats
+  PRINT_CCACHE_STATISTICS="ccache --version | head -n 1 && ccache --show-stats"
+else
+  PRINT_CCACHE_STATISTICS="echo 'ccache not installed'"
+fi
 
 # Folder where the build is done.
 BASE_BUILD_DIR=${BASE_BUILD_DIR:-$BASE_SCRATCH_DIR/build-$HOST}
@@ -143,7 +161,7 @@ cmake --build "${BASE_BUILD_DIR}" "$MAKEJOBS" --target all $GOAL || (
 )
 
 bash -c "${PRINT_CCACHE_STATISTICS}"
-if [ "$CI" = "true" ]; then
+if [ "$CI" = "true" ] && command -v ccache >/dev/null; then
   hit_rate=$(ccache -s | grep "Hits:" | head -1 | sed 's/.*(\(.*\)%).*/\1/')
   if [ "${hit_rate%.*}" -lt 75 ]; then
       echo "::notice title=low ccache hitrate::Ccache hit-rate in $CONTAINER_NAME was $hit_rate%"

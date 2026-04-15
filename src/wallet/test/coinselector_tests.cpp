@@ -65,9 +65,8 @@ static void add_coin(const CAmount& nValue, int nInput, SelectionResult& result,
     result.AddInput(group);
 }
 
-static int P2WPKHInputVsizeForWallet(const CWallet& wallet)
+static int P2WPKHInputVsizeForPolicy(const std::optional<PQHDPolicy>& policy)
 {
-    const auto policy = wallet.GetPQHDPolicy();
     const pq::SchemeInfo* scheme = nullptr;
     if (policy && policy->default_receive_scheme != 0) {
         scheme = pq::SchemeFromPrefix(policy->default_receive_scheme);
@@ -76,6 +75,12 @@ static int P2WPKHInputVsizeForWallet(const CWallet& wallet)
         scheme = &pq::kFalcon512Info;
     }
     return static_cast<int>(pq::VSizeP2WPKHInput(pq::SigLenMaxInScript(*scheme), pq::PubKeyLenWithPrefix(*scheme)));
+}
+
+static int P2WPKHInputVsizeForWallet(const CWallet& wallet)
+{
+    const auto policy{WITH_LOCK(wallet.cs_wallet, return wallet.GetPQHDPolicy())};
+    return P2WPKHInputVsizeForPolicy(policy);
 }
 
 static int ScaleMaxWeightForInputVsize(int base_wu, int input_vsize)
@@ -113,7 +118,7 @@ static void add_coin(CoinsResult& available_coins, CWallet& wallet, const CAmoun
     assert(ret.second);
     CWalletTx& wtx = (*ret.first).second;
     const auto& txout = wtx.tx->vout.at(nInput);
-    const int input_bytes = custom_size == 0 ? P2WPKHInputVsizeForWallet(wallet) : custom_size;
+    const int input_bytes = custom_size == 0 ? P2WPKHInputVsizeForPolicy(wallet.GetPQHDPolicy()) : custom_size;
     available_coins.Add(output_type, {COutPoint(wtx.GetHash(), nInput), txout, nAge, input_bytes, /*solvable=*/true, /*safe=*/true, wtx.GetTxTime(), fIsFromMe, feerate});
 }
 

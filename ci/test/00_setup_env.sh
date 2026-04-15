@@ -64,6 +64,7 @@ export BASE_OUTDIR=${BASE_OUTDIR:-$BASE_SCRATCH_DIR/out}
 export CI_BASE_PACKAGES=${CI_BASE_PACKAGES:-build-essential pkgconf curl ca-certificates ccache python3 rsync git procps bison e2fsprogs cmake ninja-build}
 export GOAL=${GOAL:-install}
 export DIR_QA_ASSETS=${DIR_QA_ASSETS:-${BASE_SCRATCH_DIR}/qa-assets}
+export TIDECOIN_QA_ASSETS_REPO=${TIDECOIN_QA_ASSETS_REPO:-}
 export CI_RETRY_EXE=${CI_RETRY_EXE:-"retry --"}
 
 # The --platform argument used with `docker build` and `docker run`.

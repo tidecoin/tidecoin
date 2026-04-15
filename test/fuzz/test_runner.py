@@ -149,7 +149,7 @@ def main():
                     " ".join(test_list_missing_corpus)
                 )
             )
-            logging.info("Please consider adding a fuzz corpus at https://github.com/bitcoin-core/qa-assets")
+            logging.info("Please consider adding Tidecoin-specific fuzz corpus inputs.")
 
     print("Check if using libFuzzer ... ", end='')
     help_output = subprocess.run(
@@ -293,15 +293,13 @@ def merge_inputs(*, fuzz_pool, corpus, test_list, src_dir, fuzz_bin, merge_dirs)
             '-set_cover_merge=1',
             # set_cover_merge is used instead of -merge=1 to reduce the overall
             # size of the qa-assets git repository a bit, but more importantly,
-            # to cut the runtime to iterate over all fuzz inputs [0].
-            # [0] https://github.com/bitcoin-core/qa-assets/issues/130#issuecomment-1761760866
+            # to cut the runtime to iterate over all fuzz inputs.
             '-shuffle=0',
             '-prefer_small=1',
             '-use_value_profile=0',
             # use_value_profile is enabled by oss-fuzz [0], but disabled for
-            # now to avoid bloating the qa-assets git repository [1].
+            # now to avoid bloating the qa-assets git repository.
             # [0] https://github.com/google/oss-fuzz/issues/1406#issuecomment-387790487
-            # [1] https://github.com/bitcoin-core/qa-assets/issues/130#issuecomment-1749075891
             os.path.join(corpus, t),
         ] + [str(m_dir / t) for m_dir in merge_dirs]
         os.makedirs(os.path.join(corpus, t), exist_ok=True)

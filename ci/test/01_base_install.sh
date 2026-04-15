@@ -15,7 +15,16 @@ if [ "$( cat "${CFG_DONE}" || true )" == "done" ]; then
   exit 0
 fi
 
-MAKEJOBS="-j$( nproc )"  # Use nproc, because MAKEJOBS is the default in docker image builds.
+ci_nproc() {
+  if command -v nproc > /dev/null 2>&1; then
+    nproc
+  elif command -v sysctl > /dev/null 2>&1 && sysctl -n hw.logicalcpu > /dev/null 2>&1; then
+    sysctl -n hw.logicalcpu
+  else
+    echo 1
+  fi
+}
+MAKEJOBS="-j$(ci_nproc)"
 
 if [ -n "$DPKG_ADD_ARCH" ]; then
   dpkg --add-architecture "$DPKG_ADD_ARCH"

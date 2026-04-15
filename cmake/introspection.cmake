@@ -54,15 +54,17 @@ check_cxx_source_compiles("
 )
 
 # Check for posix_fallocate().
-check_cxx_source_compiles("
-  #include <fcntl.h>
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  check_cxx_source_compiles("
+    #include <fcntl.h>
 
-  int main()
-  {
-    return posix_fallocate(0, 0, 0);
-  }
-  " HAVE_POSIX_FALLOCATE
-)
+    int main()
+    {
+      return posix_fallocate(0, 0, 0);
+    }
+    " HAVE_POSIX_FALLOCATE
+  )
+endif()
 
 # Check for strong getauxval() support in the system headers.
 check_cxx_source_compiles("

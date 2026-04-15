@@ -321,10 +321,15 @@ jobs:
       - name: Clone corpora
         if: matrix.job-type == 'fuzz'
         run: |
-          git clone --depth=1 https://github.com/bitcoin-core/qa-assets "${RUNNER_TEMP}/qa-assets"
-          cd "${RUNNER_TEMP}/qa-assets"
-          echo "Using qa-assets repo from commit ..."
-          git log -1
+          if [[ -n "${TIDECOIN_QA_ASSETS_REPO:-}" ]]; then
+            git clone --depth=1 "${TIDECOIN_QA_ASSETS_REPO}" "${RUNNER_TEMP}/qa-assets"
+            cd "${RUNNER_TEMP}/qa-assets"
+            echo "Using Tidecoin qa-assets repo from commit ..."
+            git log -1
+          else
+            mkdir -p "${RUNNER_TEMP}/qa-assets/fuzz_corpora"
+            echo "No Tidecoin qa-assets repo configured; running fuzz targets with an empty local corpus."
+          fi
 
       - name: Run fuzz tests
         if: matrix.job-type == 'fuzz'
