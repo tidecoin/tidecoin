@@ -52,6 +52,12 @@ class MinimumChainWorkTest(BitcoinTestFramework):
 
         starting_blockcount = self.nodes[2].getblockcount()
 
+        # Build the below-threshold chain while node0 is isolated. Otherwise,
+        # the throwaway block that crosses the threshold below can be relayed
+        # before invalidateblock returns, making the "below threshold" check
+        # race against legitimate block download.
+        self.disconnect_nodes(1, 0)
+
         # Mine until just below minchainwork. Work-per-block is chain specific.
         self.log.info("Generating blocks on node0 up to just below minchainwork")
         while True:
@@ -68,6 +74,8 @@ class MinimumChainWorkTest(BitcoinTestFramework):
 
         besthash_below_threshold = self.nodes[0].getbestblockhash()
         self.log.info(f"Node0 current chain work: {self.nodes[0].getblockheader(besthash_below_threshold)['chainwork']}")
+        self.connect_nodes(1, 0)
+
         self.log.info("Verifying node 2 has no more blocks than before")
         self.log.info(f"Blockcounts: {[n.getblockcount() for n in self.nodes]}")
         # Node2 shouldn't have any new headers yet, because node1 should not
