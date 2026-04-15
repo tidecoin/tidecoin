@@ -310,12 +310,12 @@ jobs:
         if: matrix.job-type == 'standard'
         working-directory: build
         env:
-          BITCOIN_BIN: '${{ github.workspace }}\build\bin\Release\tidecoin.exe'
-          BITCOIND: '${{ github.workspace }}\build\bin\Release\tidecoind.exe'
-          BITCOINCLI: '${{ github.workspace }}\build\bin\Release\tidecoin-cli.exe'
-          BITCOINTX: '${{ github.workspace }}\build\bin\Release\tidecoin-tx.exe'
-          BITCOINUTIL: '${{ github.workspace }}\build\bin\Release\tidecoin-util.exe'
-          BITCOINWALLET: '${{ github.workspace }}\build\bin\Release\tidecoin-wallet.exe'
+          TIDECOIN_BIN: '${{ github.workspace }}\build\bin\Release\tidecoin.exe'
+          TIDECOIND: '${{ github.workspace }}\build\bin\Release\tidecoind.exe'
+          TIDECOINCLI: '${{ github.workspace }}\build\bin\Release\tidecoin-cli.exe'
+          TIDECOINTX: '${{ github.workspace }}\build\bin\Release\tidecoin-tx.exe'
+          TIDECOINUTIL: '${{ github.workspace }}\build\bin\Release\tidecoin-util.exe'
+          TIDECOINWALLET: '${{ github.workspace }}\build\bin\Release\tidecoin-wallet.exe'
           TEST_RUNNER_EXTRA: ${{ github.event_name != 'pull_request' && '--extended' || '' }}
         run: py -3 test/functional/test_runner.py --jobs $NUMBER_OF_PROCESSORS --ci --quiet --tmpdirprefix="${RUNNER_TEMP}" --combinedlogslen=99999999 --timeout-factor=${TEST_RUNNER_TIMEOUT_FACTOR} ${TEST_RUNNER_EXTRA}
 
@@ -336,7 +336,7 @@ jobs:
         if: matrix.job-type == 'fuzz'
         working-directory: build
         env:
-          BITCOINFUZZ: '${{ github.workspace }}\build\bin\Release\fuzz.exe'
+          TIDECOINFUZZ: '${{ github.workspace }}\build\bin\Release\fuzz.exe'
         run: |
           py -3 test/fuzz/test_runner.py --par $NUMBER_OF_PROCESSORS --loglevel DEBUG "${RUNNER_TEMP}/qa-assets/fuzz_corpora"
 

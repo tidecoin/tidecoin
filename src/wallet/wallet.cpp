@@ -3522,28 +3522,38 @@ std::shared_ptr<CWallet> CWallet::Create(WalletContext& context, const std::stri
         assert(walletInstance->IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS));
 
         struct WalletCreationProgressGuard {
-            CWallet& wallet;
-            explicit WalletCreationProgressGuard(CWallet& wallet_in) : wallet{wallet_in} {}
-            ~WalletCreationProgressGuard() { wallet.FinishWalletCreationProgress(); }
+            CWallet* wallet{nullptr};
+            ~WalletCreationProgressGuard()
+            {
+                if (wallet) wallet->FinishWalletCreationProgress();
+            }
+            void Start(CWallet& wallet_in, uint64_t total_steps)
+            {
+                wallet_in.StartWalletCreationProgress(total_steps);
+                wallet = &wallet_in;
+            }
+            void Finish()
+            {
+                if (!wallet) return;
+                wallet->FinishWalletCreationProgress();
+                wallet = nullptr;
+            }
         };
-        std::optional<WalletCreationProgressGuard> progress_guard;
+        WalletCreationProgressGuard progress_guard;
 
         // PQ keypool prefill can take a long time; expose determinate progress in the GUI.
         if (walletInstance->HaveChain()) {
             const uint64_t total_steps =
                 2ULL * static_cast<uint64_t>(OUTPUT_TYPES.size()) *
                 static_cast<uint64_t>(std::max<int64_t>(walletInstance->m_keypool_size, 1));
-            walletInstance->StartWalletCreationProgress(total_steps);
-            progress_guard.emplace(*walletInstance);
+            progress_guard.Start(*walletInstance, total_steps);
         }
 
         if ((wallet_creation_flags & WALLET_FLAG_EXTERNAL_SIGNER) || !(wallet_creation_flags & (WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_BLANK_WALLET))) {
             walletInstance->SetupDescriptorScriptPubKeyMans();
         }
 
-        if (progress_guard) {
-            progress_guard.reset();
-        }
+        progress_guard.Finish();
 
         if (chain) {
             std::optional<int> tip_height = chain->getHeight();

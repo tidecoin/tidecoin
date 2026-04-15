@@ -31,9 +31,9 @@ private:
     std::optional<FSChaCha20Poly1305> m_send_p_cipher;
     std::optional<FSChaCha20Poly1305> m_recv_p_cipher;
 
-    std::array<std::byte, SESSION_ID_LEN> m_session_id;
-    std::array<std::byte, GARBAGE_TERMINATOR_LEN> m_send_garbage_terminator;
-    std::array<std::byte, GARBAGE_TERMINATOR_LEN> m_recv_garbage_terminator;
+    std::array<std::byte, SESSION_ID_LEN> m_session_id{};
+    std::array<std::byte, GARBAGE_TERMINATOR_LEN> m_send_garbage_terminator{};
+    std::array<std::byte, GARBAGE_TERMINATOR_LEN> m_recv_garbage_terminator{};
 
 public:
     /** Default constructor. Call InitializeFromSharedSecret before use. */

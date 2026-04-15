@@ -1663,7 +1663,7 @@ Transport::Info V2Transport::GetInfo() const noexcept
     LOCK(m_recv_mutex);
     if (m_recv_state == RecvState::V1) return m_v1_fallback.GetInfo();
 
-    Transport::Info info;
+    Transport::Info info{};
 
     // Do not report v2 and session ID until the version packet has been received
     // and verified (confirming that the other side very likely has the same keys as us).

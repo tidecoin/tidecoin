@@ -7,11 +7,16 @@
 #include <coins.h>
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
+#include <key.h>
 #include <kernel/coinstats.h>
 #include <node/blockstorage.h>
+#include <node/miner.h>
 #include <node/utxo_snapshot.h>
+#include <pow.h>
+#include <pq/pq_api.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
+#include <script/script.h>
 #include <serialize.h>
 #include <span.h>
 #include <streams.h>
@@ -26,6 +31,7 @@
 #include <util/fs.h>
 #include <util/result.h>
 #include <util/time.h>
+#include <util/vector.h>
 #include <validation.h>
 
 #include <cstdint>
@@ -41,6 +47,70 @@ namespace {
 
 const std::vector<std::shared_ptr<CBlock>>* g_chain;
 TestingSetup* g_setup{nullptr};
+
+constexpr int FUZZ_ASSUMEUTXO_HEIGHT{COINBASE_MATURITY + 10};
+
+CKey MakeAssumeutxoCoinbaseKey()
+{
+    constexpr std::array<uint8_t, 64> key_material = [] {
+        std::array<uint8_t, 64> out{};
+        out[63] = 1;
+        return out;
+    }();
+    std::vector<uint8_t> pk_raw;
+    pq::SecureKeyBytes sk_raw;
+    const bool ok{pq::KeyGenFromSeed(/*pqhd_version=*/1,
+                                     pq::SchemeId::FALCON_512,
+                                     std::span<const uint8_t, 64>(key_material),
+                                     pk_raw,
+                                     sk_raw)};
+    Assert(ok);
+    Assert(pk_raw.size() == pq::kFalcon512Info.pubkey_bytes);
+    Assert(sk_raw.size() == pq::kFalcon512Info.seckey_bytes);
+
+    std::vector<uint8_t> prefixed(pk_raw.size() + 1);
+    prefixed[0] = pq::kFalcon512Info.prefix;
+    std::copy(pk_raw.begin(), pk_raw.end(), prefixed.begin() + 1);
+
+    const CPubKey pubkey{std::span<const uint8_t>{prefixed}};
+    Assert(pubkey.IsValid());
+
+    CKey key;
+    key.Set(sk_raw.begin(), sk_raw.end(), pubkey);
+    Assert(key.IsValid());
+    return key;
+}
+
+std::vector<std::shared_ptr<CBlock>> CreateAssumeutxoFuzzChain()
+{
+    const auto setup{MakeNoLogFileContext<TestingSetup>(ChainType::REGTEST, TestOpts{.setup_net = false})};
+    SetMockTime(Params().GenesisBlock().nTime);
+
+    const CKey coinbase_key{MakeAssumeutxoCoinbaseKey()};
+    const CScript coinbase_script{CScript() << ToByteVector(coinbase_key.GetPubKey()) << OP_CHECKSIG};
+
+    std::vector<std::shared_ptr<CBlock>> chain;
+    chain.reserve(FUZZ_ASSUMEUTXO_HEIGHT);
+    auto& chainman{*setup->m_node.chainman};
+    for (int i{0}; i < FUZZ_ASSUMEUTXO_HEIGHT; ++i) {
+        node::BlockAssembler::Options options;
+        options.coinbase_output_script = coinbase_script;
+        CBlock block{node::BlockAssembler{chainman.ActiveChainstate(), nullptr, options}.CreateNewBlock()->block};
+        node::RegenerateCommitments(block, chainman);
+
+        const int height{WITH_LOCK(::cs_main, return chainman.ActiveHeight() + 1)};
+        while (!CheckProofOfWorkImpl(GetPoWHashForHeight(block, chainman.GetConsensus(), height), block.nBits, chainman.GetConsensus())) {
+            ++block.nNonce;
+            Assert(block.nNonce);
+        }
+
+        const auto shared_block{std::make_shared<const CBlock>(block)};
+        Assert(chainman.ProcessNewBlock(shared_block, /*force_processing=*/true, /*min_pow_checked=*/true, nullptr));
+        chain.push_back(std::make_shared<CBlock>(block));
+        SetMockTime(GetTime() + 1);
+    }
+    return chain;
+}
 
 /** Sanity check the assumeutxo values hardcoded in chainparams for the fuzz target. */
 void sanity_check_snapshot()
@@ -59,7 +129,7 @@ void sanity_check_snapshot()
     auto& cs{node.chainman->ActiveChainstate()};
     cs.ForceFlushStateToDisk();
     const auto stats{*Assert(kernel::ComputeUTXOStats(kernel::CoinStatsHashType::HASH_SERIALIZED, &cs.CoinsDB(), node.chainman->m_blockman))};
-    const auto cp_au_data{*Assert(node.chainman->GetParams().AssumeutxoForHeight(2 * COINBASE_MATURITY))};
+    const auto cp_au_data{*Assert(node.chainman->GetParams().AssumeutxoForHeight(FUZZ_ASSUMEUTXO_HEIGHT))};
     Assert(stats.nHeight == cp_au_data.height);
     Assert(stats.nTransactions + 1 == cp_au_data.m_chain_tx_count); // +1 for the genesis tx.
     Assert(stats.hashBlock == cp_au_data.blockhash);
@@ -69,8 +139,7 @@ void sanity_check_snapshot()
 template <bool INVALID>
 void initialize_chain()
 {
-    const auto params{CreateChainParams(ArgsManager{}, ChainType::REGTEST)};
-    static const auto chain{CreateBlockChain(2 * COINBASE_MATURITY, *params)};
+    static const auto chain{CreateAssumeutxoFuzzChain()};
     g_chain = &chain;
     SetMockTime(chain.back()->Time());
 
@@ -120,7 +189,7 @@ void utxo_snapshot_fuzz(FuzzBufferType buffer)
             outfile << std::span{metadata};
         } else {
             auto msg_start = chainman.GetParams().MessageStart();
-            int base_blockheight{fuzzed_data_provider.ConsumeIntegralInRange<int>(1, 2 * COINBASE_MATURITY)};
+            int base_blockheight{fuzzed_data_provider.ConsumeIntegralInRange<int>(1, FUZZ_ASSUMEUTXO_HEIGHT)};
             uint256 base_blockhash{g_chain->at(base_blockheight - 1)->GetHash()};
             uint64_t m_coins_count{fuzzed_data_provider.ConsumeIntegralInRange<uint64_t>(1, 3 * COINBASE_MATURITY)};
             SnapshotMetadata metadata{msg_start, base_blockhash, m_coins_count};

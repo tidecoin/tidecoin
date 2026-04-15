@@ -26,7 +26,6 @@
 #include <set>
 
 using common::PSBTError;
-using util::ToString;
 
 namespace wallet {
 

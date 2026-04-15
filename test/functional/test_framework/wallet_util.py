@@ -80,7 +80,7 @@ def _get_testkeys_path():
                 return candidate
     # Fallback to common in-repo build directories.
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-    for build_dir in ("build", "build_dev_mode"):
+    for build_dir in ("", "build", "build_dev_mode"):
         for candidate in _testkeys_candidates_in_builddir(os.path.join(repo_root, build_dir)):
             if os.path.exists(candidate):
                 return candidate

@@ -85,14 +85,15 @@ def read_logs(tmp_dir):
         case 0:
             chain = 'regtest'  # fallback to regtest
         case 1:
-            chain = re.search(r'node0/(.+?)/debug\.log$', debug_logs[0].as_posix()).group(1)
+            match = re.search(r'node0/(.+?)/debug\.log$', debug_logs[0].as_posix())
+            chain = match.group(1) if match else ''
         case _:
             raise RuntimeError('Max one debug.log is supported, found several:\n\t' +
                                '\n\t'.join(map(str, debug_logs)))
 
     files = [("test", "%s/test_framework.log" % tmp_dir)]
     for i in itertools.count():
-        logfile = "{}/node{}/{}/debug.log".format(tmp_dir, i, chain)
+        logfile = os.path.join(tmp_dir, f"node{i}", chain, "debug.log")
         if not os.path.isfile(logfile):
             break
         files.append(("node%d" % i, logfile))

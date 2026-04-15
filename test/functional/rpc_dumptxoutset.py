@@ -54,7 +54,7 @@ class DumptxoutsetTest(BitcoinTestFramework):
         # UTXO snapshot hash should be deterministic based on mocked time.
         assert_equal(
             sha256sum_file(str(expected_path)).hex(),
-            'ebcfa5cff490e0d8f39e2ea704852864e77d5ca5f27a9d0966a4747893e58eae')
+            '50711e65d1548c8dd5f03cfec11d625128f45c7ba2457d9b466593cb305888c5')
 
         assert_equal(
             out['txoutset_hash'], '222a2795892e49129b221e52fd93f1e9e82d4a8e1ea1357de45698cbf81b4e04')

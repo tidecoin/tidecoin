@@ -135,7 +135,7 @@ RPCHelpMan dumpprivkey()
                     throw JSONRPCError(RPC_WALLET_ERROR, "Private key not available (watch-only or locked)");
                 }
                 if (format == "legacy") {
-                    const std::string legacy = EncodeSecretLegacy(key);
+                    std::string legacy = EncodeSecretLegacy(key);
                     if (legacy.empty()) {
                         throw JSONRPCError(RPC_INVALID_PARAMETER, "legacy format is only supported for Falcon-512");
                     }
@@ -182,7 +182,7 @@ RPCHelpMan dumpprivkey()
                 throw JSONRPCError(RPC_WALLET_ERROR, "Private key not available for descriptor");
             }
             if (format == "legacy") {
-                const std::string legacy = EncodeSecretLegacy(key);
+                std::string legacy = EncodeSecretLegacy(key);
                 if (legacy.empty()) {
                     throw JSONRPCError(RPC_INVALID_PARAMETER, "legacy format is only supported for Falcon-512");
                 }

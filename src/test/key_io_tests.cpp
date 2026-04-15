@@ -299,7 +299,7 @@ BOOST_AUTO_TEST_CASE(key_io_txcreatesignv1_p2pkh_legacy_wif_verifies)
     const bool allow_legacy = true;
     const bool ok = VerifyScript(ctx.vin[0].scriptSig, prev_script, &ctx.vin[0].scriptWitness,
                                  STANDARD_SCRIPT_VERIFY_FLAGS,
-                                 TransactionSignatureChecker(&ctx, 0, /*amount=*/0, txdata, MissingDataBehavior::FAIL, allow_legacy),
+                                 TransactionSignatureChecker(&ctx, 0, /*amountIn=*/0, txdata, MissingDataBehavior::FAIL, allow_legacy),
                                  &serror);
     BOOST_CHECK_MESSAGE(ok, strprintf("VerifyScript failed: %s", ScriptErrorString(serror)));
 }

@@ -214,7 +214,11 @@ if [ "${RUN_TIDY}" = "true" ]; then
   set -eo pipefail
   # Filter out:
   # * qt qrc and moc generated files
-  jq 'map(select(.file | test("src/qt/.*_autogen/.*\\.cpp$") | not))' "${BASE_BUILD_DIR}/compile_commands.json" > tmp.json
+  # * third-party PQClean vendor sources
+  jq 'map(select(
+    (.file | test("src/qt/.*_autogen/.*\\.cpp$") | not) and
+    (.file | test("src/pq/(falcon-512|falcon-1024|ml-dsa-44|ml-dsa-65|ml-dsa-87|ml-kem-512)/") | not)
+  ))' "${BASE_BUILD_DIR}/compile_commands.json" > tmp.json
   mv tmp.json "${BASE_BUILD_DIR}/compile_commands.json"
 
   cd "${BASE_BUILD_DIR}/src/"

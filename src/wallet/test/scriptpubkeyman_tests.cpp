@@ -793,7 +793,8 @@ BOOST_AUTO_TEST_CASE(PQHDCryptedSeedDecryptRejectsSeedIdMismatch)
     PQHDCryptedSeed tampered_record;
     tampered_record.nCreateTime = 1;
     tampered_record.crypted_seed = std::move(crypted_seed);
-    BOOST_REQUIRE(wallet.LoadPQHDCryptedSeed(fake_seed_id, std::move(tampered_record)));
+    const bool loaded_tampered_record{wallet.LoadPQHDCryptedSeed(fake_seed_id, std::move(tampered_record))};
+    BOOST_REQUIRE(loaded_tampered_record);
 
     // Decryption can succeed, but mismatched seed_id integrity check must reject the record.
     BOOST_CHECK(!wallet.GetPQHDSeed(fake_seed_id).has_value());

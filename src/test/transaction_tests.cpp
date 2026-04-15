@@ -46,7 +46,6 @@
 
 using namespace util::hex_literals;
 using util::SplitString;
-using util::ToString;
 
 typedef std::vector<unsigned char> valtype;
 

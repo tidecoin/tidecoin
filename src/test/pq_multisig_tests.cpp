@@ -342,7 +342,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_mixed_scheme)
         pubs.emplace_back(keys3[i].pubkey);
         sign_keys.emplace_back(keys3[i].key);
     }
-    const CScript witness_script = GetScriptForMultisig(/*m=*/2, pubs);
+    const CScript witness_script = GetScriptForMultisig(/*nRequired=*/2, pubs);
     const CScript script_pubkey = GetScriptForDestination(WitnessV0ScriptHash(witness_script));
 
     const unsigned int flags = SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH;
@@ -394,7 +394,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_policy_limits)
     const auto keys = MakeKeys({pq::SchemeId::MLDSA_87, pq::SchemeId::MLDSA_87}, /*tag_base=*/0x40);
     std::vector<CPubKey> pubs{keys[0].pubkey, keys[1].pubkey};
     std::vector<CKey> sign_keys{keys[0].key};
-    const CScript witness_script = GetScriptForMultisig(/*m=*/1, pubs);
+    const CScript witness_script = GetScriptForMultisig(/*nRequired=*/1, pubs);
 
     const CScript script_pubkey = GetScriptForDestination(WitnessV0ScriptHash(witness_script));
     const unsigned int flags = SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH;
@@ -494,7 +494,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_negative_cases)
 
     const auto keys = MakeKeys({pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_512}, 0x21);
     std::vector<CPubKey> pubs{keys[0].pubkey, keys[1].pubkey, keys[2].pubkey};
-    const CScript witness_script = GetScriptForMultisig(/*m=*/2, pubs);
+    const CScript witness_script = GetScriptForMultisig(/*nRequired=*/2, pubs);
     const CScript script_pubkey = GetScriptForDestination(WitnessV0ScriptHash(witness_script));
 
     CMutableTransaction credit_tx;
@@ -564,7 +564,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_negative_cases)
     // m > n should fail.
     {
         std::vector<CPubKey> one_pub{keys[0].pubkey};
-        const CScript bad_script = GetScriptForMultisig(/*m=*/2, one_pub);
+        const CScript bad_script = GetScriptForMultisig(/*nRequired=*/2, one_pub);
         const CScript bad_spk = GetScriptForDestination(WitnessV0ScriptHash(bad_script));
         CScriptWitness witness;
         witness.stack.emplace_back();
@@ -581,7 +581,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_negative_cases)
     // n=0 with m=1 should fail.
     {
         std::vector<CPubKey> none;
-        const CScript bad_script = GetScriptForMultisig(/*m=*/1, none);
+        const CScript bad_script = GetScriptForMultisig(/*nRequired=*/1, none);
         const CScript bad_spk = GetScriptForDestination(WitnessV0ScriptHash(bad_script));
         CScriptWitness witness;
         witness.stack.emplace_back();
@@ -597,7 +597,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_negative_cases)
     // m=0, n=0: document consensus behavior.
     {
         std::vector<CPubKey> none;
-        const CScript zero_script = GetScriptForMultisig(/*m=*/0, none);
+        const CScript zero_script = GetScriptForMultisig(/*nRequired=*/0, none);
         const CScript zero_spk = GetScriptForDestination(WitnessV0ScriptHash(zero_script));
         CScriptWitness witness;
         witness.stack.emplace_back();
@@ -690,7 +690,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_committed_hash_mixed_scheme)
         CCoinsView coins_dummy;
         CCoinsViewCache coins(&coins_dummy);
         BuildTxs(spend_tx, coins, credit_tx, script_pubkey, CScript(), CScriptWitness());
-        CScriptWitness witness = SignCommittedHashWitness(witness_script, bad_keys, /*m=*/2, CTransaction(spend_tx), amount);
+        CScriptWitness witness = SignCommittedHashWitness(witness_script, bad_keys, /*sign_count=*/2, CTransaction(spend_tx), amount);
         spend_tx.vin[0].scriptWitness = witness;
         ScriptError err;
         const bool allow_legacy = !(flags & SCRIPT_VERIFY_PQ_STRICT);
@@ -709,7 +709,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_committed_hash_mixed_scheme)
         CCoinsView coins_dummy;
         CCoinsViewCache coins(&coins_dummy);
         BuildTxs(spend_tx, coins, credit_tx, script_pubkey, CScript(), CScriptWitness());
-        CScriptWitness witness = SignCommittedHashWitness(witness_script, keys3, /*m=*/2, CTransaction(spend_tx), amount);
+        CScriptWitness witness = SignCommittedHashWitness(witness_script, keys3, /*sign_count=*/2, CTransaction(spend_tx), amount);
         if (!witness.stack.empty()) {
             witness.stack[0].assign(1, 0x01);
         }
@@ -808,7 +808,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_bare_policy)
 
     const auto keys = MakeKeys({pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_512}, 0x77);
     std::vector<CPubKey> pubs{keys[0].pubkey, keys[1].pubkey};
-    const CScript script_pubkey = GetScriptForMultisig(/*m=*/2, pubs);
+    const CScript script_pubkey = GetScriptForMultisig(/*nRequired=*/2, pubs);
 
     CMutableTransaction credit_tx;
     CMutableTransaction spend_tx;

@@ -797,8 +797,8 @@ BOOST_AUTO_TEST_CASE(script_build)
             opcount_limit_script << OP_NOP;
         }
         opcount_limit_script << OP_TRUE;
-        tests.push_back(TestBuilder(opcount_limit_script,
-                                    "PQ interpreter opcount limit", 0));
+        tests.emplace_back(opcount_limit_script,
+                           "PQ interpreter opcount limit", 0);
 
         CScript opcount_overflow_script;
         for (int i = 0; i < 202; ++i) {
@@ -846,8 +846,8 @@ BOOST_AUTO_TEST_CASE(script_build)
             static_cast<unsigned char>(OP_EQUAL),
         };
         const CScript non_minimal_spk{non_minimal_spk_bytes.begin(), non_minimal_spk_bytes.end()};
-        tests.push_back(TestBuilder(non_minimal_spk,
-                                    "PQ MINIMALDATA non-minimal scriptPubKey push not enforced", 0));
+        tests.emplace_back(non_minimal_spk,
+                           "PQ MINIMALDATA non-minimal scriptPubKey push not enforced", 0);
         tests.push_back(TestBuilder(non_minimal_spk,
                                     "PQ MINIMALDATA non-minimal scriptPubKey push enforced", SCRIPT_VERIFY_MINIMALDATA)
                                        .ScriptError(SCRIPT_ERR_MINIMALDATA));
@@ -874,8 +874,8 @@ BOOST_AUTO_TEST_CASE(script_build)
                                    .ScriptError(SCRIPT_ERR_UNSATISFIED_LOCKTIME));
     {
         const CScript cltv_sat_script = CScript() << OP_0 << OP_IF << OP_CHECKLOCKTIMEVERIFY << OP_ENDIF << OP_TRUE;
-        tests.push_back(TestBuilder(cltv_sat_script,
-                                    "PQ TIME-CLTV-SAT-BARE", cltv_flags));
+        tests.emplace_back(cltv_sat_script,
+                           "PQ TIME-CLTV-SAT-BARE", cltv_flags);
         tests.push_back(TestBuilder(cltv_sat_script,
                                     "PQ TIME-CLTV-SAT-P2SH", cltv_flags, true)
                                        .PushRedeem());
@@ -897,8 +897,8 @@ BOOST_AUTO_TEST_CASE(script_build)
                                    .ScriptError(SCRIPT_ERR_UNSATISFIED_LOCKTIME));
     {
         const CScript csv_sat_script = CScript() << OP_0 << OP_IF << OP_CHECKSEQUENCEVERIFY << OP_ENDIF << OP_TRUE;
-        tests.push_back(TestBuilder(csv_sat_script,
-                                    "PQ TIME-CSV-SAT-BARE", csv_flags));
+        tests.emplace_back(csv_sat_script,
+                           "PQ TIME-CSV-SAT-BARE", csv_flags);
         tests.push_back(TestBuilder(csv_sat_script,
                                     "PQ TIME-CSV-SAT-P2SH", csv_flags, true)
                                        .PushRedeem());
@@ -908,8 +908,8 @@ BOOST_AUTO_TEST_CASE(script_build)
     }
     {
         const CScript cltv_csv_sat_script = CScript() << OP_0 << OP_IF << OP_CHECKLOCKTIMEVERIFY << OP_CHECKSEQUENCEVERIFY << OP_ENDIF << OP_TRUE;
-        tests.push_back(TestBuilder(cltv_csv_sat_script,
-                                    "PQ TIME-CLTVCSV-COMBINED-SAT", cltv_csv_flags));
+        tests.emplace_back(cltv_csv_sat_script,
+                           "PQ TIME-CLTVCSV-COMBINED-SAT", cltv_csv_flags);
         const CScript cltv_csv_unsat_script = CScript() << 1 << OP_CHECKLOCKTIMEVERIFY << OP_DROP << 1 << OP_CHECKSEQUENCEVERIFY;
         tests.push_back(TestBuilder(cltv_csv_unsat_script,
                                     "PQ TIME-CLTVCSV-COMBINED-UNSAT", cltv_csv_flags)
@@ -966,8 +966,8 @@ BOOST_AUTO_TEST_CASE(script_build)
                                    .ScriptError(SCRIPT_ERR_SIG_NULLFAIL));
 
     // CONST_SCRIPTCODE behavior.
-    tests.push_back(TestBuilder(CScript() << OP_0 << OP_IF << OP_CODESEPARATOR << OP_ENDIF << OP_TRUE,
-                                "PQ CONST_SCRIPTCODE not enforced", 0));
+    tests.emplace_back(CScript() << OP_0 << OP_IF << OP_CODESEPARATOR << OP_ENDIF << OP_TRUE,
+                       "PQ CONST_SCRIPTCODE not enforced", 0);
     tests.push_back(TestBuilder(CScript() << OP_0 << OP_IF << OP_CODESEPARATOR << OP_ENDIF << OP_TRUE,
                                 "PQ CONST_SCRIPTCODE rejects OP_CODESEPARATOR", SCRIPT_VERIFY_CONST_SCRIPTCODE)
                                    .ScriptError(SCRIPT_ERR_OP_CODESEPARATOR));

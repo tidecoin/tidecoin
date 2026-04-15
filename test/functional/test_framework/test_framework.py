@@ -276,26 +276,29 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
         paths = types.SimpleNamespace()
         binaries = [
-            ("tidecoin_bin", "tidecoin", "TIDECOIN_BIN"),
-            ("tidecoind", "tidecoind", "TIDECOIND"),
-            ("tidecoincli", "tidecoin-cli", "TIDECOINCLI"),
-            ("tidecoinutil", "tidecoin-util", "TIDECOINUTIL"),
-            ("tidecointx", "tidecoin-tx", "TIDECOINTX"),
-            ("tidecoinchainstate", "tidecoin-chainstate", "TIDECOINCHAINSTATE"),
-            ("tidecoinwallet", "tidecoin-wallet", "TIDECOINWALLET"),
+            ("tidecoin_bin", "tidecoin", "TIDECOIN_BIN", "BITCOIN_BIN"),
+            ("tidecoind", "tidecoind", "TIDECOIND", "BITCOIND"),
+            ("tidecoincli", "tidecoin-cli", "TIDECOINCLI", "BITCOINCLI"),
+            ("tidecoinutil", "tidecoin-util", "TIDECOINUTIL", "BITCOINUTIL"),
+            ("tidecointx", "tidecoin-tx", "TIDECOINTX", "BITCOINTX"),
+            ("tidecoinchainstate", "tidecoin-chainstate", "TIDECOINCHAINSTATE", "BITCOINCHAINSTATE"),
+            ("tidecoinwallet", "tidecoin-wallet", "TIDECOINWALLET", "BITCOINWALLET"),
         ]
         # Set paths to Tidecoin binaries allowing overrides with environment
         # variables.
-        for attr_name, binary, env_variable_name in binaries:
+        for attr_name, binary, env_variable_name, legacy_env_variable_name in binaries:
             default_filename = os.path.join(
                 self.config["environment"]["BUILDDIR"],
                 "bin",
                 binary + self.config["environment"]["EXEEXT"],
             )
-            setattr(paths, attr_name, os.getenv(env_variable_name, default=default_filename))
+            setattr(paths, attr_name, os.getenv(
+                env_variable_name,
+                default=os.getenv(legacy_env_variable_name, default=default_filename),
+            ))
         # TIDECOIN_CMD environment variable can be specified to invoke tidecoin
         # wrapper binary instead of other executables.
-        paths.tidecoin_cmd = shlex.split(os.getenv("TIDECOIN_CMD", "")) or None
+        paths.tidecoin_cmd = shlex.split(os.getenv("TIDECOIN_CMD", os.getenv("BITCOIN_CMD", ""))) or None
         return paths
 
     def get_binaries(self, bin_dir=None):
