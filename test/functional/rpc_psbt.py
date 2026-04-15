@@ -403,9 +403,10 @@ class PSBTTest(BitcoinTestFramework):
         finalized = self.nodes[2].finalizepsbt(combined, True)
         assert finalized["complete"]
         txid = self.nodes[2].sendrawtransaction(finalized["hex"], maxfeerate=0)
-        self.generate(self.nodes[0], 1)
+        self.sync_mempools()
+        block_hash = self.generate(self.nodes[0], 1)[0]
 
-        decoded_final = self.nodes[0].getrawtransaction(txid, True)
+        decoded_final = self.nodes[0].getrawtransaction(txid, True, block_hash)
         output_addrs = {vout["scriptPubKey"].get("address") for vout in decoded_final["vout"] if "address" in vout["scriptPubKey"]}
         assert participant0_join_addr in output_addrs
         assert participant1_join_addr in output_addrs

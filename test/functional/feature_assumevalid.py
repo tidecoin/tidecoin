@@ -44,7 +44,10 @@ from test_framework.messages import (
     msg_block,
     msg_headers,
 )
-from test_framework.p2p import P2PInterface
+from test_framework.p2p import (
+    P2PDataStore,
+    P2PInterface,
+)
 from test_framework.script import (
     CScript,
     OP_TRUE,
@@ -56,6 +59,19 @@ from test_framework.wallet_util import generate_keypair
 
 class BaseNode(P2PInterface):
     def send_header_for_blocks(self, new_blocks):
+        headers_message = msg_headers()
+        headers_message.headers = [CBlockHeader(b) for b in new_blocks]
+        self.send_without_ping(headers_message)
+
+
+class BlockServingNode(P2PDataStore):
+    def add_blocks(self, new_blocks):
+        for block in new_blocks:
+            self.block_store[block.hash_int] = block
+            self.last_block_hash = block.hash_int
+
+    def send_header_for_blocks(self, new_blocks):
+        self.add_blocks(new_blocks)
         headers_message = msg_headers()
         headers_message.headers = [CBlockHeader(b) for b in new_blocks]
         self.send_without_ping(headers_message)
@@ -167,7 +183,8 @@ class AssumeValidTest(BitcoinTestFramework):
         self.send_rejected_block(p2p0, invalid_block)
         assert_equal(self.nodes[0].getblockcount(), COINBASE_MATURITY + 1)
 
-        p2p1 = self.nodes[1].add_p2p_connection(BaseNode())
+        p2p1 = self.nodes[1].add_p2p_connection(BlockServingNode())
+        p2p1.add_blocks(self.blocks)
         self.send_headers_in_chunks(p2p1, self.blocks)
         with self.nodes[1].assert_debug_log(expected_msgs=['Disabling signature validations at block #1', 'Enabling signature validations at block #103']):
             # Send all blocks to node1. All blocks will be accepted.

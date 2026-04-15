@@ -395,6 +395,8 @@ class BIP68Test(BitcoinTestFramework):
         assert not softfork_active(self.nodes[0], 'csv')
         self.generate(self.wallet, 1, sync_fun=self.no_op)
         assert softfork_active(self.nodes[0], 'csv')
+        if not all(len(node.getpeerinfo()) for node in self.nodes):
+            self.connect_nodes(1, 0)
         self.sync_blocks()
 
     # Use self.nodes[1] to test that version 2 transactions are standard.

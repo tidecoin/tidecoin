@@ -205,7 +205,6 @@ FUZZ_TARGET(ephemeral_package_eval, .init = initialize_tx_pool)
     std::unordered_map<COutPoint, CAmount, SaltedOutpointHasher> outpoints_value;
     for (const auto& outpoint : g_outpoints_coinbase_init_mature) {
         Assert(mempool_outpoints.insert(outpoint).second);
-        outpoints_value[outpoint] = 50 * COIN;
     }
 
     auto outpoints_updater = std::make_shared<OutpointsUpdater>(mempool_outpoints);
@@ -215,6 +214,12 @@ FUZZ_TARGET(ephemeral_package_eval, .init = initialize_tx_pool)
     MockedTxPool& tx_pool = *static_cast<MockedTxPool*>(tx_pool_.get());
 
     chainstate.SetMempool(&tx_pool);
+
+    const CCoinsViewMemPool amount_view{WITH_LOCK(::cs_main, return &chainstate.CoinsTip()), tx_pool};
+    for (const auto& outpoint : g_outpoints_coinbase_init_mature) {
+        auto coin{amount_view.GetCoin(outpoint).value()};
+        outpoints_value[outpoint] = coin.out.nValue;
+    }
 
     LIMITED_WHILE(fuzzed_data_provider.remaining_bytes() > 0, 300)
     {
@@ -360,7 +365,6 @@ FUZZ_TARGET(tx_package_eval, .init = initialize_tx_pool)
     std::unordered_map<COutPoint, CAmount, SaltedOutpointHasher> outpoints_value;
     for (const auto& outpoint : g_outpoints_coinbase_init_mature) {
         Assert(mempool_outpoints.insert(outpoint).second);
-        outpoints_value[outpoint] = 50 * COIN;
     }
 
     auto outpoints_updater = std::make_shared<OutpointsUpdater>(mempool_outpoints);
@@ -370,6 +374,12 @@ FUZZ_TARGET(tx_package_eval, .init = initialize_tx_pool)
     MockedTxPool& tx_pool = *static_cast<MockedTxPool*>(tx_pool_.get());
 
     chainstate.SetMempool(&tx_pool);
+
+    const CCoinsViewMemPool amount_view{WITH_LOCK(::cs_main, return &chainstate.CoinsTip()), tx_pool};
+    for (const auto& outpoint : g_outpoints_coinbase_init_mature) {
+        auto coin{amount_view.GetCoin(outpoint).value()};
+        outpoints_value[outpoint] = coin.out.nValue;
+    }
 
     LIMITED_WHILE(fuzzed_data_provider.remaining_bytes() > 0, 300)
     {

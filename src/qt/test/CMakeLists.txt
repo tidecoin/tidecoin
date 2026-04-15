@@ -38,6 +38,9 @@ endif()
 add_test(NAME test_tidecoin-qt
   COMMAND test_tidecoin-qt
 )
+set_tests_properties(test_tidecoin-qt PROPERTIES
+  RUN_SERIAL TRUE
+)
 if(WIN32 AND VCPKG_TARGET_TRIPLET)
   # On Windows, vcpkg configures Qt with `-opengl dynamic`, which makes
   # the "minimal" platform plugin unusable due to internal Qt bugs.

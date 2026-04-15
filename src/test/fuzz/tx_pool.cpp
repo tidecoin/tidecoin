@@ -207,9 +207,6 @@ FUZZ_TARGET(tx_pool_standard, .init = initialize_tx_pool)
     }
     outpoints_rbf = outpoints_supply;
 
-    // The sum of the values of all spendable outpoints
-    constexpr CAmount SUPPLY_TOTAL{COINBASE_MATURITY * 50 * COIN};
-
     SetMempoolConstraints(*node.args, fuzzed_data_provider);
     auto tx_pool_{MakeMempool(fuzzed_data_provider, node)};
     MockedTxPool& tx_pool = *static_cast<MockedTxPool*>(tx_pool_.get());
@@ -223,6 +220,15 @@ FUZZ_TARGET(tx_pool_standard, .init = initialize_tx_pool)
         return coin.out.nValue;
     };
 
+    // The sum of the values of all spendable outpoints.
+    const CAmount supply_total{[&] {
+        CAmount total{0};
+        for (const auto& op : outpoints_supply) {
+            total += GetAmount(op);
+        }
+        return total;
+    }()};
+
     LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 300)
     {
         {
@@ -231,7 +237,7 @@ FUZZ_TARGET(tx_pool_standard, .init = initialize_tx_pool)
             for (const auto& op : outpoints_supply) {
                 supply_now += GetAmount(op);
             }
-            Assert(supply_now == SUPPLY_TOTAL);
+            Assert(supply_now == supply_total);
         }
         Assert(!outpoints_supply.empty());
 

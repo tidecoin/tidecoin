@@ -78,24 +78,31 @@ int main(int argc, char* argv[])
         BitcoinApplication app;
         app.createNode(*init);
 
+        auto run_test = [&](QObject& test, const char* name) {
+            qInfo("Running %s", name);
+            const int failures{QTest::qExec(&test)};
+            qInfo("Finished %s with %d failure(s)", name, failures);
+            return failures;
+        };
+
         AppTests app_tests(app);
-        num_test_failures += QTest::qExec(&app_tests);
+        num_test_failures += run_test(app_tests, "AppTests");
 
         OptionTests options_tests(app.node());
-        num_test_failures += QTest::qExec(&options_tests);
+        num_test_failures += run_test(options_tests, "OptionTests");
 
         URITests test1;
-        num_test_failures += QTest::qExec(&test1);
+        num_test_failures += run_test(test1, "URITests");
 
         RPCNestedTests test3(app.node());
-        num_test_failures += QTest::qExec(&test3);
+        num_test_failures += run_test(test3, "RPCNestedTests");
 
 #ifdef ENABLE_WALLET
         WalletTests test5(app.node());
-        num_test_failures += QTest::qExec(&test5);
+        num_test_failures += run_test(test5, "WalletTests");
 
         AddressBookTests test6(app.node());
-        num_test_failures += QTest::qExec(&test6);
+        num_test_failures += run_test(test6, "AddressBookTests");
 #endif
 
         if (num_test_failures) {
