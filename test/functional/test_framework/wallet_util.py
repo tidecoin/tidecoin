@@ -6,6 +6,7 @@
 from collections import namedtuple
 import json
 import os
+import shutil
 import subprocess
 import unittest
 
@@ -78,6 +79,9 @@ def _get_testkeys_path():
         for candidate in _testkeys_candidates_in_builddir(builddir):
             if os.path.exists(candidate):
                 return candidate
+    path_candidate = shutil.which("tidecoin-testkeys")
+    if path_candidate is not None:
+        return path_candidate
     # Fallback to common in-repo build directories.
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     for build_dir in ("", "build", "build_dev_mode"):

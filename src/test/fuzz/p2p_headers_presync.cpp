@@ -100,24 +100,22 @@ void HeadersSyncSetup::SendMessage(FuzzedDataProvider& fuzzed_data_provider, CSe
     m_node.peerman->SendMessages(&connection);
 }
 
-CBlockHeader ConsumeHeader(FuzzedDataProvider& fuzzed_data_provider, const uint256& prev_hash, uint32_t prev_nbits)
+CBlockHeader ConsumeHeader(FuzzedDataProvider& fuzzed_data_provider,
+                           const uint256& prev_hash,
+                           uint32_t prev_nbits,
+                           const uint256& pow_limit)
 {
     CBlockHeader header;
     header.nNonce = 0;
-    // Either use the previous difficulty or let the fuzzer choose. The upper target in the
-    // range comes from the bits value of the genesis block, which is 0x1d00ffff. The lower
-    // target comes from the bits value of mainnet block 840000, which is 0x17034219.
-    // Calling lower_target.SetCompact(0x17034219) and upper_target.SetCompact(0x1d00ffff)
-    // should return the values below.
-    //
-    // RPC commands to verify:
-    // getblockheader 000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f
-    // getblockheader 0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5
+    // Either use the previous difficulty or let the fuzzer choose a low-work
+    // target. Keep the generated chain below MinimumChainWork so this harness
+    // exercises headers pre-sync instead of creating an actually viable chain.
     if (fuzzed_data_provider.ConsumeBool()) {
         header.nBits = prev_nbits;
     } else {
-        arith_uint256 lower_target = UintToArith256(uint256{"0000000000000000000342190000000000000000000000000000000000000000"});
-        arith_uint256 upper_target = UintToArith256(uint256{"00000000ffff0000000000000000000000000000000000000000000000000000"});
+        arith_uint256 upper_target = UintToArith256(pow_limit);
+        arith_uint256 lower_target = upper_target >> 4;
+        if (lower_target == 0) lower_target = upper_target;
         arith_uint256 target = ConsumeArithUInt256InRange(fuzzed_data_provider, lower_target, upper_target);
         header.nBits = target.GetCompact();
     }
@@ -127,9 +125,12 @@ CBlockHeader ConsumeHeader(FuzzedDataProvider& fuzzed_data_provider, const uint2
     return header;
 }
 
-CBlock ConsumeBlock(FuzzedDataProvider& fuzzed_data_provider, const uint256& prev_hash, uint32_t prev_nbits)
+CBlock ConsumeBlock(FuzzedDataProvider& fuzzed_data_provider,
+                    const uint256& prev_hash,
+                    uint32_t prev_nbits,
+                    const uint256& pow_limit)
 {
-    auto header = ConsumeHeader(fuzzed_data_provider, prev_hash, prev_nbits);
+    auto header = ConsumeHeader(fuzzed_data_provider, prev_hash, prev_nbits, pow_limit);
     // In order to reach the headers acceptance logic, the block is
     // constructed in a way that will pass the mutation checks.
     CBlock block{header};
@@ -176,6 +177,7 @@ FUZZ_TARGET(p2p_headers_presync, .init = initialize)
 
     ChainstateManager& chainman = *g_testing_setup->m_node.chainman;
     CBlockHeader base{chainman.GetParams().GenesisBlock()};
+    const uint256& pow_limit{chainman.GetParams().GetConsensus().powLimit};
     SetMockTime(base.nTime);
 
     LOCK(NetEventsInterface::g_msgproc_mutex);
@@ -191,7 +193,7 @@ FUZZ_TARGET(p2p_headers_presync, .init = initialize)
     LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 100)
     {
         auto finalized_block = [&]() {
-            CBlock block = ConsumeBlock(fuzzed_data_provider, base.GetHash(), base.nBits);
+            CBlock block = ConsumeBlock(fuzzed_data_provider, base.GetHash(), base.nBits, pow_limit);
             FinalizeHeader(block, chainman);
             return block;
         };
@@ -204,7 +206,7 @@ FUZZ_TARGET(p2p_headers_presync, .init = initialize)
                 std::vector<CBlock> headers;
                 headers.resize(FUZZ_MAX_HEADERS_RESULTS);
                 for (CBlock& header : headers) {
-                    header = ConsumeHeader(fuzzed_data_provider, base.GetHash(), base.nBits);
+                    header = ConsumeHeader(fuzzed_data_provider, base.GetHash(), base.nBits, pow_limit);
                     FinalizeHeader(header, chainman);
                     base = header;
                 }

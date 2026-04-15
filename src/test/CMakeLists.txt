@@ -144,6 +144,10 @@ add_executable(tidecoin_testkeys
   pq_testkeys.cpp
 )
 set_target_properties(tidecoin_testkeys PROPERTIES OUTPUT_NAME tidecoin-testkeys)
+target_link_libraries(tidecoin_testkeys
+  PRIVATE
+    core_interface
+)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_libraries(tidecoin_testkeys
     PRIVATE

@@ -177,6 +177,15 @@ template <typename WeakEnumType, size_t size>
     return uint256{v256};
 }
 
+[[nodiscard]] inline uint512 ConsumeUInt512(FuzzedDataProvider& fuzzed_data_provider) noexcept
+{
+    const std::vector<uint8_t> v512 = fuzzed_data_provider.ConsumeBytes<uint8_t>(512 / 8);
+    if (v512.size() != 512 / 8) {
+        return {};
+    }
+    return uint512{v512};
+}
+
 [[nodiscard]] inline arith_uint256 ConsumeArithUInt256(FuzzedDataProvider& fuzzed_data_provider) noexcept
 {
     return UintToArith256(ConsumeUInt256(fuzzed_data_provider));

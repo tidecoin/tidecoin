@@ -114,16 +114,11 @@ RPCHelpMan dumpprivkey()
                     for (ScriptPubKeyMan* spk_man : spk_mans) {
                         auto* desc_spk_man = dynamic_cast<DescriptorScriptPubKeyMan*>(spk_man);
                         if (!desc_spk_man) continue;
-                        std::unique_ptr<FlatSigningProvider> desc_provider;
-                        {
-                            LOCK(desc_spk_man->cs_desc_man);
-                            desc_provider = desc_spk_man->GetSigningProviderForScript(script, /*include_private=*/true);
-                        }
+                        std::unique_ptr<FlatSigningProvider> desc_provider = desc_spk_man->GetSigningProviderForScript(script, /*include_private=*/true);
                         if (!desc_provider) continue;
-                        if (desc_provider->keys.size() == 1) {
-                            key = desc_provider->keys.begin()->second;
-                        } else {
-                            key = GetSingleKeyFromProvider(*desc_provider, dest);
+                        const CKeyID keyid = GetKeyForDestination(*desc_provider, dest);
+                        if (!keyid.IsNull()) {
+                            desc_provider->GetKey(keyid, key);
                         }
                         if (key.IsValid()) break;
                     }

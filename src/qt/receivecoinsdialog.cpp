@@ -18,7 +18,6 @@
 #include <pq/pq_scheme.h>
 
 #include <array>
-#include <optional>
 
 #include <QAction>
 #include <QComboBox>
@@ -38,17 +37,15 @@ constexpr std::array<const pq::SchemeInfo*, 5> kSchemeOptions{
     &pq::kMLDSA87Info,
 };
 
-QString WalletDefaultSchemeLabel(std::optional<uint8_t> scheme_prefix)
+QString WalletDefaultSchemeLabel(const pq::SchemeInfo* scheme)
 {
-    if (scheme_prefix) {
-        if (const auto* scheme = pq::SchemeFromPrefix(*scheme_prefix)) {
-            return QObject::tr("Wallet default (%1)").arg(QString::fromLatin1(scheme->name));
-        }
+    if (scheme) {
+        return QObject::tr("Wallet default (%1)").arg(QString::fromLatin1(scheme->name));
     }
     return QObject::tr("Wallet default");
 }
 
-void PopulateSchemeCombo(QComboBox* combo, std::optional<uint8_t> default_scheme = std::nullopt)
+void PopulateSchemeCombo(QComboBox* combo, const pq::SchemeInfo* default_scheme = nullptr)
 {
     if (!combo) return;
     combo->clear();
@@ -128,8 +125,8 @@ void ReceiveCoinsDialog::setModel(WalletModel *_model)
         connect(_model->getOptionsModel(), &OptionsModel::displayUnitChanged, this, &ReceiveCoinsDialog::updateDisplayUnit);
         updateDisplayUnit();
         const auto policy = _model->getPQHDPolicy();
-        const std::optional<uint8_t> default_receive_scheme =
-            policy ? std::optional<uint8_t>{policy->default_receive_scheme} : std::nullopt;
+        const pq::SchemeInfo* default_receive_scheme =
+            policy ? pq::SchemeFromPrefix(policy->default_receive_scheme) : nullptr;
         PopulateSchemeCombo(ui->schemeCombo, default_receive_scheme);
 
         QTableView* tableView = ui->recentRequestsView;

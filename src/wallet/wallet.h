@@ -422,6 +422,10 @@ private:
      */
     int m_last_block_processed_height GUARDED_BY(cs_wallet) = -1;
 
+    /** Height used for output policy checks, kept separate so address
+     * generation does not need to lock chain state under wallet/SPKM locks. */
+    std::atomic<int> m_target_height_for_outputs{0};
+
     std::map<OutputType, ScriptPubKeyMan*> m_external_spk_managers;
     std::map<OutputType, ScriptPubKeyMan*> m_internal_spk_managers;
 
@@ -479,6 +483,7 @@ private:
     };
 
     std::map<uint256, PQHDSeedState> m_pqhd_seeds GUARDED_BY(cs_wallet);
+    std::atomic<bool> m_has_pqhd_seeds{false};
     std::optional<PQHDPolicy> m_pqhd_policy GUARDED_BY(cs_wallet);
 
     /**

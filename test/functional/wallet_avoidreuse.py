@@ -63,6 +63,14 @@ def assert_balances(node, mine, margin=0.001):
     for k,v in mine.items():
         assert_approx(got[k], v, margin)
 
+def send_confirmed_outputs(test, node, address, count, amount):
+    '''Send many outputs without building a long unconfirmed change chain.'''
+    for i in range(count):
+        node.sendtoaddress(address, amount)
+        if (i + 1) % 20 == 0:
+            test.generate(node, 1)
+    test.generate(node, 1)
+
 class AvoidReuseTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 2
@@ -302,11 +310,8 @@ class AvoidReuseTest(BitcoinTestFramework):
         new_addr = self.nodes[1].getnewaddress()
         ret_addr = self.nodes[0].getnewaddress()
 
-        # Send 101 outputs of 1 BTC to the same, reused address in the wallet
-        for _ in range(101):
-            self.nodes[0].sendtoaddress(new_addr, 1)
-
-        self.generate(self.nodes[0], 1)
+        # Send 101 confirmed outputs of 1 BTC to the same, reused address in the wallet
+        send_confirmed_outputs(self, self.nodes[0], new_addr, 101, 1)
 
         # Sending a transaction that is smaller than each one of the
         # available outputs
@@ -330,11 +335,8 @@ class AvoidReuseTest(BitcoinTestFramework):
         new_addr = self.nodes[1].getnewaddress()
         ret_addr = self.nodes[0].getnewaddress()
 
-        # Send 202 outputs of 1 BTC to the same, reused address in the wallet
-        for _ in range(202):
-            self.nodes[0].sendtoaddress(new_addr, 1)
-
-        self.generate(self.nodes[0], 1)
+        # Send 202 confirmed outputs of 1 BTC to the same, reused address in the wallet
+        send_confirmed_outputs(self, self.nodes[0], new_addr, 202, 1)
 
         # Sending a transaction that needs to use the full groups
         # of 100 inputs but also the incomplete group of 2 inputs.

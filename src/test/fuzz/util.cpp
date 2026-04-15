@@ -213,6 +213,9 @@ CTxDestination ConsumeTxDestination(FuzzedDataProvider& fuzzed_data_provider) no
         },
         [&] {
             tx_destination = WitnessV0KeyHash{ConsumeUInt160(fuzzed_data_provider)};
+        },
+        [&] {
+            tx_destination = WitnessV1ScriptHash512{ConsumeUInt512(fuzzed_data_provider)};
         }
     )};
     Assert(call_size == std::variant_size_v<CTxDestination>);

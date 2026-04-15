@@ -265,6 +265,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
         self.config = configparser.ConfigParser()
         self.config.read_file(open(self.options.configfile))
+        os.environ.setdefault("BUILDDIR", self.config["environment"]["BUILDDIR"])
         self.binary_paths = self.get_binary_paths()
         if self.options.v1transport:
             self.options.v2transport=False

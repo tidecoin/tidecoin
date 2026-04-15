@@ -892,26 +892,34 @@ bool DescriptorScriptPubKeyMan::HasPrivKey(const CKeyID& keyid) const
 
 std::optional<CKey> DescriptorScriptPubKeyMan::GetKey(const CKeyID& keyid) const
 {
-    AssertLockHeld(cs_desc_man);
-    if (m_storage.HasEncryptionKeys() && !m_storage.IsLocked()) {
-        const auto& it = m_map_crypted_keys.find(keyid);
-        if (it == m_map_crypted_keys.end()) {
+    if (m_storage.HasEncryptionKeys()) {
+        std::optional<std::pair<CPubKey, std::vector<unsigned char>>> crypted_key;
+        {
+            LOCK(cs_desc_man);
+            const auto& it = m_map_crypted_keys.find(keyid);
+            if (it == m_map_crypted_keys.end()) {
+                return std::nullopt;
+            }
+            crypted_key.emplace(it->second.first, it->second.second);
+        }
+        if (m_storage.IsLocked()) {
             return std::nullopt;
         }
-        const std::vector<unsigned char>& crypted_secret = it->second.second;
         CKey key;
         if (!Assume(m_storage.WithEncryptionKey([&](const CKeyingMaterial& encryption_key) {
-            return DecryptKey(encryption_key, crypted_secret, it->second.first, key);
+            return DecryptKey(encryption_key, crypted_key->second, crypted_key->first, key);
         }))) {
             return std::nullopt;
         }
         return key;
     }
+
+    LOCK(cs_desc_man);
     const auto& it = m_map_keys.find(keyid);
-    if (it == m_map_keys.end()) {
-        return std::nullopt;
+    if (it != m_map_keys.end()) {
+        return it->second;
     }
-    return it->second;
+    return std::nullopt;
 }
 
 bool DescriptorScriptPubKeyMan::TopUp(unsigned int size)
@@ -1130,28 +1138,34 @@ int64_t DescriptorScriptPubKeyMan::GetTimeFirstKey() const
 
 std::unique_ptr<FlatSigningProvider> DescriptorScriptPubKeyMan::GetSigningProvider(const CScript& script, bool include_private) const
 {
-    LOCK(cs_desc_man);
+    int32_t index;
+    {
+        LOCK(cs_desc_man);
 
-    // Find the index of the script
-    auto it = m_map_script_pub_keys.find(script);
-    if (it == m_map_script_pub_keys.end()) {
-        return nullptr;
+        // Find the index of the script
+        auto it = m_map_script_pub_keys.find(script);
+        if (it == m_map_script_pub_keys.end()) {
+            return nullptr;
+        }
+        index = it->second;
     }
-    int32_t index = it->second;
 
     return GetSigningProvider(index, include_private);
 }
 
 std::unique_ptr<FlatSigningProvider> DescriptorScriptPubKeyMan::GetSigningProvider(const CPubKey& pubkey) const
 {
-    LOCK(cs_desc_man);
+    int32_t index;
+    {
+        LOCK(cs_desc_man);
 
-    // Find index of the pubkey
-    auto it = m_map_pubkeys.find(pubkey);
-    if (it == m_map_pubkeys.end()) {
-        return nullptr;
+        // Find index of the pubkey
+        auto it = m_map_pubkeys.find(pubkey);
+        if (it == m_map_pubkeys.end()) {
+            return nullptr;
+        }
+        index = it->second;
     }
-    int32_t index = it->second;
 
     // Always try to get the signing provider with private keys. This function should only be called during signing anyways
     std::unique_ptr<FlatSigningProvider> out = GetSigningProvider(index, true);
@@ -1163,28 +1177,52 @@ std::unique_ptr<FlatSigningProvider> DescriptorScriptPubKeyMan::GetSigningProvid
 
 std::unique_ptr<FlatSigningProvider> DescriptorScriptPubKeyMan::GetSigningProvider(int32_t index, bool include_private) const
 {
-    AssertLockHeld(cs_desc_man);
-
     std::unique_ptr<FlatSigningProvider> out_keys = std::make_unique<FlatSigningProvider>();
+    std::shared_ptr<Descriptor> descriptor;
+    KeyMap keys;
+    CryptedKeyMap crypted_keys;
+    bool have_pqhd_seeds{false};
 
-    // Fetch SigningProvider from cache to avoid re-deriving
-    auto it = m_map_signing_providers.find(index);
-    if (it != m_map_signing_providers.end()) {
-        out_keys->Merge(FlatSigningProvider{it->second});
-    } else {
-        // Get the scripts and keys for this script
-        std::vector<CScript> scripts_temp;
-        if (!m_wallet_descriptor.descriptor->ExpandFromCache(index, m_wallet_descriptor.cache, scripts_temp, *out_keys)) return nullptr;
+    {
+        LOCK(cs_desc_man);
+        descriptor = m_wallet_descriptor.descriptor;
 
-        // Cache SigningProvider so we don't need to re-derive if we need this SigningProvider again
-        m_map_signing_providers[index] = *out_keys;
+        // Fetch SigningProvider from cache to avoid re-deriving
+        auto it = m_map_signing_providers.find(index);
+        if (it != m_map_signing_providers.end()) {
+            out_keys->Merge(FlatSigningProvider{it->second});
+        } else {
+            // Get the scripts and keys for this script
+            std::vector<CScript> scripts_temp;
+            if (!descriptor->ExpandFromCache(index, m_wallet_descriptor.cache, scripts_temp, *out_keys)) return nullptr;
+
+            // Cache SigningProvider so we don't need to re-derive if we need this SigningProvider again
+            m_map_signing_providers[index] = *out_keys;
+        }
+
+        if (include_private) {
+            keys = m_map_keys;
+            crypted_keys = m_map_crypted_keys;
+            have_pqhd_seeds = m_storage.HasPQHDSeeds();
+        }
     }
 
-    if (HavePrivateKeys() && include_private) {
+    if (include_private && (!keys.empty() || !crypted_keys.empty() || have_pqhd_seeds)) {
         FlatSigningProvider master_provider;
-        master_provider.keys = GetKeys();
+        master_provider.keys = std::move(keys);
+        if (!crypted_keys.empty() && !m_storage.IsLocked()) {
+            for (const auto& key_pair : crypted_keys) {
+                const CPubKey& pubkey = key_pair.second.first;
+                const std::vector<unsigned char>& crypted_secret = key_pair.second.second;
+                CKey key;
+                m_storage.WithEncryptionKey([&](const CKeyingMaterial& encryption_key) {
+                    return DecryptKey(encryption_key, crypted_secret, pubkey, key);
+                });
+                master_provider.keys[pubkey.GetID()] = key;
+            }
+        }
         const PQHDWalletSigningProvider provider{m_storage, master_provider};
-        m_wallet_descriptor.descriptor->ExpandPrivate(index, provider, *out_keys);
+        descriptor->ExpandPrivate(index, provider, *out_keys);
     }
 
     return out_keys;
@@ -1317,11 +1355,7 @@ std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTran
                 // Descriptor pubkey index lookups can miss keys for some PQHD-derived
                 // layouts even though the wallet owns the key. Fall back to direct
                 // key-id lookup in the descriptor key store.
-                std::optional<CKey> key;
-                {
-                    LOCK(cs_desc_man);
-                    key = GetKey(pubkey.GetID());
-                }
+                std::optional<CKey> key = GetKey(pubkey.GetID());
                 if (key) {
                     keys->pubkeys.emplace(pubkey.GetID(), pubkey);
                     if (sign) {

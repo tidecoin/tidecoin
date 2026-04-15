@@ -712,6 +712,7 @@ void CWallet::SetLastBlockProcessedInMem(int block_height, uint256 block_hash)
 
     m_last_block_processed = block_hash;
     m_last_block_processed_height = block_height;
+    m_target_height_for_outputs.store(std::max(block_height + 1, 0), std::memory_order_relaxed);
 }
 
 void CWallet::SetLastBlockProcessed(int block_height, uint256 block_hash)
@@ -1877,6 +1878,7 @@ bool CWallet::LoadPQHDSeed(const uint256& seed_id, PQHDSeed&& seed)
     state.encrypted = false;
     state.seed = std::move(seed.seed);
     m_pqhd_seeds.emplace(seed_id, std::move(state));
+    m_has_pqhd_seeds.store(true, std::memory_order_relaxed);
     MaybeUpdateBirthTime(seed.nCreateTime);
     return true;
 }
@@ -1891,6 +1893,7 @@ bool CWallet::LoadPQHDCryptedSeed(const uint256& seed_id, PQHDCryptedSeed&& seed
     state.encrypted = true;
     state.crypted_seed = std::move(seed.crypted_seed);
     m_pqhd_seeds.emplace(seed_id, std::move(state));
+    m_has_pqhd_seeds.store(true, std::memory_order_relaxed);
     MaybeUpdateBirthTime(seed.nCreateTime);
     return true;
 }
@@ -2230,19 +2233,13 @@ util::Result<void> CWallet::RemovePQHDSeed(const uint256& seed_id)
     }
     CleanseAndClearVector(it->second.seed);
     m_pqhd_seeds.erase(it);
+    m_has_pqhd_seeds.store(!m_pqhd_seeds.empty(), std::memory_order_relaxed);
     return util::Result<void>();
 }
 
 int CWallet::GetTargetHeightForOutputs() const
 {
-    // The wallet can exist "offline" (e.g. tests or wallet tooling) without a
-    // chain interface attached. In that case, fall back to height 0.
-    if (!m_chain) return 0;
-    const std::optional<int> tip_height = m_chain->getHeight();
-    if (!tip_height || *tip_height < 0) {
-        return 0;
-    }
-    return *tip_height + 1;
+    return m_target_height_for_outputs.load(std::memory_order_relaxed);
 }
 
 void CWallet::InitWalletFlags(uint64_t flags)
@@ -4491,8 +4488,7 @@ bool CWallet::HasEncryptionKeys() const
 
 bool CWallet::HasPQHDSeeds() const
 {
-    LOCK(cs_wallet);
-    return !m_pqhd_seeds.empty();
+    return m_has_pqhd_seeds.load(std::memory_order_relaxed);
 }
 
 std::optional<pqhd::SecureSeed32> CWallet::GetPQHDSeed(const uint256& seed_id) const
@@ -5508,7 +5504,6 @@ std::optional<CKey> CWallet::GetKey(const CKeyID& keyid) const
     for (const auto& spkm : GetAllScriptPubKeyMans()) {
         const DescriptorScriptPubKeyMan* desc_spkm = dynamic_cast<DescriptorScriptPubKeyMan*>(spkm);
         assert(desc_spkm);
-        LOCK(desc_spkm->cs_desc_man);
         if (std::optional<CKey> key = desc_spkm->GetKey(keyid)) {
             return key;
         }
