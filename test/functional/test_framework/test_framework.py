@@ -877,7 +877,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             # Wait for RPC connections to be ready
             cache_node.wait_for_rpc_connection()
 
-            if self.uses_wallet is not False:
+            if self.uses_wallet is not False and self.is_wallet_compiled():
                 # No default wallet is auto-created; create one for cache generation.
                 cache_node.createwallet(wallet_name=self.default_wallet_name, load_on_startup=True)
 

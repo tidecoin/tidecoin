@@ -44,6 +44,15 @@ _pq_key_index = 0
 _pq_seed_hex = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
 _pq_default_scheme = os.environ.get("TIDECOIN_TEST_SCHEME", "falcon-512")
 
+def _testkeys_candidates(path):
+    yield path
+    if not path.endswith(".exe"):
+        yield path + ".exe"
+
+def _testkeys_candidates_in_builddir(builddir):
+    for bin_dir in ("bin", os.path.join("bin", "Release"), os.path.join("bin", "RelWithDebInfo"), os.path.join("bin", "Debug")):
+        yield from _testkeys_candidates(os.path.join(builddir, bin_dir, "tidecoin-testkeys"))
+
 def set_keygen_node(node):
     """Set the node used for PQHD-backed key generation in tests."""
     global _testkeys_path
@@ -55,22 +64,26 @@ def set_keygen_node(node):
         pass
 
 def _get_testkeys_path():
-    if _testkeys_path is not None and os.path.exists(_testkeys_path):
-        return _testkeys_path
+    if _testkeys_path is not None:
+        for candidate in _testkeys_candidates(_testkeys_path):
+            if os.path.exists(candidate):
+                return candidate
     env_path = os.environ.get("TIDECOIN_TESTKEYS")
-    if env_path and os.path.exists(env_path):
-        return env_path
+    if env_path:
+        for candidate in _testkeys_candidates(env_path):
+            if os.path.exists(candidate):
+                return candidate
     builddir = os.environ.get("BUILDDIR")
     if builddir:
-        candidate = os.path.join(builddir, "bin", "tidecoin-testkeys")
-        if os.path.exists(candidate):
-            return candidate
+        for candidate in _testkeys_candidates_in_builddir(builddir):
+            if os.path.exists(candidate):
+                return candidate
     # Fallback to common in-repo build directories.
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
     for build_dir in ("build", "build_dev_mode"):
-        candidate = os.path.join(repo_root, build_dir, "bin", "tidecoin-testkeys")
-        if os.path.exists(candidate):
-            return candidate
+        for candidate in _testkeys_candidates_in_builddir(os.path.join(repo_root, build_dir)):
+            if os.path.exists(candidate):
+                return candidate
     raise FileNotFoundError("tidecoin-testkeys not found; set TIDECOIN_TESTKEYS or BUILDDIR")
 
 def _run_testkeys(*, scheme: str, count: int = 1):

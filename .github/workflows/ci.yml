@@ -284,6 +284,7 @@ jobs:
               tidecoin-util.exe
               tidecoin-wallet.exe
               test_tidecoin.exe
+              tidecoin-testkeys.exe
               bench_tidecoin.exe
             )
           else
@@ -406,6 +407,7 @@ jobs:
             tidecoin-util.exe
             tidecoin-wallet.exe
             test_tidecoin.exe
+            tidecoin-testkeys.exe
             bench_tidecoin.exe
           )
 

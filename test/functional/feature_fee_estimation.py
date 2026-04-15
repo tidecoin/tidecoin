@@ -130,6 +130,20 @@ def make_tx(wallet, utxo, feerate):
         fee_rate=Decimal(feerate * 1000) / COIN,
     )
 
+
+def make_mempool_accepted_tx(wallet, node, utxos, feerate):
+    """Pop the first UTXO that can produce a mempool-accepted self-transfer."""
+    while len(utxos) > 0:
+        utxo = utxos.pop(0)
+        try:
+            tx = make_tx(wallet, utxo, feerate)
+        except RuntimeError:
+            continue
+        if node.testmempoolaccept([tx["hex"]])[0]["allowed"]:
+            return utxo, tx
+    raise AssertionError(f"No UTXO can make a mempool-accepted transaction at {feerate} sat/vB")
+
+
 def check_fee_estimates_btw_modes(node, expected_conservative, expected_economical):
     fee_est_conservative = node.estimatesmartfee(1, estimate_mode="conservative")['feerate']
     fee_est_economical = node.estimatesmartfee(1, estimate_mode="economical")['feerate']
@@ -267,14 +281,14 @@ class EstimateFeeTest(BitcoinTestFramework):
             # Broadcast 45 low fee transactions that will need to be RBF'd
             txs = []
             for _ in range(45):
-                u = utxos.pop(0)
+                u, _ = make_mempool_accepted_tx(self.wallet, node, utxos, high_feerate)
                 tx = make_tx(self.wallet, u, low_feerate)
                 utxos_to_respend.append(u)
                 txids_to_replace.append(tx["txid"])
                 txs.append(tx)
             # Broadcast 5 low fee transaction which don't need to
             for _ in range(5):
-                tx = make_tx(self.wallet, utxos.pop(0), low_feerate)
+                _, tx = make_mempool_accepted_tx(self.wallet, node, utxos, low_feerate)
                 txs.append(tx)
             batch_send_tx = [node.sendrawtransaction.get_request(tx["hex"]) for tx in txs]
             for n in self.nodes:

@@ -6,30 +6,10 @@
 #include <chain.h>
 #include <tinyformat.h>
 #include <util/time.h>
-#include <validation.h>
 
 std::string CBlockFileInfo::ToString() const
 {
     return strprintf("CBlockFileInfo(blocks=%u, size=%u, heights=%u...%u, time=%s...%s)", nBlocks, nSize, nHeightFirst, nHeightLast, FormatISO8601Date(nTimeFirst), FormatISO8601Date(nTimeLast));
-}
-
-// Auxpow headers cannot be reconstructed from CBlockIndex alone; read from disk when needed.
-CBlockHeader CBlockIndex::GetBlockHeader(const ChainstateManager& chainman) const
-{
-    CBlockHeader block;
-    block.nVersion = nVersion;
-
-    if (block.IsAuxpow()) {
-        chainman.m_blockman.ReadBlockHeaderFromDisk(block, this);
-        return block;
-    }
-
-    if (pprev) block.hashPrevBlock = pprev->GetBlockHash();
-    block.hashMerkleRoot = hashMerkleRoot;
-    block.nTime = nTime;
-    block.nBits = nBits;
-    block.nNonce = nNonce;
-    return block;
 }
 
 std::string CBlockIndex::ToString() const

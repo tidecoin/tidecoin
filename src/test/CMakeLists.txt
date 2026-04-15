@@ -144,12 +144,27 @@ add_executable(tidecoin_testkeys
   pq_testkeys.cpp
 )
 set_target_properties(tidecoin_testkeys PROPERTIES OUTPUT_NAME tidecoin-testkeys)
-target_link_libraries(tidecoin_testkeys
-  PRIVATE
-    tidecoin_common
-    tidecoin_util
-    univalue
-)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_libraries(tidecoin_testkeys
+    PRIVATE
+      -Wl,--start-group
+      tidecoin_common
+      tidecoin_util
+      univalue
+      tidecoin_consensus
+      tidecoin_quantum
+      tidecoin_crypto
+      tidecoin_clientversion
+      -Wl,--end-group
+  )
+else()
+  target_link_libraries(tidecoin_testkeys
+    PRIVATE
+      tidecoin_common
+      tidecoin_util
+      univalue
+  )
+endif()
 
 include(TargetDataSources)
 target_json_data_sources(test_tidecoin

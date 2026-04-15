@@ -116,7 +116,7 @@ if [ -z "$NO_DEPENDS" ]; then
   if [[ $CI_IMAGE_NAME_TAG == *centos* ]] && [ -x /bin/dash ]; then
     SHELL_OPTS="CONFIG_SHELL=/bin/dash"
   else
-    SHELL_OPTS="CONFIG_SHELL="
+    SHELL_OPTS=""
   fi
   bash -c "$SHELL_OPTS make $MAKEJOBS -C depends HOST=$HOST $DEP_OPTS LOG=1"
 fi

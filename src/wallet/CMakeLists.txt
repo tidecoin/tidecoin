@@ -35,12 +35,23 @@ add_library(tidecoin_wallet STATIC EXCLUDE_FROM_ALL
   walletdb.cpp
   walletutil.cpp
 )
+
+set(wallet_sqlite_target "")
+foreach(sqlite_target IN ITEMS unofficial::sqlite3::sqlite3 SQLite3::SQLite3 SQLite::SQLite3)
+  if(TARGET ${sqlite_target})
+    set(wallet_sqlite_target ${sqlite_target})
+    break()
+  endif()
+endforeach()
+if(NOT wallet_sqlite_target)
+  message(FATAL_ERROR "SQLite target not found")
+endif()
+
 target_link_libraries(tidecoin_wallet
   PRIVATE
     core_interface
     tidecoin_common
-    $<TARGET_NAME_IF_EXISTS:unofficial::sqlite3::sqlite3>
-    $<TARGET_NAME_IF_EXISTS:SQLite::SQLite3>
+    ${wallet_sqlite_target}
     univalue
     Boost::headers
     $<TARGET_NAME_IF_EXISTS:USDT::headers>

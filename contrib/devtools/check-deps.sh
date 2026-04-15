@@ -47,6 +47,11 @@ declare -A SUPPRESS
 # https://github.com/bitcoin/bitcoin/issues/10102
 SUPPRESS["common.cpp.o interface_ui.cpp.o _Z11InitWarningRK13bilingual_str"]=1
 SUPPRESS["common.cpp.o interface_ui.cpp.o _Z9InitErrorRK13bilingual_str"]=1
+# wallet/rpc/getauxrpc.cpp reserves wallet coinbase keys but delegates AuxPoW
+# block creation/submission to the node mining RPC helper.
+SUPPRESS["getauxrpc.cpp.o auxpow_miner.cpp.o _ZN11AuxpowMiner14createAuxBlockERK14JSONRPCRequestRK7CScript"]=1
+SUPPRESS["getauxrpc.cpp.o auxpow_miner.cpp.o _ZN11AuxpowMiner3getEv"]=1
+SUPPRESS["getauxrpc.cpp.o auxpow_miner.cpp.o _ZNK11AuxpowMiner14submitAuxBlockERK14JSONRPCRequestRKNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEESA_"]=1
 
 usage() {
    echo "Usage: $(basename "${BASH_SOURCE[0]}") [BUILD_DIR]"

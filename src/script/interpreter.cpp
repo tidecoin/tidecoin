@@ -12,8 +12,6 @@
 #include <pubkey.h>
 #include <script/script.h>
 #include <uint256.h>
-#include <util/strencodings.h>
-#include <logging.h>
 
 typedef std::vector<unsigned char> valtype;
 
@@ -31,15 +29,6 @@ inline bool set_error(ScriptError* ret, const ScriptError serror)
     if (ret)
         *ret = serror;
     return false;
-}
-
-std::string HexPrefix(const std::vector<unsigned char>& data, size_t max_len)
-{
-    if (data.empty()) {
-        return "";
-    }
-    const size_t len = std::min(max_len, data.size());
-    return HexStr(std::span<const unsigned char>(data.data(), len));
 }
 
 class SHA512Writer
@@ -1445,16 +1434,12 @@ bool GenericTransactionSignatureChecker<T>::CheckPostQuantumSignature(const std:
 {
     CPubKey pubkey(vchPubKey);
     if (!pubkey.IsValid()) {
-        LogPrintf("CheckPostQuantumSignature: invalid pubkey size=%u prefix=%s sigsize=%u sigprefix=%s\n",
-                 vchPubKey.size(), HexPrefix(vchPubKey, 4), vchSigIn.size(), HexPrefix(vchSigIn, 4));
         return false;
     }
 
     // Hash type is one byte tacked on to the end of the signature
     std::vector<unsigned char> vchSig(vchSigIn);
     if (vchSig.empty()) {
-        LogPrintf("CheckPostQuantumSignature: empty signature pubkeysize=%u prefix=%s\n",
-                 vchPubKey.size(), HexPrefix(vchPubKey, 4));
         return false;
     }
     int nHashType = vchSig.back();
@@ -1467,15 +1452,10 @@ bool GenericTransactionSignatureChecker<T>::CheckPostQuantumSignature(const std:
 
     if (sigversion == SigVersion::WITNESS_V1_512) {
         if (nHashType == 0) {
-            LogPrintf("CheckPostQuantumSignature: zero sighash byte not allowed for v1_512 pubkeysize=%u prefix=%s\n",
-                      vchPubKey.size(), HexPrefix(vchPubKey, 4));
             return false;
         }
         uint512 sighash = SignatureHash512(scriptCode, *txTo, nIn, nHashType, amount, this->txdata);
         if (!pubkey.Verify512(sighash, vchSig)) {
-            LogPrintf("CheckPostQuantumSignature: verify failed sighash=%s hashtype=%02x sigversion=%d sigsize=%u sigprefix=%s pubkeysize=%u pubprefix=%s scriptcodesize=%u\n",
-                     sighash.ToString(), nHashType, static_cast<int>(sigversion), vchSig.size(), HexPrefix(vchSig, 4),
-                     vchPubKey.size(), HexPrefix(vchPubKey, 4), scriptCode.size());
             return false;
         }
         return true;
@@ -1484,9 +1464,6 @@ bool GenericTransactionSignatureChecker<T>::CheckPostQuantumSignature(const std:
     uint256 sighash = SignatureHash(scriptCode, *txTo, nIn, nHashType, amount, sigversion, this->txdata, &m_sighash_cache);
 
     if (!VerifyPostQuantumSignature(vchSig, pubkey, sighash)) {
-        LogPrintf("CheckPostQuantumSignature: verify failed sighash=%s hashtype=%02x sigversion=%d sigsize=%u sigprefix=%s pubkeysize=%u pubprefix=%s scriptcodesize=%u\n",
-                 sighash.ToString(), nHashType, static_cast<int>(sigversion), vchSig.size(), HexPrefix(vchSig, 4),
-                 vchPubKey.size(), HexPrefix(vchPubKey, 4), scriptCode.size());
         return false;
     }
 

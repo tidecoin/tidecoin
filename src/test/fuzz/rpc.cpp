@@ -74,17 +74,20 @@ const std::vector<std::string> RPC_COMMANDS_NOT_SAFE_FOR_FUZZING{
     "addconnection",  // avoid DNS lookups
     "addnode",        // avoid DNS lookups
     "addpeeraddress", // avoid DNS lookups
+    "createauxblock", // avoid prohibitively slow block assembly
     "dumptxoutset",   // avoid writing to disk
     "enumeratesigners",
     "echoipc",              // avoid assertion failure (Assertion `"EnsureAnyNodeContext(request.context).init" && check' failed.)
     "generatetoaddress",    // avoid prohibitively slow execution (when `num_blocks` is large)
     "generatetodescriptor", // avoid prohibitively slow execution (when `nblocks` is large)
+    "getauxblock",          // avoid prohibitively slow block assembly
     "gettxoutproof",        // avoid prohibitively slow execution
     "importmempool", // avoid reading from disk
     "loadtxoutset",   // avoid reading from disk
     "loadwallet",   // avoid reading from disk
     "savemempool",           // disabled as a precautionary measure: may take a file path argument in the future
     "setban",                // avoid DNS lookups
+    "submitauxblock",        // avoid mutating AuxPoW submission state
     "stop",                  // avoid shutdown state
 };
 
