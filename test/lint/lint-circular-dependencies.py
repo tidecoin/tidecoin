@@ -13,15 +13,6 @@ import sys
 
 EXPECTED_CIRCULAR_DEPENDENCIES = (
     "auxpow -> primitives/block -> auxpow",
-    "chain -> validation -> chain",
-    "chain -> validation -> consensus/tx_verify -> chain",
-    "chain -> validation -> deploymentstatus -> chain",
-    "chain -> validation -> kernel/chain -> chain",
-    "chain -> validation -> pow -> chain",
-    "chain -> validation -> txmempool -> chain",
-    "chain -> validation -> validationinterface -> chain",
-    "chain -> validation -> versionbits -> chain",
-    "chain -> validation -> versionbits -> versionbits_impl -> chain",
     "chainparamsbase -> common/args -> chainparamsbase",
     "node/blockstorage -> validation -> node/blockstorage",
     "node/utxo_snapshot -> validation -> node/utxo_snapshot",

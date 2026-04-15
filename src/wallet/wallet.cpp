@@ -3523,6 +3523,7 @@ std::shared_ptr<CWallet> CWallet::Create(WalletContext& context, const std::stri
 
         struct WalletCreationProgressGuard {
             CWallet& wallet;
+            explicit WalletCreationProgressGuard(CWallet& wallet_in) : wallet{wallet_in} {}
             ~WalletCreationProgressGuard() { wallet.FinishWalletCreationProgress(); }
         };
         std::optional<WalletCreationProgressGuard> progress_guard;
@@ -3541,7 +3542,6 @@ std::shared_ptr<CWallet> CWallet::Create(WalletContext& context, const std::stri
         }
 
         if (progress_guard) {
-            walletInstance->FinishWalletCreationProgress();
             progress_guard.reset();
         }
 
