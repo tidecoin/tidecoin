@@ -37,6 +37,7 @@ Configuration files
 * `trusted-git-root`: This file should contain a single git commit hash which is the first unsigned git commit (hence it is the "root of trust").
 * `trusted-sha512-root-commit`: This file should contain a single git commit hash which is the first commit without a SHA512 root commitment.
 * `trusted-keys`: This file should contain a \n-delimited list of all PGP fingerprints of authorized commit signers (primary, not subkeys).
+* `trusted-ssh-allowed-signers`: This file should contain SSH allowed signers for authorized commit signers. Tidecoin CI populates this from `tidecoin/guix.sigs`.
 * `allow-revsig-commits`: This file should contain a \n-delimited list of git commit hashes. See next section for more info.
 
 Import trusted keys
@@ -45,6 +46,12 @@ In order to check the commit signatures, you must add the trusted PGP keys to yo
 
 ```sh
 gpg --keyserver hkps://keys.openpgp.org --recv-keys $(<contrib/verify-commits/trusted-keys)
+```
+
+For SSH git signatures, configure Git with the allowed signers file:
+
+```bash
+git config gpg.ssh.allowedSignersFile contrib/verify-commits/trusted-ssh-allowed-signers
 ```
 
 Key expiry/revocation

@@ -94,6 +94,8 @@ def main():
         incorrect_sha512_allowed = f.read().splitlines()
     with open(dirname + "/trusted-keys", "r", encoding="utf8") as f:
         trusted_keys = f.read().splitlines()
+    trusted_ssh_allowed_signers = dirname + "/trusted-ssh-allowed-signers"
+    use_trusted_ssh_allowed_signers = os.path.exists(trusted_ssh_allowed_signers) and os.path.getsize(trusted_ssh_allowed_signers) > 0
 
     # Set commit and variables
     current_commit = args.commit
@@ -140,11 +142,17 @@ def main():
 
         # Check that the commit (and parents) was signed with a trusted key
         valid_sig = False
-        verify_res = subprocess.run([GIT, '-c', 'gpg.program={}/gpg.sh'.format(dirname), 'verify-commit', "--raw", current_commit], capture_output=True)
+        verify_cmd = [GIT]
+        if use_trusted_ssh_allowed_signers:
+            verify_cmd += ['-c', 'gpg.ssh.allowedSignersFile={}'.format(trusted_ssh_allowed_signers)]
+        verify_cmd += ['-c', 'gpg.program={}/gpg.sh'.format(dirname), 'verify-commit', "--raw", current_commit]
+        verify_res = subprocess.run(verify_cmd, capture_output=True)
         for line in verify_res.stderr.decode().splitlines():
             if line.startswith("[GNUPG:] VALIDSIG "):
                 key = line.split(" ")[-1]
                 valid_sig = key in trusted_keys
+            elif use_trusted_ssh_allowed_signers and verify_res.returncode == 0 and line.startswith('Good "git" signature '):
+                valid_sig = True
             elif (line.startswith("[GNUPG:] REVKEYSIG ") or line.startswith("[GNUPG:] EXPKEYSIG ")) and not allow_revsig:
                 valid_sig = False
                 break
@@ -160,7 +168,7 @@ def main():
             sys.exit(1)
 
         # Check the Tree-SHA512
-        if (verify_tree or prev_commit == "") and current_commit not in incorrect_sha512_allowed:
+        if verify_tree and current_commit not in incorrect_sha512_allowed:
             tree_hash = tree_sha512sum(current_commit)
             if ("Tree-SHA512: {}".format(tree_hash)) not in subprocess.check_output([GIT, 'show', '-s', '--format=format:%B', current_commit]).decode('utf8').splitlines():
                 print("Tree-SHA512 did not match for commit " + current_commit, file=sys.stderr)

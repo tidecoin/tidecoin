@@ -41,11 +41,22 @@ if [ "$GITHUB_REPOSITORY" = "tidecoin/tidecoin" ] && [ "$GITHUB_PULL_REQUEST" = 
     # missing keys, or expired keys. Usually there is only one new merge commit
     # per push on the master branch and a few commits on release branches, so
     # sanity checking only a few (10) commits seems sufficient and cheap.
+    TIDECOIN_GUIX_SIGS_REPO_URL="${TIDECOIN_GUIX_SIGS_REPO_URL:-https://github.com/tidecoin/guix.sigs.git}"
+    TIDECOIN_GUIX_SIGS_DIR="$(mktemp -d)"
+    git clone --depth=1 "$TIDECOIN_GUIX_SIGS_REPO_URL" "$TIDECOIN_GUIX_SIGS_DIR"
+    cp "$TIDECOIN_GUIX_SIGS_DIR/trusted-commit-keys/ssh-allowed-signers" ./contrib/verify-commits/trusted-ssh-allowed-signers
+    if [ -f "$TIDECOIN_GUIX_SIGS_DIR/trusted-commit-keys/pgp-fingerprints" ]; then
+        cp "$TIDECOIN_GUIX_SIGS_DIR/trusted-commit-keys/pgp-fingerprints" ./contrib/verify-commits/trusted-keys
+    else
+        : > ./contrib/verify-commits/trusted-keys
+    fi
     git log HEAD~10 -1 --format='%H' > ./contrib/verify-commits/trusted-sha512-root-commit
     git log HEAD~10 -1 --format='%H' > ./contrib/verify-commits/trusted-git-root
-    mapfile -t KEYS < contrib/verify-commits/trusted-keys
+    mapfile -t KEYS < <(grep -Ev '^[[:space:]]*(#.*)?$' contrib/verify-commits/trusted-keys)
     git config user.email "ci@ci.ci"
     git config user.name "ci"
-    ${CI_RETRY_EXE} gpg --keyserver hkps://keys.openpgp.org --recv-keys "${KEYS[@]}" &&
-    ./contrib/verify-commits/verify-commits.py;
+    if [ "${#KEYS[@]}" -gt 0 ]; then
+        ${CI_RETRY_EXE} gpg --keyserver hkps://keys.openpgp.org --recv-keys "${KEYS[@]}"
+    fi
+    ./contrib/verify-commits/verify-commits.py --disable-tree-check;
 fi

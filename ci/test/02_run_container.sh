@@ -97,7 +97,7 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
   fi
   echo "Prune all dangling $CI_IMAGE_LABEL images"
   # When detecting podman-docker, `--external` should be added.
-  docker image prune --force --filter "label=$CI_IMAGE_LABEL"
+  docker image prune --force --filter "label=$CI_IMAGE_LABEL" || true
 
   CI_RUNTIME_CONTAINER_NAME="${CONTAINER_NAME}"
   if [ -n "${GITHUB_RUN_ID:-}" ]; then
