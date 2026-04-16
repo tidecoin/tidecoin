@@ -499,13 +499,13 @@ jobs:
             file-env: './ci/test/00_setup_env_native_tidy.sh'
 
           - name: 'TSan, depends, no gui'
-            runner: '["self-hosted", "Linux", "X64"]'
-            timeout-minutes: 120
+            runner: '"ubuntu-24.04"'
+            timeout-minutes: 240
             file-env: './ci/test/00_setup_env_native_tsan.sh'
 
           - name: 'MSan, depends'
-            runner: '["self-hosted", "Linux", "X64"]'
-            timeout-minutes: 120
+            runner: '"ubuntu-24.04"'
+            timeout-minutes: 240
             file-env: './ci/test/00_setup_env_native_msan.sh'
 
     steps:
@@ -579,4 +579,14 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             PR_FLAG="-e GITHUB_PULL_REQUEST=1"
           fi
-          docker run --rm $PR_FLAG -e GITHUB_REPOSITORY="${{ github.repository }}" -v "$(pwd)":/tidecoin "$CONTAINER_NAME"
+          if docker run --rm -v "$(pwd)":/ci-bind-check:ro "$CONTAINER_NAME" test -e /ci-bind-check/ci/lint/06_script.sh; then
+            docker run --rm $PR_FLAG -e GITHUB_REPOSITORY="${{ github.repository }}" -v "$(pwd)":/tidecoin "$CONTAINER_NAME"
+          else
+            echo "Docker daemon cannot bind-mount the Actions workspace; copying the workspace into the linter container instead"
+            CI_CONTAINER_ID=$(docker create $PR_FLAG -e GITHUB_REPOSITORY="${{ github.repository }}" "$CONTAINER_NAME")
+            docker cp "$(pwd)/." "${CI_CONTAINER_ID}:/tidecoin/"
+            docker start -a "${CI_CONTAINER_ID}"
+            CI_EXIT_CODE=$(docker inspect "${CI_CONTAINER_ID}" --format '{{.State.ExitCode}}')
+            docker rm "${CI_CONTAINER_ID}"
+            exit "${CI_EXIT_CODE}"
+          fi
