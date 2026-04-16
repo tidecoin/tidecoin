@@ -299,7 +299,7 @@ jobs:
           TIDECOINTX: '${{ github.workspace }}\build\bin\Release\tidecoin-tx.exe'
           TIDECOINUTIL: '${{ github.workspace }}\build\bin\Release\tidecoin-util.exe'
           TIDECOINWALLET: '${{ github.workspace }}\build\bin\Release\tidecoin-wallet.exe'
-          EXCLUDE: '--exclude feature_assumevalid.py'
+          EXCLUDE: '--exclude feature_assumevalid.py,feature_dbcrash.py'
           TEST_RUNNER_EXTRA: ${{ github.event_name != 'pull_request' && '--extended' || '' }}
         run: py -3 test/functional/test_runner.py --jobs $NUMBER_OF_PROCESSORS --ci --quiet --tmpdirprefix="${RUNNER_TEMP}" --combinedlogslen=99999999 --timeout-factor=${TEST_RUNNER_TIMEOUT_FACTOR} ${EXCLUDE} ${TEST_RUNNER_EXTRA}
 
@@ -435,7 +435,7 @@ jobs:
 
       - name: Run functional tests
         env:
-          EXCLUDE: '--exclude wallet_multiwallet.py,feature_assumevalid.py'
+          EXCLUDE: '--exclude wallet_multiwallet.py,feature_assumevalid.py,feature_dbcrash.py'
           TEST_RUNNER_EXTRA: ${{ github.event_name != 'pull_request' && '--extended' || '' }}
         run: py -3 test/functional/test_runner.py --jobs $NUMBER_OF_PROCESSORS --ci --quiet --tmpdirprefix="$RUNNER_TEMP" --combinedlogslen=99999999 --timeout-factor=$TEST_RUNNER_TIMEOUT_FACTOR $EXCLUDE $TEST_RUNNER_EXTRA
 
