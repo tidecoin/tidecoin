@@ -94,15 +94,15 @@ class MinimumChainWorkTest(BitcoinTestFramework):
         peer.send_and_ping(msg)
         ensure_for(duration=5, f=lambda: "headers" not in peer.last_message or len(peer.last_message["headers"].headers) == 0)
 
-        self.log.info("Generating one more block")
-        self.generate(self.nodes[0], 1, sync_fun=self.no_op)
-
         # Node1 intentionally ignored the below-threshold headers above, so it
         # may not have the parent headers needed to react to a tip-only inv.
-        # Reconnect to trigger the normal initial getheaders flow now that
-        # node0's chain is above minimumchainwork.
+        # Reconnect before crossing minimumchainwork so the fresh announcement
+        # below is not racing with peer teardown.
         self.disconnect_nodes(1, 0)
         self.connect_nodes(1, 0)
+
+        self.log.info("Generating one more block")
+        self.generate(self.nodes[0], 1, sync_fun=self.no_op)
 
         self.log.info("Verifying nodes are all synced")
 
@@ -116,8 +116,9 @@ class MinimumChainWorkTest(BitcoinTestFramework):
         self.log.info(f"Blockcounts: {[n.getblockcount() for n in self.nodes]}")
 
         self.log.info("Test that getheaders requests to node2 are not ignored")
-        peer.send_and_ping(msg)
-        assert "headers" in peer.last_message
+        peer.last_message.pop("headers", None)
+        peer.send_without_ping(msg)
+        peer.wait_until(lambda: peer.last_message.get("headers") and len(peer.last_message["headers"].headers) > 0)
 
         # Verify that node2 is in fact still in IBD (otherwise this test may
         # not be exercising the logic we want!)
