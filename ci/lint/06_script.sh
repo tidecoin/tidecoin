@@ -8,7 +8,7 @@ export LC_ALL=C
 
 set -ex
 
-if [ -n "$CIRRUS_PR" ]; then
+if [ -n "$GITHUB_PULL_REQUEST" ]; then
   export COMMIT_RANGE="HEAD~..HEAD"
   if [ "$(git rev-list -1 HEAD)" != "$(git rev-list -1 --merges HEAD)" ]; then
     echo "Error: The top commit must be a merge commit, usually the remote 'pull/${PR_NUMBER}/merge' branch."
@@ -36,7 +36,7 @@ fi
 
 RUST_BACKTRACE=1 cargo run --manifest-path "./test/lint/test_runner/Cargo.toml"
 
-if [ "$CIRRUS_REPO_FULL_NAME" = "tidecoin/tidecoin" ] && [ "$CIRRUS_PR" = "" ] ; then
+if [ "$GITHUB_REPOSITORY" = "tidecoin/tidecoin" ] && [ "$GITHUB_PULL_REQUEST" = "" ] ; then
     # Sanity check only the last few commits to get notified of missing sigs,
     # missing keys, or expired keys. Usually there is only one new merge commit
     # per push on the master branch and a few commits on release branches, so

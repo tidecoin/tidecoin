@@ -10,21 +10,21 @@ runs:
         echo "depends built direct cache hit to primary key: ${{ env.depends-built-cache-hit }}"
 
     - name: Save Ccache cache
-      uses: cirruslabs/cache/save@v4
+      uses: actions/cache/save@v4
       if: ${{ (github.event_name == 'push') && (github.ref_name == github.event.repository.default_branch) }}
       with:
         path: ${{ env.CCACHE_DIR }}
         key: ccache-${{ env.CONTAINER_NAME }}-${{ github.run_id }}
 
     - name: Save depends sources cache
-      uses: cirruslabs/cache/save@v4
+      uses: actions/cache/save@v4
       if: ${{ (github.event_name == 'push') && (github.ref_name == github.event.repository.default_branch) && (env.depends-sources-cache-hit != 'true') }}
       with:
         path: ${{ env.SOURCES_PATH }}
         key: depends-sources-${{ env.CONTAINER_NAME }}-${{ env.DEPENDS_HASH }}
 
     - name: Save built depends cache
-      uses: cirruslabs/cache/save@v4
+      uses: actions/cache/save@v4
       if: ${{ (github.event_name == 'push') && (github.ref_name == github.event.repository.default_branch) && (env.depends-built-cache-hit != 'true' )}}
       with:
         path: ${{ env.BASE_CACHE }}

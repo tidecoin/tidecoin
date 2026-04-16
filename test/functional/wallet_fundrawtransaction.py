@@ -53,6 +53,10 @@ def get_unspent(listunspent, amount, *, exclude=None):
 
     raise AssertionError('Could not find unspent with amount>={}'.format(amount))
 
+def assert_vin_matches_utxo(vin, utxo):
+    assert_equal((vin['txid'], vin['vout']), (utxo['txid'], utxo['vout']))
+
+
 class RawTransactionsTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 4
@@ -267,7 +271,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         outputs = { self.nodes[0].getnewaddress() : 1.0 }
         rawtx   = self.nodes[2].createrawtransaction(inputs, outputs)
         dec_tx  = self.nodes[2].decoderawtransaction(rawtx)
-        assert_equal(utx['txid'], dec_tx['vin'][0]['txid'])
+        assert_vin_matches_utxo(dec_tx['vin'][0], utx)
 
         rawtxfund = self.nodes[2].fundrawtransaction(rawtx)
         fee = rawtxfund['fee']
@@ -287,7 +291,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         outputs = {self.nodes[0].getnewaddress(): utx['amount'] - self.test_no_change_fee - self.fee_tolerance}
         rawtx   = self.nodes[2].createrawtransaction(inputs, outputs)
         dec_tx  = self.nodes[2].decoderawtransaction(rawtx)
-        assert_equal(utx['txid'], dec_tx['vin'][0]['txid'])
+        assert_vin_matches_utxo(dec_tx['vin'][0], utx)
 
         rawtxfund = self.nodes[2].fundrawtransaction(rawtx)
         fee = rawtxfund['fee']
@@ -307,7 +311,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         outputs = { self.nodes[0].getnewaddress() : Decimal(4.0) }
         rawtx   = self.nodes[2].createrawtransaction(inputs, outputs)
         dec_tx  = self.nodes[2].decoderawtransaction(rawtx)
-        assert_equal(utx['txid'], dec_tx['vin'][0]['txid'])
+        assert_vin_matches_utxo(dec_tx['vin'][0], utx)
 
         assert_raises_rpc_error(-8, "Unknown named parameter foo", self.nodes[2].fundrawtransaction, rawtx, foo='bar')
 
@@ -322,7 +326,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         outputs = { self.nodes[0].getnewaddress() : Decimal(4.0) }
         rawtx   = self.nodes[2].createrawtransaction(inputs, outputs)
         dec_tx  = self.nodes[2].decoderawtransaction(rawtx)
-        assert_equal(utx['txid'], dec_tx['vin'][0]['txid'])
+        assert_vin_matches_utxo(dec_tx['vin'][0], utx)
 
         assert_raises_rpc_error(-5, "Change address must be a valid Tidecoin address", self.nodes[2].fundrawtransaction, rawtx, changeAddress='foobar')
 
@@ -334,7 +338,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         outputs = { self.nodes[0].getnewaddress() : Decimal(4.0) }
         rawtx   = self.nodes[2].createrawtransaction(inputs, outputs)
         dec_tx  = self.nodes[2].decoderawtransaction(rawtx)
-        assert_equal(utx['txid'], dec_tx['vin'][0]['txid'])
+        assert_vin_matches_utxo(dec_tx['vin'][0], utx)
 
         change = self.nodes[2].getnewaddress()
         assert_raises_rpc_error(-8, "changePosition out of bounds", self.nodes[2].fundrawtransaction, rawtx, changeAddress=change, changePosition=2)
@@ -381,7 +385,7 @@ class RawTransactionsTest(BitcoinTestFramework):
             rawtx = rawtx[:82] + "0100" + rawtx[84:]
             dec_tx = self.nodes[2].decoderawtransaction(rawtx)
             mutated_scriptsig = True
-        assert_equal(utx['txid'], dec_tx['vin'][0]['txid'])
+        assert_vin_matches_utxo(dec_tx['vin'][0], utx)
         assert_equal(dec_tx['vin'][0]['scriptSig']['hex'], "00" if mutated_scriptsig else "")
 
         # Should fail without add_inputs:
@@ -397,7 +401,7 @@ class RawTransactionsTest(BitcoinTestFramework):
             else:
                 assert_equal(i, rawtxfund['changepos'])
 
-        assert_equal(utx['txid'], dec_tx['vin'][0]['txid'])
+        assert_vin_matches_utxo(dec_tx['vin'][0], utx)
         assert_equal("00", dec_tx['vin'][0]['scriptSig']['hex'])
 
         assert_equal(matchingOuts, 1)
@@ -413,7 +417,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         outputs = { self.nodes[0].getnewaddress() : total_in }
         rawtx   = self.nodes[2].createrawtransaction(inputs, outputs)
         dec_tx  = self.nodes[2].decoderawtransaction(rawtx)
-        assert_equal(utx['txid'], dec_tx['vin'][0]['txid'])
+        assert_vin_matches_utxo(dec_tx['vin'][0], utx)
 
         # Should fail without add_inputs:
         assert_raises_rpc_error(-4, ERR_NOT_ENOUGH_PRESET_INPUTS, self.nodes[2].fundrawtransaction, rawtx, add_inputs=False)
@@ -427,13 +431,9 @@ class RawTransactionsTest(BitcoinTestFramework):
         assert_equal(matchingOuts, 1)
         assert_equal(len(dec_tx['vout']), 2)
 
-        matchingIns = 0
-        for vinOut in dec_tx['vin']:
-            for vinIn in inputs:
-                if vinIn['txid'] == vinOut['txid']:
-                    matchingIns+=1
-
-        assert_equal(matchingIns, 2) #we now must see two vins identical to vins given as params
+        funded_inputs = {(vin['txid'], vin['vout']) for vin in dec_tx['vin']}
+        for vin in inputs:
+            assert (vin['txid'], vin['vout']) in funded_inputs # the preset inputs must be preserved
 
     def test_two_vin_two_vout(self):
         self.log.info("Test fundrawtxn with 2 vins and 2 vouts")
@@ -445,7 +445,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         outputs = { self.nodes[0].getnewaddress() : total_in - Decimal("1.0"), self.nodes[0].getnewaddress() : Decimal("1.0") }
         rawtx   = self.nodes[2].createrawtransaction(inputs, outputs)
         dec_tx  = self.nodes[2].decoderawtransaction(rawtx)
-        assert_equal(utx['txid'], dec_tx['vin'][0]['txid'])
+        assert_vin_matches_utxo(dec_tx['vin'][0], utx)
 
         # Should fail without add_inputs:
         assert_raises_rpc_error(-4, ERR_NOT_ENOUGH_PRESET_INPUTS, self.nodes[2].fundrawtransaction, rawtx, add_inputs=False)
@@ -803,7 +803,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         result = wwatch.fundrawtransaction(rawtx, {"includeWatching": True, "changeAddress": w3.getrawchangeaddress()})
         res_dec = self.nodes[0].decoderawtransaction(result["hex"])
         assert_equal(len(res_dec["vin"]), 1)
-        assert_equal(res_dec["vin"][0]["txid"], self.watchonly_utxo['txid'])
+        assert_vin_matches_utxo(res_dec["vin"][0], self.watchonly_utxo)
 
         assert "fee" in result.keys()
         assert_greater_than(result["changepos"], -1)
@@ -823,7 +823,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         result = wwatch.fundrawtransaction(rawtx, changeAddress=w3.getrawchangeaddress(), subtractFeeFromOutputs=[0])
         res_dec = self.nodes[0].decoderawtransaction(result["hex"])
         assert_equal(len(res_dec["vin"]), 1)
-        assert res_dec["vin"][0]["txid"] == self.watchonly_utxo['txid']
+        assert_vin_matches_utxo(res_dec["vin"][0], self.watchonly_utxo)
 
         assert_greater_than(result["fee"], 0)
         assert_equal(result["changepos"], -1)
