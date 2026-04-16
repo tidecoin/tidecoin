@@ -9,6 +9,15 @@ export CI_IMAGE_LABEL="bitcoin-ci-test"
 
 set -o errexit -o pipefail -o xtrace
 
+CI_CONTAINER_ID=""
+
+cleanup_ci_container() {
+  if [ -n "${CI_CONTAINER_ID:-}" ]; then
+    docker container rm --force "${CI_CONTAINER_ID}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_ci_container EXIT
+
 if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
   # Env vars during the build can not be changed. For example, a modified
   # $MAKEJOBS is ignored in the build process. Use --cpuset-cpus as an
@@ -85,6 +94,12 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
   # When detecting podman-docker, `--external` should be added.
   docker image prune --force --filter "label=$CI_IMAGE_LABEL"
 
+  CI_RUNTIME_CONTAINER_NAME="${CONTAINER_NAME}"
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    CI_RUNTIME_CONTAINER_NAME="${CONTAINER_NAME}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-0}-${GITHUB_JOB:-job}"
+  fi
+  CI_RUNTIME_CONTAINER_NAME="$(printf '%s' "${CI_RUNTIME_CONTAINER_NAME}" | tr -c 'A-Za-z0-9_.-' '-')"
+
   CI_USE_DOCKER_COPY_WORKSPACE=""
   CI_SOURCE_MOUNT="--mount type=bind,src=$BASE_READ_ONLY_DIR,dst=$BASE_READ_ONLY_DIR,readonly"
   if ! docker run --rm --mount "type=bind,src=$BASE_READ_ONLY_DIR,dst=/ci-bind-check,readonly" --platform="${CI_IMAGE_PLATFORM}" "$CONTAINER_NAME" true >/dev/null 2>&1; then
@@ -105,7 +120,7 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
                   --mount "${CI_DEPENDS_SOURCES_MOUNT}" \
                   ${CI_BUILD_MOUNT} \
                   --env-file "${CI_ENV_FILE:-/tmp/env-${USER:-${LOGNAME:-$(id -u)}}-$CONTAINER_NAME}" \
-                  --name "$CONTAINER_NAME" \
+                  --name "$CI_RUNTIME_CONTAINER_NAME" \
                   --network ci-ip6net \
                   --platform="${CI_IMAGE_PLATFORM}" \
                   "$CONTAINER_NAME")
@@ -145,5 +160,6 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
     docker cp "${CI_CONTAINER_ID}:${BASE_BUILD_DIR}/." "${BASE_BUILD_DIR}/"
   fi
   echo "Stop and remove CI container by ID"
-  docker container kill "${CI_CONTAINER_ID}"
+  docker container rm --force "${CI_CONTAINER_ID}"
+  CI_CONTAINER_ID=""
 fi
