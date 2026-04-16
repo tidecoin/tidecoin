@@ -577,7 +577,7 @@ jobs:
     needs: runners
     runs-on: ${{ needs.runners.outputs.provider == 'cirrus' && 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-xs' || 'ubuntu-24.04' }}
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
-    timeout-minutes: 20
+    timeout-minutes: 60
     env:
       CONTAINER_NAME: "tidecoin-linter"
     steps:
