@@ -388,15 +388,15 @@ class PSBTTest(BitcoinTestFramework):
 
         # Coordinator constructs unsigned PSBT without owning any signing keys.
         unsigned_psbt = self.nodes[2].createpsbt([utxo0, utxo1], coinjoin_outputs)
-        coordinator_updated = coordinator.walletprocesspsbt(unsigned_psbt, sign=False, sighashtype="ALL", finalize=False)
+        coordinator_updated = coordinator.walletprocesspsbt(psbt=unsigned_psbt, sign=False, sighashtype="ALL", finalize=False)
         assert_equal(coordinator_updated["complete"], False)
         decoded_coordinator = self.nodes[2].decodepsbt(coordinator_updated["psbt"])
         for psbt_in in decoded_coordinator["inputs"]:
             assert "partial_signatures" not in psbt_in
 
         # Each participant signs only with its own private material.
-        signed_by_participant0 = participant0.walletprocesspsbt(coordinator_updated["psbt"], sign=True, sighashtype="ALL", finalize=False)["psbt"]
-        signed_by_participant1 = participant1.walletprocesspsbt(coordinator_updated["psbt"], sign=True, sighashtype="ALL", finalize=False)["psbt"]
+        signed_by_participant0 = participant0.walletprocesspsbt(psbt=coordinator_updated["psbt"], sign=True, sighashtype="ALL", finalize=False)["psbt"]
+        signed_by_participant1 = participant1.walletprocesspsbt(psbt=coordinator_updated["psbt"], sign=True, sighashtype="ALL", finalize=False)["psbt"]
 
         # Coordinator combines and finalizes.
         combined = self.nodes[2].combinepsbt([signed_by_participant0, signed_by_participant1])
@@ -1229,7 +1229,7 @@ class PSBTTest(BitcoinTestFramework):
             self.nodes[0].sendrawtransaction(signed_tx["hex"])
 
         self.log.info("Test walletprocesspsbt raises if an invalid sighashtype is passed")
-        assert_raises_rpc_error(-8, "'all' is not a valid sighash parameter.", self.nodes[0].walletprocesspsbt, psbt, sighashtype="all")
+        assert_raises_rpc_error(-8, "'all' is not a valid sighash parameter.", self.nodes[0].walletprocesspsbt, psbt=psbt, sighashtype="all")
 
         self.log.info("Test decoding PSBT with per-input preimage types")
         # note that the decodepsbt RPC doesn't check whether preimages and hashes match

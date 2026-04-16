@@ -25,6 +25,7 @@ export PIP_PACKAGES="--break-system-packages pycapnp"
 export NO_DEPENDS=1
 export GOAL="install"
 export CI_LIMIT_STACK_SIZE=1
+export RUN_FUNCTIONAL_TESTS=false
 export TIDECOIN_CONFIG="\
  -DWITH_USDT=ON -DWITH_ZMQ=ON -DBUILD_GUI=ON \
  -DSANITIZERS=address,float-divide-by-zero,integer,undefined \

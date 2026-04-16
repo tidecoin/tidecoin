@@ -69,6 +69,12 @@ class CoinStatsIndexTest(BitcoinTestFramework):
     def sync_index_node(self):
         self.wait_until(lambda: self.nodes[1].getindexinfo()['coinstatsindex']['synced'] is True)
 
+    def set_mocktime_after_blocks(self, node, *blocks):
+        """Set mocktime after both the active tip and the provided stale blocks."""
+        block_times = [node.getblockheader(node.getbestblockhash())["time"]]
+        block_times.extend(node.getblockheader(block)["time"] for block in blocks)
+        node.setmocktime(max(block_times) + 1)
+
     def _test_coin_stats_index(self):
         node = self.nodes[0]
         index_node = self.nodes[1]
@@ -339,7 +345,7 @@ class CoinStatsIndexTest(BitcoinTestFramework):
         self.restart_node(1, extra_args=[])
         self.connect_nodes(0, 1)
         index_node.invalidateblock(block)
-        index_node.setmocktime(index_node.getblockheader(index_node.getbestblockhash())["time"] + 1)
+        self.set_mocktime_after_blocks(index_node, block)
         self.generatetoaddress(index_node, 5, getnewdestination()[2])
         res = index_node.gettxoutsetinfo(hash_type='muhash', hash_or_height=None, use_index=False)
 
@@ -356,7 +362,7 @@ class CoinStatsIndexTest(BitcoinTestFramework):
         self.sync_index_node()
         block2 = index_node.getbestblockhash()
         index_node.invalidateblock(block2)
-        index_node.setmocktime(index_node.getblockheader(index_node.getbestblockhash())["time"] + 1)
+        self.set_mocktime_after_blocks(index_node, block2)
         self.generatetoaddress(index_node, 1, getnewdestination()[2], sync_fun=self.no_op)
         self.sync_index_node()
         index_node.kill_process()

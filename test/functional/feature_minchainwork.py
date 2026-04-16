@@ -95,7 +95,14 @@ class MinimumChainWorkTest(BitcoinTestFramework):
         ensure_for(duration=5, f=lambda: "headers" not in peer.last_message or len(peer.last_message["headers"].headers) == 0)
 
         self.log.info("Generating one more block")
-        self.generate(self.nodes[0], 1)
+        self.generate(self.nodes[0], 1, sync_fun=self.no_op)
+
+        # Node1 intentionally ignored the below-threshold headers above, so it
+        # may not have the parent headers needed to react to a tip-only inv.
+        # Reconnect to trigger the normal initial getheaders flow now that
+        # node0's chain is above minimumchainwork.
+        self.disconnect_nodes(1, 0)
+        self.connect_nodes(1, 0)
 
         self.log.info("Verifying nodes are all synced")
 
