@@ -81,6 +81,9 @@ TEST_FRAMEWORK_UNIT_TESTS = 'feature_framework_unit_tests.py'
 EXTENDED_SCRIPTS = [
     # These tests are not run by default.
     # Longest test should go first, to favor running tests in parallel
+    # Tidecoin's 60-second block interval makes assumevalid burial require a
+    # ~22k-block chain, which is too expensive and flaky for the default matrix.
+    'feature_assumevalid.py',
     'feature_pruning.py',
     'feature_dbcrash.py',
     'feature_index_prune.py',
@@ -128,7 +131,6 @@ BASE_SCRIPTS = [
     'p2p_dns_seeds.py',
     'wallet_groups.py',
     'p2p_blockfilters.py',
-    'feature_assumevalid.py',
     'feature_bip68_sequence.py',
     'rpc_packages.py',
     'rpc_bind.py --ipv4',

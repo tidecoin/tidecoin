@@ -111,6 +111,19 @@ class AssumeValidTest(BitcoinTestFramework):
         for i in range(0, len(blocks), chunk_size):
             p2p_conn.send_header_for_blocks(blocks[i:i + chunk_size])
 
+    def serve_announced_blocks(self, p2p_conn, node, blocks, *, timeout=240):
+        """Announce the full chain, then let the node download blocks on demand.
+
+        The full header chain must be known before block 102 is connected;
+        otherwise it is not yet buried deeply enough for assumevalid. Using the
+        P2PDataStore getdata path avoids flooding slow CI hosts with unsolicited
+        blocks while the validation thread is still catching up.
+        """
+        self.send_headers_in_chunks(p2p_conn, blocks)
+        self.wait_until(lambda: node.getbestblockhash() == blocks[-1].hash_hex, timeout=timeout)
+        p2p_conn.sync_with_ping(timeout=timeout)
+
+
     def run_test(self):
         # Build the blockchain
         self.tip = int(self.nodes[0].getbestblockhash(), 16)
@@ -185,10 +198,9 @@ class AssumeValidTest(BitcoinTestFramework):
 
         p2p1 = self.nodes[1].add_p2p_connection(BlockServingNode())
         p2p1.add_blocks(self.blocks)
-        self.send_headers_in_chunks(p2p1, self.blocks)
         with self.nodes[1].assert_debug_log(expected_msgs=['Disabling signature validations at block #1', 'Enabling signature validations at block #103']):
             # Send all blocks to node1. All blocks will be accepted.
-            self.send_blocks(p2p1, self.blocks, sync_every=1000, timeout=960)
+            self.serve_announced_blocks(p2p1, self.nodes[1], self.blocks, timeout=960)
         assert_equal(self.nodes[1].getblock(self.nodes[1].getbestblockhash())['height'], len(self.blocks))
 
         p2p2 = self.nodes[2].add_p2p_connection(BaseNode())

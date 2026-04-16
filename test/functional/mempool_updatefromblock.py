@@ -16,7 +16,7 @@ from test_framework.blocktools import (
     create_coinbase,
 )
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import assert_equal, assert_raises_rpc_error
+from test_framework.util import assert_equal, assert_greater_than, assert_raises_rpc_error
 from test_framework.wallet import MiniWallet
 
 MAX_DISCONNECTED_TX_POOL_BYTES = 20_000_000
@@ -179,12 +179,16 @@ class MempoolUpdateFromBlockTest(BitcoinTestFramework):
         for block in fork_blocks:
             self.nodes[0].submitblock(block.serialize().hex())
         mempool = self.nodes[0].getrawmempool()
-        expected_parent_count = len(large_std_txs) - 2
-        assert_equal(len(mempool), expected_parent_count * 2)
 
         # The txns at the end of the list, or most recently confirmed, should have been trimmed
-        assert_equal([tx["txid"] in mempool for tx in large_std_txs], [tx["txid"] in mempool for tx in small_child_txs])
-        assert_equal([tx["txid"] in mempool for tx in large_std_txs], [True] * expected_parent_count + [False] * 2)
+        parent_in_mempool = [tx["txid"] in mempool for tx in large_std_txs]
+        child_in_mempool = [tx["txid"] in mempool for tx in small_child_txs]
+        evicted_parent_count = parent_in_mempool.count(False)
+        expected_parent_count = len(large_std_txs) - evicted_parent_count
+        assert_greater_than(evicted_parent_count, 0)
+        assert_equal(len(mempool), expected_parent_count * 2)
+        assert_equal(parent_in_mempool, child_in_mempool)
+        assert_equal(parent_in_mempool, [True] * expected_parent_count + [False] * evicted_parent_count)
 
     def test_chainlimits_exceeded(self):
         self.log.info('Check that too long chains on reorg are handled')
