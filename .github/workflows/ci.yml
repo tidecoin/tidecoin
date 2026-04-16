@@ -529,7 +529,14 @@ jobs:
       - name: Set mmap_rnd_bits
         if: ${{ env.CONTAINER_NAME == 'ci_native_tsan' || env.CONTAINER_NAME == 'ci_native_msan' }}
         # Prevents crashes due to high ASLR entropy
-        run: sudo sysctl -w vm.mmap_rnd_bits=28
+        run: |
+          if command -v sysctl >/dev/null 2>&1; then
+            sudo sysctl -w vm.mmap_rnd_bits=28
+          elif [ -e /proc/sys/vm/mmap_rnd_bits ]; then
+            echo 28 | sudo tee /proc/sys/vm/mmap_rnd_bits
+          else
+            echo "::warning::Cannot set vm.mmap_rnd_bits; /proc/sys/vm/mmap_rnd_bits is unavailable"
+          fi
 
       - name: CI script
         run: ./ci/test_run_all.sh

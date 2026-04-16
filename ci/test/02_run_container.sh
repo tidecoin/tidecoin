@@ -88,7 +88,7 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
                   --mount "${CI_DEPENDS_MOUNT}" \
                   --mount "${CI_DEPENDS_SOURCES_MOUNT}" \
                   ${CI_BUILD_MOUNT} \
-                  --env-file /tmp/env-$USER-$CONTAINER_NAME \
+                  --env-file "${CI_ENV_FILE:-/tmp/env-${USER:-${LOGNAME:-$(id -u)}}-$CONTAINER_NAME}" \
                   --name "$CONTAINER_NAME" \
                   --network ci-ip6net \
                   --platform="${CI_IMAGE_PLATFORM}" \

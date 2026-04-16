@@ -33,12 +33,15 @@ def main():
         "CI_FAILFAST_TEST_LEAVE_DANGLING",
     ])
 
-    # Append $USER to /tmp/env to support multi-user systems and $CONTAINER_NAME
-    # to allow support starting multiple runs simultaneously by the same user.
+    # Include a user-like identifier and $CONTAINER_NAME to support multiple
+    # simultaneous runs on shared CI hosts. Some self-hosted runners do not set
+    # $USER, so fall back to uid instead of letting Python and shell disagree on
+    # the generated path.
     env_file = "/tmp/env-{u}-{c}".format(
-        u=os.getenv("USER"),
+        u=os.getenv("USER") or os.getenv("LOGNAME") or str(os.getuid()),
         c=os.getenv("CONTAINER_NAME"),
     )
+    os.environ["CI_ENV_FILE"] = env_file
     with open(env_file, "w", encoding="utf8") as file:
         for k, v in os.environ.items():
             if k in settings:

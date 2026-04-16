@@ -26,12 +26,19 @@ runs:
         # Docker will check for variables $ACTIONS_CACHE_URL, $ACTIONS_RESULTS_URL and $ACTIONS_RUNTIME_TOKEN
         # which are set automatically when running on GitHub infra: https://docs.docker.com/build/cache/backends/gha/#synopsis
 
-        # Always optimistically --cache‑from in case a cache blob exists
-        args=(--cache-from "type=gha,scope=${CONTAINER_NAME}")
+        args=()
 
-        # If this is a push to the default branch, also add --cache‑to to save the cache
-        if [[ ${{ github.event_name }} == "push" && ${{ github.ref_name }} == ${{ github.event.repository.default_branch }} ]]; then
-          args+=(--cache-to "type=gha,mode=max,ignore-error=true,scope=${CONTAINER_NAME}")
+        # GitHub's docker gha cache backend is useful on hosted runners, but it
+        # is redundant and has been flaky on self-hosted runners. The normal
+        # ccache and depends caches still apply there.
+        if [[ "${{ runner.environment }}" != "self-hosted" ]]; then
+          # Always optimistically --cache‑from in case a cache blob exists
+          args+=(--cache-from "type=gha,scope=${CONTAINER_NAME}")
+
+          # If this is a push to the default branch, also add --cache‑to to save the cache
+          if [[ ${{ github.event_name }} == "push" && ${{ github.ref_name }} == ${{ github.event.repository.default_branch }} ]]; then
+            args+=(--cache-to "type=gha,mode=max,ignore-error=true,scope=${CONTAINER_NAME}")
+          fi
         fi
 
         # Always `--load` into docker images (needed when using the `docker-container` build driver).
