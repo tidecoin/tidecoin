@@ -28,4 +28,4 @@ runs:
       if: ${{ (github.event_name == 'push') && (github.ref_name == github.event.repository.default_branch) && (env.depends-built-cache-hit != 'true' )}}
       with:
         path: ${{ env.BASE_CACHE }}
-        key: depends-built-${{ env.CONTAINER_NAME }}-${{ env.DEPENDS_HASH }}
+        key: depends-built-${{ env.CONTAINER_NAME }}-${{ env.DEPENDS_BUILT_CACHE_SUFFIX }}-${{ env.DEPENDS_HASH }}

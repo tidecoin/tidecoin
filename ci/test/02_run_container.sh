@@ -44,15 +44,20 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
       "${BASE_READ_ONLY_DIR}"
 
   docker volume create "${CONTAINER_NAME}_ccache" || true
-  docker volume create "${CONTAINER_NAME}_depends" || true
+  CI_DEPENDS_VOLUME_NAME="${CONTAINER_NAME}_depends"
+  if [ -n "${DEPENDS_BUILT_CACHE_SUFFIX:-}" ]; then
+    CI_DEPENDS_VOLUME_NAME="${CI_DEPENDS_VOLUME_NAME}_${DEPENDS_BUILT_CACHE_SUFFIX}"
+  fi
+
+  docker volume create "${CI_DEPENDS_VOLUME_NAME}" || true
   docker volume create "${CONTAINER_NAME}_depends_sources" || true
 
   CI_CCACHE_VOLUME_MOUNT="type=volume,src=${CONTAINER_NAME}_ccache,dst=$CCACHE_DIR"
-  CI_DEPENDS_VOLUME_MOUNT="type=volume,src=${CONTAINER_NAME}_depends,dst=$DEPENDS_DIR/built"
+  CI_DEPENDS_VOLUME_MOUNT="type=volume,src=${CI_DEPENDS_VOLUME_NAME},dst=$DEPENDS_DIR/built"
   CI_DEPENDS_SOURCES_VOLUME_MOUNT="type=volume,src=${CONTAINER_NAME}_depends_sources,dst=$DEPENDS_DIR/sources"
 
   CI_CCACHE_MOUNT="type=volume,src=${CONTAINER_NAME}_ccache,dst=$CCACHE_DIR"
-  CI_DEPENDS_MOUNT="type=volume,src=${CONTAINER_NAME}_depends,dst=$DEPENDS_DIR/built"
+  CI_DEPENDS_MOUNT="type=volume,src=${CI_DEPENDS_VOLUME_NAME},dst=$DEPENDS_DIR/built"
   CI_DEPENDS_SOURCES_MOUNT="type=volume,src=${CONTAINER_NAME}_depends_sources,dst=$DEPENDS_DIR/sources"
   CI_BUILD_MOUNT=""
 

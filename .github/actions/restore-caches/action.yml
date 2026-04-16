@@ -26,9 +26,9 @@ runs:
       uses: actions/cache/restore@v4
       with:
         path: ${{ env.BASE_CACHE }}
-        key: depends-built-${{ env.CONTAINER_NAME }}-${{ env.DEPENDS_HASH }}
+        key: depends-built-${{ env.CONTAINER_NAME }}-${{ env.DEPENDS_BUILT_CACHE_SUFFIX }}-${{ env.DEPENDS_HASH }}
         restore-keys: |
-          depends-built-${{ env.CONTAINER_NAME }}-
+          depends-built-${{ env.CONTAINER_NAME }}-${{ env.DEPENDS_BUILT_CACHE_SUFFIX }}-
 
     - name: export cache hits
       shell: bash
