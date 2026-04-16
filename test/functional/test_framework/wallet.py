@@ -405,28 +405,41 @@ class MiniWallet:
             return tx
 
         if self._mode == MiniWalletMode.RAW_P2PK:
+            fee_was_specified = fee > 0
             if target_vsize and not fee:
                 fee = get_fee(target_vsize, fee_rate)
-            # Initial pass with zero fee to compute actual vsize after signing.
-            tx = self.create_self_transfer_multi(
-                utxos_to_spend=[utxo_to_spend],
-                amount_per_output=int(COIN * utxo_to_spend["value"]),
-                target_vsize=target_vsize,
-                fee_per_output=0,
-                **kwargs,
-            )
-            actual_vsize = tx["tx"].get_vsize()
-            fee = fee or get_fee(actual_vsize, fee_rate)
-            send_value = utxo_to_spend["value"] - fee
-            if send_value <= 0:
-                raise RuntimeError(f"UTXO value {utxo_to_spend['value']} is too small to cover fees {fee}")
-            tx = self.create_self_transfer_multi(
-                utxos_to_spend=[utxo_to_spend],
-                amount_per_output=int(COIN * send_value),
-                target_vsize=target_vsize,
-                fee_per_output=0,
-                **kwargs,
-            )
+
+            # Falcon signatures are variable-sized, so changing the output
+            # amount and re-signing can change the final vsize. Iterate until
+            # the fee covers the actual signed transaction size.
+            for _ in range(10):
+                if not fee:
+                    # Initial pass with zero fee to compute actual vsize after signing.
+                    send_value = utxo_to_spend["value"]
+                else:
+                    send_value = utxo_to_spend["value"] - fee
+                    if send_value <= 0:
+                        raise RuntimeError(f"UTXO value {utxo_to_spend['value']} is too small to cover fees {fee}")
+
+                tx = self.create_self_transfer_multi(
+                    utxos_to_spend=[utxo_to_spend],
+                    amount_per_output=int(COIN * send_value),
+                    target_vsize=target_vsize,
+                    fee_per_output=0,
+                    **kwargs,
+                )
+
+                if fee_was_specified:
+                    break
+
+                actual_vsize = target_vsize or tx["tx"].get_vsize()
+                required_fee = get_fee(actual_vsize, fee_rate)
+                if required_fee <= fee:
+                    break
+                fee = required_fee
+            else:
+                raise RuntimeError("Unable to create RAW_P2PK self transfer with a stable fee")
+
             tx["fee"] = fee
             tx["new_utxo"] = tx.pop("new_utxos")[0]
             return tx
