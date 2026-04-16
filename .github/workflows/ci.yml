@@ -332,6 +332,7 @@ jobs:
     env:
       FILE_ENV: './ci/test/00_setup_env_win64.sh'
       DANGER_CI_ON_HOST_FOLDERS: 1
+      CI_COPY_BUILD_RESULT_BACK: 1
 
     steps:
       - *CHECKOUT
@@ -530,13 +531,22 @@ jobs:
         if: ${{ env.CONTAINER_NAME == 'ci_native_tsan' || env.CONTAINER_NAME == 'ci_native_msan' }}
         # Prevents crashes due to high ASLR entropy
         run: |
-          if command -v sysctl >/dev/null 2>&1; then
-            sudo sysctl -w vm.mmap_rnd_bits=28
-          elif [ -e /proc/sys/vm/mmap_rnd_bits ]; then
-            echo 28 | sudo tee /proc/sys/vm/mmap_rnd_bits
-          else
-            echo "::warning::Cannot set vm.mmap_rnd_bits; /proc/sys/vm/mmap_rnd_bits is unavailable"
+          echo "sysctl path: $(command -v sysctl || echo missing)"
+          if [ -e /proc/sys/vm/mmap_rnd_bits ]; then
+            ls -l /proc/sys/vm/mmap_rnd_bits || true
+            cat /proc/sys/vm/mmap_rnd_bits || true
           fi
+          if command -v sysctl >/dev/null 2>&1; then
+            if sudo sysctl -w vm.mmap_rnd_bits=28; then
+              exit 0
+            fi
+          fi
+          if [ -e /proc/sys/vm/mmap_rnd_bits ]; then
+            if echo 28 | sudo tee /proc/sys/vm/mmap_rnd_bits; then
+              exit 0
+            fi
+          fi
+          echo "::warning::Cannot set vm.mmap_rnd_bits; continuing with runner defaults"
 
       - name: CI script
         run: ./ci/test_run_all.sh

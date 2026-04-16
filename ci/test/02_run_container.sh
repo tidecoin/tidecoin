@@ -38,6 +38,10 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
   docker volume create "${CONTAINER_NAME}_depends" || true
   docker volume create "${CONTAINER_NAME}_depends_sources" || true
 
+  CI_CCACHE_VOLUME_MOUNT="type=volume,src=${CONTAINER_NAME}_ccache,dst=$CCACHE_DIR"
+  CI_DEPENDS_VOLUME_MOUNT="type=volume,src=${CONTAINER_NAME}_depends,dst=$DEPENDS_DIR/built"
+  CI_DEPENDS_SOURCES_VOLUME_MOUNT="type=volume,src=${CONTAINER_NAME}_depends_sources,dst=$DEPENDS_DIR/sources"
+
   CI_CCACHE_MOUNT="type=volume,src=${CONTAINER_NAME}_ccache,dst=$CCACHE_DIR"
   CI_DEPENDS_MOUNT="type=volume,src=${CONTAINER_NAME}_depends,dst=$DEPENDS_DIR/built"
   CI_DEPENDS_SOURCES_MOUNT="type=volume,src=${CONTAINER_NAME}_depends_sources,dst=$DEPENDS_DIR/sources"
@@ -81,9 +85,21 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
   # When detecting podman-docker, `--external` should be added.
   docker image prune --force --filter "label=$CI_IMAGE_LABEL"
 
+  CI_USE_DOCKER_COPY_WORKSPACE=""
+  CI_SOURCE_MOUNT="--mount type=bind,src=$BASE_READ_ONLY_DIR,dst=$BASE_READ_ONLY_DIR,readonly"
+  if ! docker run --rm --mount "type=bind,src=$BASE_READ_ONLY_DIR,dst=/ci-bind-check,readonly" --platform="${CI_IMAGE_PLATFORM}" "$CONTAINER_NAME" true >/dev/null 2>&1; then
+    echo "Docker daemon cannot bind-mount the Actions workspace; copying the workspace into the container instead"
+    CI_USE_DOCKER_COPY_WORKSPACE=1
+    CI_SOURCE_MOUNT=""
+    CI_CCACHE_MOUNT="${CI_CCACHE_VOLUME_MOUNT}"
+    CI_DEPENDS_MOUNT="${CI_DEPENDS_VOLUME_MOUNT}"
+    CI_DEPENDS_SOURCES_MOUNT="${CI_DEPENDS_SOURCES_VOLUME_MOUNT}"
+    CI_BUILD_MOUNT=""
+  fi
+
   # shellcheck disable=SC2086
   CI_CONTAINER_ID=$(docker run --cap-add LINUX_IMMUTABLE $CI_CONTAINER_CAP --rm --interactive --detach --tty \
-                  --mount "type=bind,src=$BASE_READ_ONLY_DIR,dst=$BASE_READ_ONLY_DIR,readonly" \
+                  ${CI_SOURCE_MOUNT} \
                   --mount "${CI_CCACHE_MOUNT}" \
                   --mount "${CI_DEPENDS_MOUNT}" \
                   --mount "${CI_DEPENDS_SOURCES_MOUNT}" \
@@ -95,6 +111,10 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
                   "$CONTAINER_NAME")
   export CI_CONTAINER_ID
   export CI_EXEC_CMD_PREFIX="docker exec ${CI_CONTAINER_ID}"
+  if [ "$CI_USE_DOCKER_COPY_WORKSPACE" ]; then
+    docker exec "${CI_CONTAINER_ID}" mkdir -p "${BASE_READ_ONLY_DIR}"
+    docker cp "${BASE_READ_ONLY_DIR}/." "${CI_CONTAINER_ID}:${BASE_READ_ONLY_DIR}/"
+  fi
 else
   echo "Running on host system without docker wrapper"
   echo "Create missing folders"
@@ -120,6 +140,10 @@ CI_EXEC mkdir -p "${BINS_SCRATCH_DIR}"
 CI_EXEC "${BASE_ROOT_DIR}/ci/test/03_test_script.sh"
 
 if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
+  if [ "$CI_USE_DOCKER_COPY_WORKSPACE" ] && [ "$CI_COPY_BUILD_RESULT_BACK" ]; then
+    mkdir -p "${BASE_BUILD_DIR}"
+    docker cp "${CI_CONTAINER_ID}:${BASE_BUILD_DIR}/." "${BASE_BUILD_DIR}/"
+  fi
   echo "Stop and remove CI container by ID"
   docker container kill "${CI_CONTAINER_ID}"
 fi
