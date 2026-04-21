@@ -113,12 +113,10 @@ class AssumeutxoTest(BitcoinTestFramework):
         invalid_magics = [
             # magic, name, real
             [MAGIC_BYTES["mainnet"], "main", True],
+            [MAGIC_BYTES["testnet"], "test", True],
             [0x00000000.to_bytes(4, 'big'), "", False],
             [0xffffffff.to_bytes(4, 'big'), "", False],
         ]
-        # Tidecoin shares testnet/regtest magic, so testnet magic is not invalid on regtest.
-        if MAGIC_BYTES["testnet"] != MAGIC_BYTES["regtest"]:
-            invalid_magics.insert(1, [MAGIC_BYTES["testnet"], "testnet", True])
         for [magic, name, real] in invalid_magics:
             with open(bad_snapshot_path, 'wb') as f:
                 f.write(valid_snapshot_contents[:7] + magic + valid_snapshot_contents[11:])

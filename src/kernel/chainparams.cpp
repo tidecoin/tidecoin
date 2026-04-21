@@ -286,9 +286,9 @@ public:
         consensus.defaultAssumeValid = uint256{"0000000000000000000000000000000000000000000000000000000000000000"};
 
         pchMessageStart[0] = 0xba;
-        pchMessageStart[1] = 0xce;
-        pchMessageStart[2] = 0x3f;
-        pchMessageStart[3] = 0xda;
+        pchMessageStart[1] = 0xdc;
+        pchMessageStart[2] = 0xfe;
+        pchMessageStart[3] = 0x10;
         nDefaultPort = 18778;
         nPruneAfterHeight = opts.fastprune ? 100 : 1000;
         m_assumed_blockchain_size = 0;

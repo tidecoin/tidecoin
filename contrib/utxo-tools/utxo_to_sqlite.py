@@ -20,11 +20,9 @@ import time
 UTXO_DUMP_MAGIC = b'utxo\xff'
 UTXO_DUMP_VERSION = 2
 NET_MAGIC_BYTES = {
-    b"\xf9\xbe\xb4\xd9": "Mainnet",
-    b"\x0a\x03\xcf\x40": "Signet",
-    b"\x0b\x11\x09\x07": "Testnet3",
-    b"\x1c\x16\x3f\x28": "Testnet4",
-    b"\xfa\xbf\xb5\xda": "Regtest",
+    b"\xec\xfa\xce\xa5": "Mainnet",
+    b"\xba\xce\x3f\xda": "Testnet",
+    b"\xba\xdc\xfe\x10": "Regtest",
 }
 
 

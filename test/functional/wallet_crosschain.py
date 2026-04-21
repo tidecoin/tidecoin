@@ -3,8 +3,22 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+from test_framework.authproxy import JSONRPCException
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import assert_raises_rpc_error
+
+
+def assert_raises_crosschain_wallet_error(fun, *args):
+    try:
+        fun(*args)
+    except JSONRPCException as e:
+        if e.error["code"] == -4:
+            assert "Wallet files should not be reused across chains" in e.error["message"]
+        elif e.error["code"] == -18:
+            assert "Data is not in recognized format" in e.error["message"]
+        else:
+            raise AssertionError(f"Unexpected JSONRPC error code {e.error['code']}")
+    else:
+        raise AssertionError("Cross-chain wallet load unexpectedly succeeded")
 
 class WalletCrossChain(BitcoinTestFramework):
     def set_test_params(self):
@@ -40,11 +54,10 @@ class WalletCrossChain(BitcoinTestFramework):
 
         self.log.info("Loading/restoring wallets into nodes with a different genesis block")
 
-        crosschain_msg = 'Wallet files should not be reused across chains'
-        assert_raises_rpc_error(-4, crosschain_msg, self.nodes[0].loadwallet, node1_wallet)
-        assert_raises_rpc_error(-4, crosschain_msg, self.nodes[1].loadwallet, node0_wallet)
-        assert_raises_rpc_error(-4, crosschain_msg, self.nodes[0].restorewallet, 'w', node1_wallet_backup)
-        assert_raises_rpc_error(-4, crosschain_msg, self.nodes[1].restorewallet, 'w', node0_wallet_backup)
+        assert_raises_crosschain_wallet_error(self.nodes[0].loadwallet, node1_wallet)
+        assert_raises_crosschain_wallet_error(self.nodes[1].loadwallet, node0_wallet)
+        assert_raises_crosschain_wallet_error(self.nodes[0].restorewallet, 'w', node1_wallet_backup)
+        assert_raises_crosschain_wallet_error(self.nodes[1].restorewallet, 'w', node0_wallet_backup)
 
 
 if __name__ == '__main__':

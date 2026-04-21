@@ -470,4 +470,19 @@ BOOST_AUTO_TEST_CASE(ChainParams_TESTNET_sanity)
     sanity_check_chainparams(*m_node.args, ChainType::TESTNET);
 }
 
+BOOST_AUTO_TEST_CASE(ChainParams_message_start_uniqueness)
+{
+    const auto main = CChainParams::Main();
+    const auto testnet = CChainParams::TestNet();
+    const auto regtest = CChainParams::RegTest({});
+
+    BOOST_CHECK(main->MessageStart() != testnet->MessageStart());
+    BOOST_CHECK(main->MessageStart() != regtest->MessageStart());
+    BOOST_CHECK(testnet->MessageStart() != regtest->MessageStart());
+
+    BOOST_CHECK(GetNetworkForMagic(main->MessageStart()).value() == ChainType::MAIN);
+    BOOST_CHECK(GetNetworkForMagic(testnet->MessageStart()).value() == ChainType::TESTNET);
+    BOOST_CHECK(GetNetworkForMagic(regtest->MessageStart()).value() == ChainType::REGTEST);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
