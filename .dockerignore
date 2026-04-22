@@ -1,0 +1,14 @@
+.git
+.github
+.vscode
+.tx
+.cache
+ci/scratch
+releases
+
+*build*
+!build-aux
+!build_msvc
+
+*.pyc
+__pycache__/

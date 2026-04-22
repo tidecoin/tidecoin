@@ -1,0 +1,92 @@
+name: Deploy over SSH
+description: Copy rendered deployment assets to the server and restart the service.
+
+inputs:
+  host:
+    description: SSH host.
+    required: true
+  username:
+    description: SSH username.
+    required: true
+  ssh_private_key:
+    description: SSH private key.
+    required: true
+  service_base_path:
+    description: Base path on the server.
+    required: true
+  service_dir_name:
+    description: Service directory name under services/.
+    required: true
+  docker_compose_file:
+    description: Docker Compose file name on the server.
+    required: true
+  docker_network:
+    description: External Docker network name to ensure exists.
+    required: true
+  local_compose_file:
+    description: Local rendered compose file path.
+    required: true
+  local_config_file:
+    description: Local rendered tidecoin.conf path.
+    required: true
+  post_deploy_sleep_seconds:
+    description: Optional delay after compose up.
+    required: false
+    default: "15"
+
+runs:
+  using: composite
+  steps:
+    - name: Copy rendered files to server
+      uses: appleboy/scp-action@v1.0.0
+      with:
+        host: ${{ inputs.host }}
+        username: ${{ inputs.username }}
+        key: ${{ inputs.ssh_private_key }}
+        source: "${{ inputs.local_compose_file }},${{ inputs.local_config_file }}"
+        target: /tmp/tidecoin-deploy
+
+    - name: Restart service
+      uses: appleboy/ssh-action@v1.0.0
+      env:
+        SERVICE_BASE_PATH: ${{ inputs.service_base_path }}
+        SERVICE_DIR_NAME: ${{ inputs.service_dir_name }}
+        DOCKER_COMPOSE_FILE: ${{ inputs.docker_compose_file }}
+        DOCKER_NETWORK: ${{ inputs.docker_network }}
+        LOCAL_COMPOSE_FILE: ${{ inputs.local_compose_file }}
+        LOCAL_CONFIG_FILE: ${{ inputs.local_config_file }}
+        POST_DEPLOY_SLEEP_SECONDS: ${{ inputs.post_deploy_sleep_seconds }}
+      with:
+        host: ${{ inputs.host }}
+        username: ${{ inputs.username }}
+        key: ${{ inputs.ssh_private_key }}
+        envs: SERVICE_BASE_PATH,SERVICE_DIR_NAME,DOCKER_COMPOSE_FILE,DOCKER_NETWORK,LOCAL_COMPOSE_FILE,LOCAL_CONFIG_FILE,POST_DEPLOY_SLEEP_SECONDS
+        script: |
+          set -euo pipefail
+
+          for var in SERVICE_BASE_PATH SERVICE_DIR_NAME DOCKER_COMPOSE_FILE DOCKER_NETWORK LOCAL_COMPOSE_FILE LOCAL_CONFIG_FILE; do
+            if [ -z "${!var}" ]; then
+              echo "Missing required variable: ${var}" >&2
+              exit 1
+            fi
+          done
+
+          SERVICE_PATH="${SERVICE_BASE_PATH}/services/${SERVICE_DIR_NAME}"
+          TMP_BASE="/tmp/tidecoin-deploy"
+          TMP_COMPOSE="${TMP_BASE}/${LOCAL_COMPOSE_FILE}"
+          TMP_CONFIG="${TMP_BASE}/${LOCAL_CONFIG_FILE}"
+
+          mkdir -p "${SERVICE_PATH}/data"
+
+          if ! docker network inspect "${DOCKER_NETWORK}" >/dev/null 2>&1; then
+            docker network create "${DOCKER_NETWORK}"
+          fi
+
+          install -m 0644 "${TMP_COMPOSE}" "${SERVICE_PATH}/${DOCKER_COMPOSE_FILE}"
+          install -m 0600 "${TMP_CONFIG}" "${SERVICE_PATH}/data/tidecoin.conf"
+
+          docker compose -f "${SERVICE_PATH}/${DOCKER_COMPOSE_FILE}" up -d --remove-orphans
+
+          if [ -n "${POST_DEPLOY_SLEEP_SECONDS}" ]; then
+            sleep "${POST_DEPLOY_SLEEP_SECONDS}"
+          fi

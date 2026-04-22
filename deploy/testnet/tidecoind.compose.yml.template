@@ -1,0 +1,34 @@
+services:
+  ${SERVICE_NAME}:
+    image: ${TIDECOIN_IMAGE}
+    container_name: ${TIDECOIN_CONTAINER_NAME}
+    restart: unless-stopped
+    stop_grace_period: 10m
+    command:
+      - "${TIDECOIN_CHAIN_FLAG}"
+      - "-printtoconsole"
+      - "-datadir=/data"
+      - "-conf=/data/tidecoin.conf"
+    volumes:
+      - "${TIDECOIN_HOST_DATA_DIR}:/data"
+    networks:
+      - tidecoin-backend
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - tidecoin-cli ${TIDECOIN_CHAIN_FLAG} -conf=/data/tidecoin.conf getblockcount >/dev/null 2>&1 || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+        compress: "true"
+
+networks:
+  tidecoin-backend:
+    name: ${TIDECOIN_DOCKER_NETWORK}
+    external: true

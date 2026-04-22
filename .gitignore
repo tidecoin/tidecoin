@@ -31,3 +31,4 @@ target/
 
 /ci/scratch/
 /.cache
+/deploy/testnet/rendered/

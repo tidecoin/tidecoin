@@ -1,0 +1,14 @@
+server=1
+${TIDECOIN_CONF_NETWORK_LINE}
+
+listen=${TIDECOIN_LISTEN}
+txindex=${TIDECOIN_TXINDEX}
+dbcache=${TIDECOIN_DBCACHE}
+maxconnections=${TIDECOIN_MAX_CONNECTIONS}
+
+[test]
+rpcbind=${TIDECOIN_RPC_BIND}
+rpcallowip=${TIDECOIN_RPC_ALLOW_IP}
+rpcport=${TIDECOIN_RPC_PORT}
+rpcuser=${TIDECOIN_RPC_USER}
+rpcpassword=${TIDECOIN_RPC_PASSWORD}

@@ -1,0 +1,133 @@
+name: Deploy service
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - testnet
+      sha:
+        description: Commit SHA for deploy/rollback (default latest commit in selected ref)
+        required: false
+        default: ""
+  repository_dispatch:
+    types:
+      - Deploy-testnet
+
+permissions:
+  contents: read
+
+jobs:
+  deployment:
+    runs-on: self-hosted
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.event.client_payload.environment || 'testnet' }}
+
+    steps:
+      - name: Checkout repository for local actions
+        uses: actions/checkout@v4
+
+      - name: Resolve SERVICE_TAG
+        uses: ./.github/actions/resolve-service-tag
+
+      - name: Checkout repository at selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SERVICE_TAG }}
+
+      - name: Resolve deploy settings
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          DEPLOY_ENV="${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.event.client_payload.environment || 'testnet' }}"
+
+          case "${DEPLOY_ENV}" in
+            testnet)
+              echo "DEPLOY_ENV=${DEPLOY_ENV}" >> "$GITHUB_ENV"
+              echo "TEMPLATE_DIR=deploy/testnet" >> "$GITHUB_ENV"
+              echo "COMPOSE_TEMPLATE=deploy/testnet/tidecoind.compose.yml.template" >> "$GITHUB_ENV"
+              echo "CONF_TEMPLATE=deploy/testnet/tidecoin.conf.template" >> "$GITHUB_ENV"
+              echo "RENDERED_DIR=deploy/testnet/rendered" >> "$GITHUB_ENV"
+              echo "RENDERED_COMPOSE=tidecoind.yml" >> "$GITHUB_ENV"
+              echo "RENDERED_CONF=tidecoin.conf" >> "$GITHUB_ENV"
+              echo "IMAGE_LATEST_TAG=testnet-latest" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "Unsupported environment: ${DEPLOY_ENV}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Log in to Docker Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.CI_REGISTRY }}
+          username: ${{ secrets.CI_REGISTRY_USER }}
+          password: ${{ secrets.CI_REGISTRY_PASSWORD }}
+
+      - name: Check if image exists
+        uses: ./.github/actions/check-image-exists
+        with:
+          registry: ${{ secrets.CI_REGISTRY }}
+          registry_repo: ${{ secrets.CI_REGISTRY_REPO }}
+          image_name: ${{ vars.IMAGE_NAME }}
+          image_tag: ${{ env.SERVICE_TAG }}
+
+      - name: Render deployment files
+        shell: bash
+        env:
+          SERVICE_BASE_PATH: ${{ vars.SERVICE_BASE_PATH }}
+          SERVICE_DIR_NAME: ${{ vars.SERVICE_DIR_NAME }}
+          SERVICE_NAME: ${{ vars.SERVICE_NAME }}
+          IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+          DOCKER_COMPOSE_FILE: ${{ vars.DOCKER_COMPOSE_FILE }}
+          TIDECOIN_CONTAINER_NAME: ${{ vars.TIDECOIN_CONTAINER_NAME }}
+          TIDECOIN_CHAIN_FLAG: ${{ vars.TIDECOIN_CHAIN_FLAG }}
+          TIDECOIN_CONF_NETWORK_LINE: ${{ vars.TIDECOIN_CONF_NETWORK_LINE }}
+          TIDECOIN_DOCKER_NETWORK: ${{ vars.TIDECOIN_DOCKER_NETWORK }}
+          TIDECOIN_HOST_DATA_DIR: ${{ vars.TIDECOIN_HOST_DATA_DIR }}
+          TIDECOIN_RPC_PORT: ${{ vars.TIDECOIN_RPC_PORT }}
+          TIDECOIN_RPC_BIND: ${{ vars.TIDECOIN_RPC_BIND }}
+          TIDECOIN_RPC_ALLOW_IP: ${{ vars.TIDECOIN_RPC_ALLOW_IP }}
+          TIDECOIN_LISTEN: ${{ vars.TIDECOIN_LISTEN }}
+          TIDECOIN_TXINDEX: ${{ vars.TIDECOIN_TXINDEX }}
+          TIDECOIN_DBCACHE: ${{ vars.TIDECOIN_DBCACHE }}
+          TIDECOIN_MAX_CONNECTIONS: ${{ vars.TIDECOIN_MAX_CONNECTIONS }}
+          BASIC_USER: ${{ secrets.BASIC_USER }}
+          BASIC_PASS: ${{ secrets.BASIC_PASS }}
+          COOKIE: ${{ secrets.COOKIE }}
+          TIDECOIN_IMAGE: ${{ secrets.CI_REGISTRY }}/${{ secrets.CI_REGISTRY_REPO }}/${{ vars.IMAGE_NAME }}:${{ env.SERVICE_TAG }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p "${RENDERED_DIR}"
+
+          if [ -n "${COOKIE}" ]; then
+            TIDECOIN_RPC_USER="${COOKIE%%:*}"
+            TIDECOIN_RPC_PASSWORD="${COOKIE#*:}"
+          else
+            TIDECOIN_RPC_USER="${BASIC_USER}"
+            TIDECOIN_RPC_PASSWORD="${BASIC_PASS}"
+          fi
+
+          export TIDECOIN_RPC_USER
+          export TIDECOIN_RPC_PASSWORD
+
+          envsubst < "${COMPOSE_TEMPLATE}" > "${RENDERED_DIR}/${RENDERED_COMPOSE}"
+          envsubst < "${CONF_TEMPLATE}" > "${RENDERED_DIR}/${RENDERED_CONF}"
+
+      - name: Deploy over SSH
+        uses: ./.github/actions/deploy-over-ssh
+        with:
+          host: ${{ secrets.HOST_1 }}
+          username: ${{ secrets.HOST_1_USERNAME }}
+          ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          service_base_path: ${{ vars.SERVICE_BASE_PATH }}
+          service_dir_name: ${{ vars.SERVICE_DIR_NAME }}
+          docker_compose_file: ${{ vars.DOCKER_COMPOSE_FILE }}
+          docker_network: ${{ vars.TIDECOIN_DOCKER_NETWORK }}
+          local_compose_file: ${{ env.RENDERED_DIR }}/${{ env.RENDERED_COMPOSE }}
+          local_config_file: ${{ env.RENDERED_DIR }}/${{ env.RENDERED_CONF }}

@@ -1,0 +1,104 @@
+name: Build and release Docker image
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - testnet
+      sha:
+        description: Commit SHA for build (default latest commit in selected ref)
+        required: false
+        default: ""
+      deploy_after_build:
+        description: Trigger deploy after successful image push
+        required: true
+        type: boolean
+        default: true
+  push:
+    branches:
+      - master
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-entrypoint.sh"
+      - "CMakeLists.txt"
+      - "CMakePresets.json"
+      - "depends/**"
+      - "cmake/**"
+      - "src/**"
+      - "share/**"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: self-hosted
+    environment: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'testnet' }}
+
+    steps:
+      - name: Checkout repository for local actions
+        uses: actions/checkout@v4
+
+      - name: Resolve SERVICE_TAG
+        uses: ./.github/actions/resolve-service-tag
+
+      - name: Checkout repository at selected commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SERVICE_TAG }}
+
+      - name: Resolve build settings
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "IMAGE_NAME=${{ vars.IMAGE_NAME }}" >> "$GITHUB_ENV"
+
+          case "${{ inputs.environment }}" in
+            testnet)
+              echo "IMAGE_LATEST_TAG=testnet-latest" >> "$GITHUB_ENV"
+              ;;
+            *)
+              if [ "${{ github.event_name }}" = "push" ]; then
+                echo "IMAGE_LATEST_TAG=testnet-latest" >> "$GITHUB_ENV"
+                exit 0
+              fi
+              echo "Unsupported environment: ${{ inputs.environment }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.CI_REGISTRY }}
+          username: ${{ secrets.CI_REGISTRY_USER }}
+          password: ${{ secrets.CI_REGISTRY_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.CI_REGISTRY }}/${{ secrets.CI_REGISTRY_REPO }}/${{ env.IMAGE_NAME }}:${{ env.SERVICE_TAG }}
+            ${{ secrets.CI_REGISTRY }}/${{ secrets.CI_REGISTRY_REPO }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_LATEST_TAG }}
+
+      - name: Trigger deploy workflow
+        if: github.event_name == 'push' || inputs.deploy_after_build
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GIT_ACCESS_TOKEN }}
+          repository: ${{ github.repository }}
+          event-type: Deploy-testnet
+          client-payload: >-
+            {"ref":"${{ env.SOURCE_REF }}","sha":"${{ env.SERVICE_TAG }}","environment":"${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'testnet' }}"}
