@@ -1,4 +1,5 @@
 #!/bin/sh
+export LC_ALL=C
 set -eu
 
 TIDECOIN_DATA="${TIDECOIN_DATA:-/data}"
