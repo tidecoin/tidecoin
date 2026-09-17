@@ -337,7 +337,8 @@ bool CheckProofOfWork(uint256 hash, unsigned int nBits, const Consensus::Params&
 
 bool UseScryptPoW(const Consensus::Params& params, int height)
 {
-    return UsePostAuxpowPowRules(params, height);
+    // Regtest's fixed genesis remains scrypt even with delayed/disabled activation.
+    return (height == 0 && params.fPowGenesisScrypt) || UsePostAuxpowPowRules(params, height);
 }
 
 uint256 GetPoWHashForHeight(const CBlockHeader& block, const Consensus::Params& params, int height)

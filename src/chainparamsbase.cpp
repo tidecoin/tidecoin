@@ -17,6 +17,7 @@ void SetupChainParamsBaseOptions(ArgsManager& argsman)
     argsman.AddArg("-regtest", "Enter regression test mode, which uses a special chain in which blocks can be solved instantly. "
                  "This is intended for regression testing tools and app development. Equivalent to -chain=regtest.", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CHAINPARAMS);
     argsman.AddArg("-testactivationheight=name@height.", "Set the activation height of 'name' (segwit, bip34, dersig, cltv, csv). (regtest-only)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
+    argsman.AddArg("-auxpowactivationheight=<height|never>", "Set the AuxPoW activation height (regtest-only, default: 0). Use 'never' to disable activation. Also controls the yespower-to-scrypt switch, difficulty rules, and post-activation PQ script rules. Use a fresh datadir when changing rules for existing blocks.", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY | ArgsManager::DISALLOW_NEGATION | ArgsManager::DISALLOW_ELISION, OptionsCategory::DEBUG_TEST);
     argsman.AddArg("-testnet", "Use the testnet chain. Equivalent to -chain=test.", ArgsManager::ALLOW_ANY, OptionsCategory::CHAINPARAMS);
     argsman.AddArg("-vbparams=deployment:start:end[:min_activation_height]", "Use given start/end times and min_activation_height for specified version bits deployment (regtest-only)", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CHAINPARAMS);
 }

@@ -124,6 +124,8 @@ struct Params {
       */
     bool enforce_BIP94;
     bool fPowNoRetargeting;
+    /** Fixed genesis PoW is independent of configurable regtest activation. */
+    bool fPowGenesisScrypt{false};
     int64_t nPowTargetSpacing;
     int64_t nPowTargetTimespan;
     std::optional<uint32_t> nPowAllowMinDifficultyBlocksAfterHeight;

@@ -4,6 +4,7 @@
 
 #include <chain.h>
 #include <chainparams.h>
+#include <common/args.h>
 #include <pow.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
@@ -82,6 +83,69 @@ arith_uint256 CalculateExpectedTarget(uint32_t nBits, int64_t actual_timespan, c
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(pow_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(regtest_auxpow_activation_override)
+{
+    ArgsManager args;
+    BOOST_CHECK_EQUAL(CreateChainParams(args, ChainType::REGTEST)->GetConsensus().nAuxpowStartHeight, 0);
+    BOOST_CHECK_EQUAL(CreateChainParams(args, ChainType::TESTNET)->GetConsensus().nAuxpowStartHeight, 1000);
+    BOOST_CHECK_EQUAL(CreateChainParams(args, ChainType::MAIN)->GetConsensus().nAuxpowStartHeight, Consensus::AUXPOW_DISABLED);
+    BOOST_CHECK(!CreateChainParams(args, ChainType::MAIN)->GetConsensus().fPowGenesisScrypt);
+    BOOST_CHECK(!CreateChainParams(args, ChainType::TESTNET)->GetConsensus().fPowGenesisScrypt);
+
+    for (const auto& [value, expected] : std::vector<std::pair<std::string, int>>{
+             {"0", 0}, {"1", 1}, {"500", 500}, {"2147483646", 2147483646}, {"never", Consensus::AUXPOW_DISABLED}}) {
+        args.ForceSetArg("-auxpowactivationheight", value);
+        const auto params = CreateChainParams(args, ChainType::REGTEST);
+        const auto& consensus = params->GetConsensus();
+        BOOST_CHECK_EQUAL(consensus.nAuxpowStartHeight, expected);
+        BOOST_CHECK(consensus.fPowNoRetargeting);
+        BOOST_CHECK(consensus.fPowGenesisScrypt);
+        BOOST_CHECK(CheckProofOfWork(params->GenesisBlock(), consensus, 0));
+        BOOST_CHECK_EQUAL(params->GenesisBlock().GetHash(), CChainParams::RegTest({})->GenesisBlock().GetHash());
+        BOOST_CHECK_THROW(CreateChainParams(args, ChainType::MAIN), std::runtime_error);
+        BOOST_CHECK_THROW(CreateChainParams(args, ChainType::TESTNET), std::runtime_error);
+    }
+    for (const auto* value : {"", "-1", "neverx", "1.5", "2147483647", "2147483648", "99999999999999999999"}) {
+        args.ForceSetArg("-auxpowactivationheight", value);
+        BOOST_CHECK_THROW(CreateChainParams(args, ChainType::REGTEST), std::runtime_error);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(regtest_auxpow_override_pow_and_difficulty_boundary)
+{
+    ArgsManager args;
+    args.ForceSetArg("-auxpowactivationheight", "20");
+    auto params = CreateChainParams(args, ChainType::REGTEST)->GetConsensus();
+    CBlockHeader header;
+    header.nVersion = 1;
+    header.nTime = 1000;
+    header.nBits = UintToArith256(params.powLimit).GetCompact();
+    const auto yespower = header.GetPoWHash();
+    const auto scrypt = header.GetScryptPoWHash();
+    BOOST_REQUIRE(yespower != scrypt);
+    BOOST_CHECK(GetPoWHashForHeight(header, params, 19) == yespower);
+    BOOST_CHECK(GetPoWHashForHeight(header, params, 20) == scrypt);
+    BOOST_CHECK(GetPoWHashForHeight(header, params, 21) == scrypt);
+
+    // Regtest keeps no-retargeting before, at and after the selected activation.
+    CBlockIndex previous;
+    previous.nBits = header.nBits;
+    previous.nTime = header.nTime;
+    for (const int height : {19, 20, 21}) {
+        previous.nHeight = height - 1;
+        BOOST_CHECK_EQUAL(GetNextWorkRequired(&previous, &header, params), previous.nBits);
+    }
+
+    args.ForceSetArg("-auxpowactivationheight", "never");
+    params = CreateChainParams(args, ChainType::REGTEST)->GetConsensus();
+    BOOST_CHECK(UseScryptPoW(params, 0));
+    BOOST_CHECK(GetPoWHashForHeight(header, params, 0) == scrypt);
+    for (const int height : {1, 19, 20, 21, 1000, Consensus::AUXPOW_DISABLED - 1}) {
+        BOOST_CHECK(!UsePostAuxpowPowRules(params, height));
+        BOOST_CHECK(GetPoWHashForHeight(header, params, height) == yespower);
+    }
+}
 
 /* Test calculation of next difficulty target with no constraints applying */
 BOOST_AUTO_TEST_CASE(get_next_work)

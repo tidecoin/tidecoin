@@ -259,7 +259,7 @@ public:
         consensus.BIP66Height = 1;  // Always active unless overridden
         consensus.CSVHeight = 1;    // Always active unless overridden
         consensus.SegwitHeight = 0; // Always active unless overridden
-        consensus.nAuxpowStartHeight = 0;
+        consensus.nAuxpowStartHeight = opts.auxpow_start_height;
         consensus.nAuxpowChainId = 8;
         consensus.fStrictChainId = true;
         consensus.MinBIP9WarningHeight = 1;
@@ -269,6 +269,7 @@ public:
         consensus.fPowAllowMinDifficultyBlocks = true;
         consensus.enforce_BIP94 = true;
         consensus.fPowNoRetargeting = true;
+        consensus.fPowGenesisScrypt = true;
         consensus.nPowAllowMinDifficultyBlocksAfterHeight = std::nullopt;
         consensus.nPowAveragingWindow = 17;
         consensus.nPowMaxAdjustDown = 0; // disabled on regtest

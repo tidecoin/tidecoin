@@ -28,6 +28,19 @@ void ReadRegTestArgs(const ArgsManager& args, CChainParams::RegTestOptions& opti
     if (auto value = args.GetBoolArg("-fastprune")) options.fastprune = *value;
     if (HasTestOption(args, "bip94")) options.enforce_bip94 = true;
 
+    if (const auto value = args.GetArg("-auxpowactivationheight")) {
+        if (*value == "never") {
+            options.auxpow_start_height = Consensus::AUXPOW_DISABLED;
+        } else {
+            const auto height = ToIntegral<int32_t>(*value);
+            if (!height || *height < 0 || *height >= Consensus::AUXPOW_DISABLED) {
+                throw std::runtime_error(strprintf("Invalid value (%s) for -auxpowactivationheight: expected an integer from 0 to %d, or 'never'.", *value, Consensus::AUXPOW_DISABLED - 1));
+            }
+            options.auxpow_start_height = *height;
+        }
+        LogInfo("Setting regtest AuxPoW activation height to %s\n", *value);
+    }
+
     for (const std::string& arg : args.GetArgs("-testactivationheight")) {
         const auto found{arg.find('@')};
         if (found == std::string::npos) {
@@ -98,6 +111,9 @@ const CChainParams &Params() {
 
 std::unique_ptr<const CChainParams> CreateChainParams(const ArgsManager& args, const ChainType chain)
 {
+    if (chain != ChainType::REGTEST && args.IsArgSet("-auxpowactivationheight")) {
+        throw std::runtime_error("-auxpowactivationheight is only supported on regtest.");
+    }
     switch (chain) {
     case ChainType::MAIN:
         return CChainParams::Main();

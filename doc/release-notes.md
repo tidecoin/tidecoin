@@ -16,6 +16,10 @@ Please report bugs using the issue tracker at GitHub:
 How to Upgrade
 ==============
 
+Regtest development option: `-auxpowactivationheight=<height|never>` can move or
+disable the shared AuxPoW/PoW/PQ activation boundary. The default remains 0;
+mainnet and testnet do not accept this override. See [regtest activation testing](regtest-auxpow.md).
+
 If you are running an older version, shut it down. Wait until it has completely
 shut down (which might take a few minutes in some cases), then run the
 installer (on Windows) or just copy over `/Applications/Tidecoin-Qt` (on macOS)
