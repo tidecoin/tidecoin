@@ -5,6 +5,7 @@
 """Test error messages for 'getaddressinfo' and 'validateaddress' RPC commands."""
 
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.segwit_addr import Encoding, bech32_encode, convertbits
 
 from test_framework.util import (
     assert_equal,
@@ -99,6 +100,36 @@ class InvalidAddressErrorMessageTest(BitcoinTestFramework):
                 last_error = err
         raise last_error
 
+    def test_tidecoin_error_locations(self):
+        node = self.nodes[0]
+        for hrp, version, size, encoding, limit in [
+            ("rtbc", 0, 32, Encoding.BECH32, 90),
+            ("rq", 1, 64, Encoding.BECH32M, 120),
+        ]:
+            program = list(range(size))
+            address = bech32_encode(encoding, hrp, [version] + convertbits(program, 8, 5))
+            expected_script = ("00" if version == 0 else "51") + bytes([size]).hex() + bytes(program).hex()
+            for valid in [address, address.upper()]:
+                result = node.validateaddress(valid)
+                assert result["isvalid"]
+                assert_equal(result["scriptPubKey"], expected_script)
+                assert "error_locations" not in result
+
+            # Unlike the legacy fixtures, these require the exact error and positions.
+            for length in [limit + 1, limit + 10, limit + 65536]:
+                result = node.validateaddress(address + "q" * (length - len(address)))
+                assert_equal(result["isvalid"], False)
+                assert_equal(result["error"], "Bech32 string too long")
+                assert_equal(result["error_locations"], [limit])
+
+            corrupted = list(address)
+            for offset in [-1, -2]:
+                corrupted[offset] = "p" if corrupted[offset] == "q" else "q"
+                result = node.validateaddress("".join(corrupted))
+                assert_equal(result["isvalid"], False)
+                assert_equal(result["error"], "Invalid Bech32 checksum" if version == 0 else "Invalid Bech32m checksum")
+                assert_equal(result["error_locations"], list(range(len(address) + offset, len(address))))
+
     def test_validateaddress(self):
         # Invalid Bech32
         self.check_invalid(BECH32_INVALID_SIZE, "Invalid Bech32 address program size (41 bytes)")
@@ -107,7 +138,7 @@ class InvalidAddressErrorMessageTest(BitcoinTestFramework):
         self.check_invalid(BECH32_INVALID_BECH32M, 'Version 0 witness address must use Bech32 checksum')
         self.check_invalid(BECH32_INVALID_VERSION, 'Invalid Bech32 address witness version')
         self.check_invalid(BECH32_INVALID_V0_SIZE, "Invalid Bech32 v0 address program size (21 bytes), per BIP141")
-        self.check_invalid(BECH32_TOO_LONG, 'Bech32 string too long', list(range(90, 108)))
+        self.check_invalid(BECH32_TOO_LONG, 'Bech32 string too long', [90])
         self.check_invalid(BECH32_ONE_ERROR, 'Invalid Bech32 checksum', [9])
         self.check_invalid(BECH32_TWO_ERRORS, 'Invalid Bech32 checksum', [22, 43])
         self.check_invalid(BECH32_ONE_ERROR_CAPITALS, 'Invalid Bech32 checksum', [38])
@@ -162,6 +193,7 @@ class InvalidAddressErrorMessageTest(BitcoinTestFramework):
         assert_raises_rpc_error(-5, "Unsupported Segwit witness version", node.getaddressinfo, BECH32_VALID_UNKNOWN_WITNESS_TIDE)
 
     def run_test(self):
+        self.test_tidecoin_error_locations()
         self.test_validateaddress()
 
         if self.is_wallet_compiled():

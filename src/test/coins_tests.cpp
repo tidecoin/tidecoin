@@ -840,6 +840,120 @@ BOOST_AUTO_TEST_CASE(ccoins_add)
     }
 }
 
+BOOST_AUTO_TEST_CASE(ccoins_rejected_overwrite_preserves_accounting)
+{
+    const COutPoint outpoint{Txid::FromUint256(m_rng.rand256()), 0};
+    const Coin original{CTxOut{10, CScript{} << std::vector<unsigned char>(CScriptBase::STATIC_SIZE + 1, 1)}, 1, false};
+    const Coin replacement{CTxOut{20, CScript{} << std::vector<unsigned char>(CScriptBase::STATIC_SIZE + 100, 2)}, 2, true};
+    BOOST_REQUIRE_GT(original.DynamicMemoryUsage(), 0U);
+
+    for (const auto state : {CoinEntry::State::DIRTY_FRESH, CoinEntry::State::DIRTY, CoinEntry::State::CLEAN}) {
+        CCoinsViewTest base{m_rng};
+        CCoinsViewCacheTest cache{&base};
+        cache.AddCoin(outpoint, Coin{original}, /*possible_overwrite=*/state == CoinEntry::State::DIRTY);
+        if (state == CoinEntry::State::CLEAN) BOOST_REQUIRE(cache.Sync());
+        const auto usage = cache.DynamicMemoryUsage();
+        const auto entry = GetCoinsMapEntry(cache.map(), outpoint);
+        cache.SelfTest();
+
+        // Repeating the rejected overwrite used to subtract the same script's
+        // allocation again, eventually underflowing the unsigned usage counter.
+        for (int attempt{0}; attempt < 2; ++attempt) {
+            BOOST_CHECK_EXCEPTION(cache.AddCoin(outpoint, Coin{replacement}, /*possible_overwrite=*/false),
+                                  std::logic_error, HasReason("Attempted to overwrite an unspent coin (when possible_overwrite is false)"));
+            BOOST_CHECK_EQUAL(cache.DynamicMemoryUsage(), usage);
+            BOOST_CHECK(cache.AccessCoin(outpoint) == original);
+            BOOST_CHECK_EQUAL(GetCoinsMapEntry(cache.map(), outpoint), entry);
+            cache.SelfTest();
+        }
+
+        cache.AddCoin(outpoint, Coin{replacement}, /*possible_overwrite=*/true);
+        BOOST_CHECK(cache.AccessCoin(outpoint) == replacement);
+        cache.SelfTest();
+        BOOST_REQUIRE(cache.Sync());
+        cache.Uncache(outpoint);
+        BOOST_CHECK_EQUAL(cache.GetCacheSize(), 0U);
+        BOOST_CHECK_EQUAL(cache.usage(), 0U);
+        cache.SelfTest();
+        BOOST_CHECK(cache.AccessCoin(outpoint) == replacement);
+        BOOST_REQUIRE(cache.SpendCoin(outpoint));
+        cache.SelfTest();
+        BOOST_REQUIRE(cache.Flush());
+        BOOST_CHECK_EQUAL(cache.GetCacheSize(), 0U);
+        BOOST_CHECK_EQUAL(cache.usage(), 0U);
+        cache.SelfTest();
+    }
+}
+
+BOOST_AUTO_TEST_CASE(ccoins_failed_flush_preserves_accounting)
+{
+    class FailingView : public CCoinsViewTest {
+    public:
+        using CCoinsViewTest::CCoinsViewTest;
+        bool fail{true};
+        bool throw_on_failure{false};
+        bool BatchWrite(CoinsViewCacheCursor& cursor, const uint256& hash) override
+        {
+            // Fail before consuming or modifying anything. Flush does not
+            // promise recovery from a backend that partially modifies state.
+            if (fail) {
+                if (throw_on_failure) throw std::runtime_error("injected batch failure");
+                return false;
+            }
+            return CCoinsViewTest::BatchWrite(cursor, hash);
+        }
+    };
+
+    for (bool throw_on_failure : {false, true}) {
+        FailingView base{m_rng};
+        base.throw_on_failure = throw_on_failure;
+        CCoinsViewCacheTest cache{&base};
+        const COutPoint outpoint{Txid::FromUint256(m_rng.rand256()), 0};
+        const Coin coin{CTxOut{10, CScript{} << std::vector<unsigned char>(CScriptBase::STATIC_SIZE + 1, 1)}, 1, false};
+        cache.AddCoin(outpoint, Coin{coin}, /*possible_overwrite=*/false);
+        const auto hash = m_rng.rand256();
+        cache.SetBestBlock(hash);
+        const auto usage = cache.DynamicMemoryUsage();
+        BOOST_REQUIRE_GT(cache.usage(), 0U);
+        const auto entry = GetCoinsMapEntry(cache.map(), outpoint);
+
+        for (int attempt{0}; attempt < 2; ++attempt) {
+            if (throw_on_failure) {
+                BOOST_CHECK_EXCEPTION(cache.Flush(), std::runtime_error, HasReason("injected batch failure"));
+            } else {
+                BOOST_CHECK(!cache.Flush());
+            }
+            BOOST_CHECK_EQUAL(cache.DynamicMemoryUsage(), usage);
+            BOOST_CHECK(cache.AccessCoin(outpoint) == coin);
+            BOOST_CHECK_EQUAL(GetCoinsMapEntry(cache.map(), outpoint), entry);
+            BOOST_CHECK(cache.GetBestBlock() == hash);
+            BOOST_CHECK(!base.GetCoin(outpoint));
+            BOOST_CHECK(base.GetBestBlock().IsNull());
+            cache.SelfTest();
+        }
+
+        // Valid operations remain possible for this deliberately non-mutating
+        // failure backend, including spending, replacement and a later flush.
+        BOOST_REQUIRE(cache.SpendCoin(outpoint));
+        cache.SelfTest();
+        cache.AddCoin(outpoint, Coin{coin}, /*possible_overwrite=*/false);
+        cache.SelfTest();
+        base.fail = false;
+        BOOST_REQUIRE(cache.Flush());
+        BOOST_CHECK_EQUAL(cache.GetCacheSize(), 0U);
+        BOOST_CHECK_EQUAL(cache.usage(), 0U);
+        cache.SelfTest();
+        BOOST_REQUIRE(base.GetCoin(outpoint));
+        BOOST_CHECK(*base.GetCoin(outpoint) == coin);
+        BOOST_CHECK(base.GetBestBlock() == hash);
+        // Reuse the cleared cache, including its flagged-entry list.
+        cache.AddCoin(COutPoint{outpoint.hash, 1}, Coin{coin}, /*possible_overwrite=*/false);
+        cache.SelfTest();
+        BOOST_REQUIRE(cache.Flush());
+        cache.SelfTest();
+    }
+}
+
 static void CheckWriteCoins(const MaybeCoin& parent, const MaybeCoin& child, const CoinOrError& expected)
 {
     SingleEntryCacheTest test{ABSENT, parent};

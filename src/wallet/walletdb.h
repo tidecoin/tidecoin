@@ -10,6 +10,8 @@
 #include <primitives/transaction_identifier.h>
 #include <script/sign.h>
 #include <wallet/db.h>
+
+#include <exception>
 #include <wallet/pqhd.h>
 #include <wallet/walletutil.h>
 
@@ -187,6 +189,9 @@ public:
         m_batch(database.MakeBatch())
     {
     }
+    // Do not return to wallet operations with an unresolved transaction and
+    // pending memory rollback. A transient failure may be retried by this guard.
+    ~WalletBatch() { if (HasActiveTxn() && !TxnAbort()) std::terminate(); }
     WalletBatch(const WalletBatch&) = delete;
     WalletBatch& operator=(const WalletBatch&) = delete;
 

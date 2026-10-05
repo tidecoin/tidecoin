@@ -8,7 +8,7 @@
 #
 
 from test_framework.blocktools import COINBASE_MATURITY
-from test_framework.messages import CTxOut
+from test_framework.messages import COIN, CTxOut
 from test_framework.script import CScript, OP_RETURN
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
@@ -107,6 +107,41 @@ class GetblockstatsTest(BitcoinTestFramework):
         return self.nodes[0].getblockcount()
 
 
+    def check_utxo_size_estimates(self, tip):
+        # Independent expectation from block outputs and spent prevouts. Coin height
+        # and coinbase flag share four bytes; the outpoint contributes 32 + 4.
+        overhead = 32 + 4 + 4
+        unspent = {}
+        for height in range(tip + 1):
+            block = self.nodes[0].getblock(self.nodes[0].getblockhash(height), 2)
+            total_size = actual_size = 0
+            total_count = actual_count = 0
+            for tx in block["tx"]:
+                for txin in tx["vin"]:
+                    if "coinbase" in txin:
+                        continue
+                    spent_size = unspent.pop((txin["txid"], txin["vout"]))
+                    total_size -= spent_size
+                    actual_size -= spent_size
+                    total_count -= 1
+                    actual_count -= 1
+                for index, output in enumerate(tx["vout"]):
+                    script = bytes.fromhex(output["scriptPubKey"]["hex"])
+                    # This fixture uses small scripts, so only OP_RETURN is unspendable.
+                    assert len(script) < 10000
+                    size = len(CTxOut(int(output["value"] * COIN), script).serialize()) + overhead
+                    total_size += size
+                    total_count += 1
+                    if height != 0 and not script.startswith(bytes([OP_RETURN])):
+                        unspent[(tx["txid"], index)] = size
+                        actual_size += size
+                        actual_count += 1
+            stats = self.nodes[0].getblockstats(height)
+            assert_equal(stats["utxo_increase"], total_count)
+            assert_equal(stats["utxo_increase_actual"], actual_count)
+            assert_equal(stats["utxo_size_inc"], total_size)
+            assert_equal(stats["utxo_size_inc_actual"], actual_size)
+
     def run_test(self):
         test_data = os.path.join(TESTSDIR, self.options.test_data)
         if self.options.gen_test_data:
@@ -180,6 +215,8 @@ class GetblockstatsTest(BitcoinTestFramework):
         # Invalid number of args
         assert_raises_rpc_error(-1, 'getblockstats hash_or_height ( stats )', self.nodes[0].getblockstats, self.convert_to_json_for_cli('00'), 1, 2)
         assert_raises_rpc_error(-1, 'getblockstats hash_or_height ( stats )', self.nodes[0].getblockstats)
+
+        self.check_utxo_size_estimates(tip)
 
         self.log.info('Test block height 0')
         genesis_stats = self.nodes[0].getblockstats(0)

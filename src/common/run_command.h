@@ -6,16 +6,24 @@
 #define BITCOIN_COMMON_RUN_COMMAND_H
 
 #include <string>
+#include <vector>
 
 class UniValue;
+
+/** Split a configured command without shell expansion. Single and double quotes
+ * group arguments; inside double quotes, backslash escapes backslash and double
+ * quote only. Elsewhere backslashes are literal. Throws on unmatched quotes,
+ * embedded NULs, or an empty executable. Whitespace-only input returns {}.
+ */
+std::vector<std::string> ParseCommandArguments(const std::string& command);
 
 /**
  * Execute a command which returns JSON, and parse the result.
  *
- * @param str_command The command to execute, including any arguments
+ * @param cmd_args Executable and arguments, passed directly without shell parsing
  * @param str_std_in string to pass to stdin
  * @return parsed JSON
  */
-UniValue RunCommandParseJSON(const std::string& str_command, const std::string& str_std_in="");
+UniValue RunCommandParseJSON(const std::vector<std::string>& cmd_args, const std::string& str_std_in="");
 
 #endif // BITCOIN_COMMON_RUN_COMMAND_H

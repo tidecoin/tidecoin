@@ -141,7 +141,22 @@ class PrioritiseTransactionTest(BitcoinTestFramework):
         self.restart_node(0)
         assert_equal(self.nodes[0].getprioritisedtransactions(), {})
 
+    def test_unique_prioritised_results(self):
+        node = self.nodes[0]
+        assert_equal(node.getprioritisedtransactions(), {})
+        expected = {}
+        for i in reversed(range(1, 33)):
+            txid = f"{i:064x}"
+            node.prioritisetransaction(txid, 0, i)
+            node.prioritisetransaction(txid, 0, 2 * i)
+            expected[txid] = {"fee_delta": 3 * i, "in_mempool": False}
+        result = node.getprioritisedtransactions()
+        assert_equal(result, expected)
+        assert_equal(list(result), sorted(expected))
+        self.clear_prioritisation(node)
+
     def run_test(self):
+        self.test_unique_prioritised_results()
         self.wallet = MiniWallet(self.nodes[0])
 
         # Test `prioritisetransaction` required parameters

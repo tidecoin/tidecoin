@@ -7,6 +7,7 @@
 #include <test/util/test_controls.h>
 #include <univalue.h>
 #include <wallet/rpc/util.h>
+#include <wallet/test/wallet_test_fixture.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -22,6 +23,55 @@ static std::string TestWalletName(const std::string& endpoint, std::optional<std
 }
 
 BOOST_FIXTURE_TEST_SUITE(wallet_rpc_tests, BasicTestingSetup)
+
+BOOST_FIXTURE_TEST_CASE(descriptor_expansion_reservation, WalletTestingSetup)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    BOOST_CHECK(!m_wallet.IsDescriptorExpansionRunning());
+    BOOST_CHECK(!m_wallet.AbortDescriptorExpansion());
+    {
+        WalletDescriptorExpansionReserver first{m_wallet};
+        BOOST_REQUIRE(first.reserve());
+        {
+            WalletDescriptorExpansionReserver second{m_wallet};
+            BOOST_CHECK(!second.reserve());
+        }
+        BOOST_CHECK(m_wallet.IsDescriptorExpansionRunning());
+        BOOST_CHECK(m_wallet.AbortDescriptorExpansion());
+        BOOST_CHECK(m_wallet.IsDescriptorExpansionAborted());
+        BOOST_CHECK(!first.complete());
+        BOOST_CHECK(m_wallet.IsDescriptorExpansionRunning());
+    }
+    BOOST_CHECK(!m_wallet.IsDescriptorExpansionRunning());
+    {
+        WalletDescriptorExpansionReserver next{m_wallet};
+        BOOST_REQUIRE(next.reserve());
+        BOOST_CHECK(!m_wallet.IsDescriptorExpansionAborted());
+        BOOST_CHECK(next.complete());
+        BOOST_CHECK(!m_wallet.AbortDescriptorExpansion());
+        WalletDescriptorExpansionReserver other{m_wallet};
+        BOOST_CHECK(other.reserve());
+    }
+    BOOST_CHECK(!m_wallet.IsDescriptorExpansionRunning());
+    // Model an encrypted, already-locked wallet without creating any keypool.
+    // Direct Lock() is also used by the GUI and must cancel an active expansion.
+    {
+        LOCK(m_wallet.cs_wallet);
+        m_wallet.mapMasterKeys.emplace(0, CMasterKey{});
+    }
+    {
+        WalletDescriptorExpansionReserver direct_lock{m_wallet};
+        BOOST_REQUIRE(direct_lock.reserve());
+        BOOST_CHECK(m_wallet.Lock());
+        BOOST_CHECK(m_wallet.IsDescriptorExpansionAborted());
+        BOOST_CHECK(!direct_lock.complete());
+    }
+    BOOST_CHECK(!m_wallet.IsDescriptorExpansionRunning());
+    {
+        LOCK(m_wallet.cs_wallet);
+        m_wallet.mapMasterKeys.clear();
+    }
+}
 
 BOOST_AUTO_TEST_CASE(ensure_unique_wallet_name)
 {

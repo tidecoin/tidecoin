@@ -19,6 +19,7 @@ TEST_FRAMEWORK_MODULES = [
     "crypto.bip324_cipher",
     "blocktools",
     "compressor",
+    "framework_tests",
     "crypto.chacha20",
     "messages",
     "crypto.muhash",

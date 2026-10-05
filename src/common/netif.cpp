@@ -34,6 +34,8 @@
 #include <ifaddrs.h>
 #endif
 
+#include <type_traits>
+
 namespace {
 
 //! Return CNetAddr for the specified OS-level network address.
@@ -134,7 +136,10 @@ std::optional<CNetAddr> QueryDefaultGatewayImpl(sa_family_t family)
             return std::nullopt;
         }
 
-        for (nlmsghdr* hdr = (nlmsghdr*)response; NLMSG_OK(hdr, recv_result); hdr = NLMSG_NEXT(hdr, recv_result)) {
+        using recv_result_t = std::conditional_t<std::is_signed_v<decltype(NLMSG_HDRLEN)>, int64_t, decltype(NLMSG_HDRLEN)>;
+        // Alignment in NLMSG_NEXT can leave a negative remainder. Reject it before
+        // converting to the unsigned length type used by newer FreeBSD headers.
+        for (nlmsghdr* hdr = (nlmsghdr*)response; recv_result >= 0 && NLMSG_OK(hdr, static_cast<recv_result_t>(recv_result)); hdr = NLMSG_NEXT(hdr, recv_result)) {
             if (!(hdr->nlmsg_flags & NLM_F_MULTI)) {
                 done = true;
             }

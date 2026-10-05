@@ -24,6 +24,7 @@
 
 #include <tinyformat.h>
 
+#include <limits>
 #include <vector>
 
 #include <boost/test/unit_test.hpp>
@@ -159,6 +160,24 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_rebalance_caches, TestChain100Setup)
     BOOST_CHECK_CLOSE(double(c1.m_coinsdb_cache_size_bytes), max_cache * 0.05, 1);
     BOOST_CHECK_CLOSE(double(c2.m_coinstip_cache_size_bytes), max_cache * 0.95, 1);
     BOOST_CHECK_CLOSE(double(c2.m_coinsdb_cache_size_bytes), max_cache * 0.95, 1);
+
+    if constexpr (sizeof(size_t) == 8) {
+        // Exercise the real snapshot rebalance conversions near the accepted
+        // signed budget limit. Only the coins-cache allowance is increased;
+        // database caches and actual coin contents stay small.
+        LOCK(cs_main);
+        const size_t large_budget{static_cast<size_t>(std::numeric_limits<int64_t>::max() - m_node.mempool->m_opts.max_size_bytes)};
+        manager.m_total_coinstip_cache = large_budget;
+        manager.MaybeRebalanceCaches();
+        BOOST_CHECK_GT(c1.m_coinstip_cache_size_bytes, 0U);
+        BOOST_CHECK_GT(c2.m_coinstip_cache_size_bytes, c1.m_coinstip_cache_size_bytes);
+        BOOST_CHECK_LE(c1.m_coinstip_cache_size_bytes, large_budget);
+        BOOST_CHECK_LE(c2.m_coinstip_cache_size_bytes, large_budget);
+        BOOST_CHECK_EQUAL(c1.GetCoinsCacheSizeState(), CoinsCacheSizeState::OK);
+        BOOST_CHECK_EQUAL(c2.GetCoinsCacheSizeState(), CoinsCacheSizeState::OK);
+        manager.m_total_coinstip_cache = max_cache;
+        manager.MaybeRebalanceCaches();
+    }
 }
 
 struct SnapshotTestSetup : TestChain100Setup {

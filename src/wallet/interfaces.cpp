@@ -27,6 +27,7 @@
 #include <wallet/load.h>
 #include <pq/pq_scheme.h>
 #include <wallet/receive.h>
+#include <wallet/rpc/util.h>
 #include <wallet/rpc/wallet.h>
 #include <wallet/spend.h>
 #include <wallet/wallet.h>
@@ -584,6 +585,11 @@ public:
     void stop() override { return UnloadWallets(m_context); }
     void setMockTime(int64_t time) override { return SetMockTime(time); }
     void schedulerMockForward(std::chrono::seconds delta) override { Assert(m_context.scheduler)->MockForward(delta); }
+
+    std::unique_ptr<interfaces::WalletDescriptorExpansion> getDescriptorExpansion(const std::string& wallet_name) override
+    {
+        return MakeWalletDescriptorExpansion(m_context, wallet_name);
+    }
 
     //! WalletLoader methods
     util::Result<std::unique_ptr<Wallet>> createWallet(const std::string& name, const SecureString& passphrase, uint64_t wallet_creation_flags, std::vector<bilingual_str>& warnings) override

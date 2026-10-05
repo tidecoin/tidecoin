@@ -11,8 +11,13 @@
 #include <wallet/wallet.h>
 
 #include <boost/test/unit_test.hpp>
+#include <set>
 
 namespace wallet {
+// Inspect the internal grouping overload's discarded outputs without adding a
+// production interface just for this regression.
+FilteredOutputGroups GroupOutputs(const CWallet&, const CoinsResult&, const CoinSelectionParams&,
+                                 const std::vector<SelectionFilter>&, std::vector<OutputGroup>&);
 BOOST_FIXTURE_TEST_SUITE(group_outputs_tests, TestingSetup)
 
 static int nextLockTime = 0;
@@ -20,6 +25,7 @@ static int nextLockTime = 0;
 static std::shared_ptr<CWallet> NewWallet(const node::NodeContext& m_node)
 {
     std::unique_ptr<CWallet> wallet = std::make_unique<CWallet>(m_node.chain.get(), "", CreateMockableWalletDatabase());
+    wallet->m_keypool_size = 4; // These fixtures exercise transactions, not default pool capacity.
     wallet->LoadWallet();
     LOCK(wallet->cs_wallet);
     wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
@@ -105,6 +111,37 @@ public:
         GroupVerify(type, filter, /*avoid_partial_spends=*/true, positive_only, expected_without_partial_spends_size);
     }
 };
+
+BOOST_AUTO_TEST_CASE(discarded_groups_count_each_output_once)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    const auto wallet = NewWallet(m_node);
+    CoinsResult coins;
+    const auto rejected = *Assert(wallet->GetNewDestination(OutputType::BECH32, ""));
+    const auto accepted = *Assert(wallet->GetNewDestination(OutputType::BECH32, ""));
+    addCoin(coins, *wallet, rejected, 2 * COIN, true, CFeeRate{0}, 0);
+    addCoin(coins, *wallet, rejected, 1, true, CFeeRate{100}, 0);
+    addCoin(coins, *wallet, accepted, 4 * COIN, true, CFeeRate{0}, 6);
+    const CoinEligibilityFilter strict{1, 6, 0};
+    const CoinEligibilityFilter relaxed{1, 1, 0};
+    for (bool avoid_partial : {false, true}) {
+        std::vector<OutputGroup> discarded;
+        const auto groups = GroupOutputs(*wallet, coins, makeSelectionParams(m_rng, avoid_partial), {{strict}, {relaxed}}, discarded);
+        BOOST_CHECK_EQUAL(discarded.size(), avoid_partial ? 1U : 2U);
+        std::set<COutPoint> seen;
+        CAmount value{0};
+        for (const auto& group : discarded) {
+            for (const auto& coin : group.m_outputs) {
+                BOOST_CHECK(seen.insert(coin->outpoint).second);
+                value += coin->txout.nValue;
+            }
+        }
+        BOOST_CHECK_EQUAL(seen.size(), 2U);
+        BOOST_CHECK_EQUAL(value, 2 * COIN + 1);
+        BOOST_CHECK_EQUAL(groups.at(strict).all_groups.mixed_group.size(), 1U);
+        BOOST_CHECK_EQUAL(groups.at(relaxed).all_groups.positive_group.size(), 1U);
+    }
+}
 
 BOOST_AUTO_TEST_CASE(outputs_grouping_tests)
 {

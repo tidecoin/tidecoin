@@ -14,6 +14,8 @@
 #include <QString>
 #include <QTimer>
 
+Q_MOC_INCLUDE("qt/sendcoinsentry.h")
+
 class PlatformStyle;
 class SendCoinsEntry;
 class SendCoinsRecipient;

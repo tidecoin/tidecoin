@@ -21,7 +21,9 @@
 #include <validation.h>
 
 #include <array>
+#include <barrier>
 #include <cstdint>
+#include <thread>
 
 #include <boost/test/unit_test.hpp>
 
@@ -33,6 +35,46 @@ static CService ip(uint32_t i)
 }
 
 BOOST_FIXTURE_TEST_SUITE(denialofservice_tests, TestingSetup)
+
+BOOST_AUTO_TEST_CASE(fetch_block_peer_disconnect)
+{
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+    auto& connman = static_cast<ConnmanTestMsg&>(*m_node.connman);
+    auto& peerman = *m_node.peerman;
+    const CBlockIndex* block = WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip());
+    BOOST_REQUIRE(block);
+
+    // Exercise both orders first, then race request setup against finalization.
+    // The barrier aligns the calls, but does not force the internal interleaving.
+    for (NodeId id{0}; id < 202; ++id) {
+        auto* peer = new CNode{id, nullptr, CAddress{ip(0xa0b0c001), NODE_NONE},
+                              0, 0, CAddress{}, "", ConnectionType::OUTBOUND_FULL_RELAY, false};
+        connman.Handshake(*peer, true, ServiceFlags(NODE_NETWORK | NODE_WITNESS),
+                          ServiceFlags(NODE_NETWORK | NODE_WITNESS), PROTOCOL_VERSION, true);
+        connman.AddTestNode(*peer);
+        if (id == 0) {
+            BOOST_CHECK(!peerman.FetchBlock(id, *block));
+            peerman.FinalizeNode(*peer);
+        } else if (id == 1) {
+            peerman.FinalizeNode(*peer);
+        } else {
+            std::barrier start{2};
+            std::optional<std::string> result;
+            std::thread fetch{[&] {
+                start.arrive_and_wait();
+                result = peerman.FetchBlock(id, *block);
+            }};
+            start.arrive_and_wait();
+            peerman.FinalizeNode(*peer);
+            fetch.join();
+            BOOST_CHECK(!result || *result == "Peer does not exist");
+        }
+        const auto result = peerman.FetchBlock(id, *block);
+        BOOST_REQUIRE(result);
+        BOOST_CHECK_EQUAL(*result, "Peer does not exist");
+        connman.ClearTestNodes();
+    }
+}
 
 // Test eviction of an outbound peer whose chain never advances
 // Mock a node connection, and use mocktime to simulate a peer

@@ -1756,6 +1756,75 @@ TEST(DBTest, NonWritableFileSystem) {
   env_->non_writable_.store(false, std::memory_order_release);
 }
 
+TEST(DBTest, CompactionOutputFileError) {
+  class OutputErrorEnv : public EnvWrapper {
+   public:
+    explicit OutputErrorEnv(Env* base) : EnvWrapper(base) {}
+    std::atomic<bool> fail_output{false};
+    std::atomic<int> failed_outputs{0};
+
+    // Ensure a failed compaction is included in leveldb.stats even on clocks
+    // too coarse to measure the time spent attempting the open.
+    uint64_t NowMicros() override { return clock_.fetch_add(1000); }
+
+    Status NewWritableFile(const std::string& name, WritableFile** file) override {
+      if (fail_output.load() && name.find(".ldb") != std::string::npos) {
+        ++failed_outputs;
+        return Status::IOError("simulated compaction output open error");
+      }
+      return target()->NewWritableFile(name, file);
+    }
+
+   private:
+    std::atomic<uint64_t> clock_{0};
+  } error_env(env_);
+
+  Options options = CurrentOptions();
+  options.env = &error_env;
+  Reopen(&options);
+  ASSERT_OK(Put("foo", "bar"));
+  ASSERT_OK(dbfull()->TEST_CompactMemTable());
+  const int level = config::kMaxMemCompactLevel;
+  ASSERT_EQ(NumTableFilesAtLevel(level), 1);
+
+  error_env.fail_output.store(true);
+  dbfull()->TEST_CompactRange(level, nullptr, nullptr);
+  ASSERT_EQ(error_env.failed_outputs.load(), 1);
+  ASSERT_EQ(NumTableFilesAtLevel(level), 1);
+  ASSERT_EQ(NumTableFilesAtLevel(level + 1), 0);
+  ASSERT_EQ(Get("foo"), "bar");
+
+  // No output file was opened, so no bytes may be attributed to its level.
+  std::string stats;
+  ASSERT_TRUE(db_->GetProperty("leveldb.stats", &stats));
+  bool found = false;
+  for (size_t pos = 0; pos < stats.size();) {
+    int row_level, files;
+    double size_mb, seconds, read_mb, write_mb;
+    if (sscanf(stats.c_str() + pos, "%d %d %lf %lf %lf %lf", &row_level,
+               &files, &size_mb, &seconds, &read_mb, &write_mb) == 6 &&
+        row_level == level + 1) {
+      ASSERT_EQ(write_mb, 0.0);
+      found = true;
+    }
+    const size_t next = stats.find('\n', pos);
+    if (next == std::string::npos) break;
+    pos = next + 1;
+  }
+  ASSERT_TRUE(found);
+
+  error_env.fail_output.store(false);
+  Reopen(&options);
+  ASSERT_EQ(Get("foo"), "bar");
+  dbfull()->TEST_CompactRange(level, nullptr, nullptr);
+  ASSERT_EQ(NumTableFilesAtLevel(level), 0);
+  ASSERT_EQ(NumTableFilesAtLevel(level + 1), 1);
+  ASSERT_OK(Put("foo", "recovered"));
+  Reopen(&options);
+  ASSERT_EQ(Get("foo"), "recovered");
+  Close();  // The database must not outlive its local Env.
+}
+
 TEST(DBTest, WriteSyncError) {
   // Check that log sync errors cause the DB to disallow future writes.
 

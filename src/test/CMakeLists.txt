@@ -66,6 +66,7 @@ add_executable(test_tidecoin
   net_peer_eviction_tests.cpp
   net_tests.cpp
   netbase_tests.cpp
+  netif_tests.cpp
   node_init_tests.cpp
   node_warnings_tests.cpp
   orphanage_tests.cpp
@@ -140,6 +141,17 @@ add_executable(test_tidecoin
 )
 set_target_properties(test_tidecoin PROPERTIES OUTPUT_NAME test_tidecoin)
 
+if(ENABLE_EXTERNAL_SIGNER)
+  add_executable(tidecoin_mock_process mock_process.cpp)
+  set_target_properties(tidecoin_mock_process PROPERTIES OUTPUT_NAME tidecoin-mock-process)
+  target_link_libraries(tidecoin_mock_process PRIVATE core_interface univalue)
+  add_windows_application_manifest(tidecoin_mock_process)
+  add_dependencies(test_tidecoin tidecoin_mock_process)
+  set_property(SOURCE system_tests.cpp ${PROJECT_SOURCE_DIR}/src/wallet/test/walletload_tests.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS TEST_RUN_COMMAND_HELPER="$<TARGET_FILE:tidecoin_mock_process>"
+  )
+endif()
+
 add_executable(tidecoin_testkeys
   pq_testkeys.cpp
 )
@@ -189,6 +201,7 @@ target_raw_data_sources(test_tidecoin NAMESPACE test::data
 add_windows_application_manifest(test_tidecoin)
 
 target_link_libraries(test_tidecoin
+  leveldb
   core_interface
   test_util
   tidecoin_cli

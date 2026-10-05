@@ -1,0 +1,30 @@
+Qt 6.7.3: prefer the compiler's ARM yield intrinsic.
+
+Adapted locally from Qt commit a76004f16fdc43e1b7af83bfdf3f1a613491b234
+by Paul Wicking (QTBUG-145239), reviewed through Bitcoin PR 34956.
+The macOS 26.4 compiler reports __yield as available, but that spelling
+requires an additional declaration. Prefer __builtin_arm_yield when available.
+Original Qt source licenses apply.
+
+--- a/qtbase/src/corelib/thread/qyieldcpu.h
++++ b/qtbase/src/corelib/thread/qyieldcpu.h
+@@ -31,7 +31,9 @@
+     noexcept
+ #endif
+ {
+-#if __has_builtin(__yield)
++#if __has_builtin(__builtin_arm_yield)
++    __builtin_arm_yield();
++#elif __has_builtin(__yield)
+     __yield();              // Generic
+ #elif defined(_YIELD_PROCESSOR) && defined(Q_CC_MSVC)
+     _YIELD_PROCESSOR();     // Generic; MSVC's <atomic>
+@@ -46,8 +48,6 @@
+ #elif defined(Q_PROCESSOR_X86)
+     __asm__("pause");           // hopefully asm() works in this compiler
+ 
+-#elif __has_builtin(__builtin_arm_yield)
+-    __builtin_arm_yield();
+ #elif defined(Q_PROCESSOR_ARM) && Q_PROCESSOR_ARM >= 7 && defined(Q_CC_GNU)
+     __asm__("yield");           // this works everywhere
+ 

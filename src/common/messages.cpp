@@ -110,6 +110,8 @@ bilingual_str PSBTErrorString(PSBTError err)
             return Untranslated("Inputs missing or spent");
         case PSBTError::SIGHASH_MISMATCH:
             return Untranslated("Specified sighash value does not match value stored in PSBT");
+        case PSBTError::PQHD_ORIGIN_MISMATCH:
+            return Untranslated("PQHD origin conflicts with wallet metadata");
         case PSBTError::EXTERNAL_SIGNER_NOT_FOUND:
             return Untranslated("External signer not found");
         case PSBTError::EXTERNAL_SIGNER_FAILED:

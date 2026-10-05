@@ -1,3 +1,4 @@
+#include "../cleanse.h"
 /*
  * Wrapper for implementing the PQClean API.
  */
@@ -116,6 +117,7 @@ PQCLEAN_FALCON512_CLEAN_crypto_sign_keypair_deterministic(
     uint16_t h[512];
     inner_shake256_context rng;
     size_t u, v;
+    int result = -1;
 
     inner_shake256_init(&rng);
     inner_shake256_inject(&rng, seed, seed_len);
@@ -129,25 +131,25 @@ PQCLEAN_FALCON512_CLEAN_crypto_sign_keypair_deterministic(
             sk + u, PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES - u,
             f, 9, PQCLEAN_FALCON512_CLEAN_max_fg_bits[9]);
     if (v == 0) {
-        return -1;
+        goto cleanup;
     }
     u += v;
     v = PQCLEAN_FALCON512_CLEAN_trim_i8_encode(
             sk + u, PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES - u,
             g, 9, PQCLEAN_FALCON512_CLEAN_max_fg_bits[9]);
     if (v == 0) {
-        return -1;
+        goto cleanup;
     }
     u += v;
     v = PQCLEAN_FALCON512_CLEAN_trim_i8_encode(
             sk + u, PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES - u,
             F, 9, PQCLEAN_FALCON512_CLEAN_max_FG_bits[9]);
     if (v == 0) {
-        return -1;
+        goto cleanup;
     }
     u += v;
     if (u != PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES) {
-        return -1;
+        goto cleanup;
     }
 
     pk[0] = 0x00 + 9;
@@ -155,10 +157,21 @@ PQCLEAN_FALCON512_CLEAN_crypto_sign_keypair_deterministic(
             pk + 1, PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1,
             h, 9);
     if (v != PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1) {
-        return -1;
+        goto cleanup;
     }
 
-    return 0;
+    result = 0;
+cleanup:
+    pq_cleanse(&tmp, sizeof tmp);
+    pq_cleanse(f, sizeof f);
+    pq_cleanse(g, sizeof g);
+    pq_cleanse(F, sizeof F);
+    pq_cleanse(h, sizeof h);
+    if (result != 0) {
+        pq_cleanse(sk, PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES);
+        pq_cleanse(pk, PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES);
+    }
+    return result;
 }
 
 /*

@@ -11,7 +11,9 @@
 
 #include <array>
 #include <cstddef>
+#include <limits>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <variant>
 #include <vector>
@@ -556,6 +558,9 @@ void BerkeleyRODatabase::Open()
     // }
 
     // Check the last page number
+    if (size < page_size || static_cast<uint64_t>(size / page_size - 1) > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error("Database file size is out of range");
+    }
     uint32_t expected_last_page{uint32_t((size / page_size) - 1)};
     if (outer_meta.last_page != expected_last_page) {
         throw std::runtime_error("Last page number could not fit in file");
@@ -568,7 +573,7 @@ void BerkeleyRODatabase::Open()
 
     // Check all Log Sequence Numbers (LSN) point to file 0 and offset 1 which indicates that the LSNs were
     // reset and that the log files are not necessary to get all of the data in the database.
-    for (uint32_t i = 0; i < outer_meta.last_page; ++i) {
+    for (uint64_t i = 0; i <= outer_meta.last_page; ++i) {
         // The LSN is composed of 2 32-bit ints, the first is a file id, the second an offset
         // It will always be the first 8 bytes of a page, so we deserialize it directly for every page
         uint32_t file;
@@ -634,9 +639,17 @@ void BerkeleyRODatabase::Open()
     }
 
     // Do a DFS through the BTree, starting at root
-    std::vector<uint32_t> pages{inner_meta.root};
+    SeekToPage(db_file, inner_meta.root, page_size);
+    PageHeader root_header(inner_meta.root, inner_meta.other_endian);
+    db_file >> root_header;
+    std::vector<std::pair<uint32_t, uint32_t>> pages{{inner_meta.root, root_header.level}};
+    std::set<uint32_t> visited;
+    const uint64_t max_data_size{uint64_t{outer_meta.last_page} * page_size};
     while (pages.size() > 0) {
-        uint32_t curr_page = pages.back();
+        const auto [curr_page, expected_level] = pages.back();
+        if (curr_page > outer_meta.last_page || !visited.insert(curr_page).second) {
+            throw std::runtime_error("Invalid or repeated BTree page");
+        }
         // It turns out BDB completely ignores this last_page field and doesn't actually update it to the correct
         // last page. While we should be checking this, we can't.
         // This is left commented out as a reminder to not accidentally implement this in the future.
@@ -647,17 +660,20 @@ void BerkeleyRODatabase::Open()
         SeekToPage(db_file, curr_page, page_size);
         PageHeader header(curr_page, inner_meta.other_endian);
         db_file >> header;
+        if (header.level != expected_level) throw std::runtime_error("BTree page has an unexpected level");
         switch (header.type) {
         case PageType::BTREE_INTERNAL: {
+            if (header.level < 2) throw std::runtime_error("BTree internal page has an invalid level");
             InternalPage int_page(header);
             db_file >> int_page;
             for (const InternalRecord& rec : int_page.records) {
                 if (rec.m_header.deleted) continue;
-                pages.push_back(rec.page_num);
+                pages.emplace_back(rec.page_num, header.level - 1);
             }
             break;
         }
         case PageType::BTREE_LEAF: {
+            if (header.level != 1) throw std::runtime_error("BTree Leaf page is not at level 1");
             RecordsPage rec_page(header);
             db_file >> rec_page;
             if (rec_page.records.size() % 2 != 0) {
@@ -673,19 +689,29 @@ void BerkeleyRODatabase::Open()
                     data = drec->data;
                 } else if (const OverflowRecord* orec = std::get_if<OverflowRecord>(&rec)) {
                     if (orec->m_header.deleted) continue;
+                    if (orec->item_len > max_data_size) throw std::runtime_error("Overflow record has an impossible length");
                     uint32_t next_page = orec->page_number;
+                    std::set<uint32_t> overflow_pages;
                     while (next_page != 0) {
+                        if (next_page > outer_meta.last_page || !overflow_pages.insert(next_page).second) {
+                            throw std::runtime_error("Invalid or repeated overflow page");
+                        }
                         SeekToPage(db_file, next_page, page_size);
                         PageHeader opage_header(next_page, inner_meta.other_endian);
                         db_file >> opage_header;
                         if (opage_header.type != PageType::OVERFLOW_DATA) {
                             throw std::runtime_error("Bad overflow record page type");
                         }
+                        if (opage_header.hf_offset > page_size - PageHeader::SIZE ||
+                            opage_header.hf_offset > orec->item_len - data.size()) {
+                            throw std::runtime_error("Overflow record data is larger than stated size");
+                        }
                         OverflowPage opage(opage_header);
                         db_file >> opage;
                         data.insert(data.end(), opage.data.begin(), opage.data.end());
                         next_page = opage_header.next_page;
                     }
+                    if (data.size() != orec->item_len) throw std::runtime_error("Overflow record data is shorter than stated size");
                 }
 
                 if (is_key) {

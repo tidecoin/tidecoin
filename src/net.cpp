@@ -3266,6 +3266,13 @@ bool CConnman::BindListenPort(const CService& addrBind, bilingual_str& strError,
     return true;
 }
 
+bool CConnman::Options::ShouldDiscover() const
+{
+    return bind_on_any ||
+           std::any_of(vBinds.begin(), vBinds.end(), [](const auto& bind) { return bind.IsBindAny(); }) ||
+           std::any_of(vWhiteBinds.begin(), vWhiteBinds.end(), [](const auto& bind) { return bind.m_service.IsBindAny(); });
+}
+
 void Discover()
 {
     if (!fDiscover)
@@ -3569,6 +3576,8 @@ void CConnman::StopNodes()
     }
     m_nodes_disconnected.clear();
     vhListenSocket.clear();
+    // Reconnection grants must be released while their semaphore is still alive.
+    WITH_LOCK(m_reconnections_mutex, m_reconnections.clear());
     semOutbound.reset();
     semAddnode.reset();
 }

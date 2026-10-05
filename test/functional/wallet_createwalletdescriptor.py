@@ -17,6 +17,11 @@ class WalletCreateDescriptorTest(BitcoinTestFramework):
         self.skip_if_no_wallet()
 
     def run_test(self):
+        help_text = self.nodes[0].help('createwalletdescriptor')
+        assert "always returns an error" in help_text
+        assert 'setpqhdpolicy' in help_text
+        assert 'importdescriptors' in help_text
+
         for wallet_name in (self.default_wallet_name, "blank"):
             if wallet_name != self.default_wallet_name:
                 self.nodes[0].createwallet(wallet_name, blank=True)

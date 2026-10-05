@@ -8,11 +8,22 @@
 #include <crypto/aes.h>
 #include <crypto/sha512.h>
 
+#include <limits>
 #include <type_traits>
 #include <vector>
 
 namespace wallet {
-int CCrypter::BytesToKeySHA512AES(const std::span<const unsigned char> salt, const SecureString& key_data, int count, unsigned char* key, unsigned char* iv) const
+std::optional<unsigned int> CalibrateDeriveIterations(unsigned int rounds, std::chrono::nanoseconds elapsed)
+{
+    if (rounds == 0 || elapsed.count() <= 0) return std::nullopt;
+    constexpr uint64_t target_ns{100'000'000};
+    static_assert(std::numeric_limits<unsigned int>::max() <= std::numeric_limits<uint64_t>::max() / target_ns);
+    const uint64_t estimate{uint64_t{rounds} * target_ns / static_cast<uint64_t>(elapsed.count())};
+    if (estimate == 0 || estimate > std::numeric_limits<unsigned int>::max()) return std::nullopt;
+    return static_cast<unsigned int>(estimate);
+}
+
+int CCrypter::BytesToKeySHA512AES(const std::span<const unsigned char> salt, const SecureString& key_data, unsigned int count, unsigned char* key, unsigned char* iv) const
 {
     // This mimics the behavior of openssl's EVP_BytesToKey with an aes256cbc
     // cipher and sha512 message digest. Because sha512's output size (64b) is
@@ -29,7 +40,7 @@ int CCrypter::BytesToKeySHA512AES(const std::span<const unsigned char> salt, con
     di.Write(salt.data(), salt.size());
     di.Finalize(buf);
 
-    for(int i = 0; i != count - 1; i++)
+    for (unsigned int i = 0; i < count - 1; ++i)
         di.Reset().Write(buf, sizeof(buf)).Finalize(buf);
 
     memcpy(key, buf, WALLET_CRYPTO_KEY_SIZE);

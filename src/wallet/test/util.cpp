@@ -23,6 +23,7 @@ namespace wallet {
 std::unique_ptr<CWallet> CreateSyncedWallet(interfaces::Chain& chain, CChain& cchain, const CKey& key)
 {
     auto wallet = std::make_unique<CWallet>(&chain, "", CreateMockableWalletDatabase());
+    wallet->m_keypool_size = 4; // These fixtures exercise transactions, not default pool capacity.
     {
         LOCK2(wallet->cs_wallet, ::cs_main);
         wallet->SetLastBlockProcessed(cchain.Height(), cchain.Tip()->GetBlockHash());

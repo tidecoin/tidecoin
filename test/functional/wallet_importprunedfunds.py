@@ -128,6 +128,31 @@ class ImportPrunedFundsTest(BitcoinTestFramework):
         mb.header.nTime += 1  # modify arbitrary block header field to change block hash
         assert_raises_rpc_error(-5, "Block not found in chain", w1.importprunedfunds, rawtxn1, mb.serialize().hex())
 
+        self.log.info("Removing a replaced transaction preserves the conflicting spend")
+        node = self.nodes[0]
+        utxo = max(node.listunspent(), key=lambda output: output["amount"])
+        tx_input = {"txid": utxo["txid"], "vout": utxo["vout"]}
+        address = node.getnewaddress()
+        original = node.send(outputs=[{address: 1}], inputs=[tx_input])["txid"]
+        original_fee = node.gettransaction(original)["fee"]
+        replacement = node.createrawtransaction([tx_input], [{address: utxo["amount"] + original_fee - Decimal("0.01")}])
+        signed = node.signrawtransactionwithwallet(replacement)
+        assert signed["complete"]
+        replacement_id = node.sendrawtransaction(signed["hex"])
+        assert replacement_id != original
+        node.gettransaction(original)
+        node.gettransaction(replacement_id)
+        node.removeprunedfunds(original)
+
+        def assert_input_spent():
+            assert tx_input not in [{"txid": out["txid"], "vout": out["vout"]} for out in node.listunspent(minconf=0)]
+
+        assert_input_spent()
+        self.generate(node, 1)
+        assert_input_spent()
+        self.restart_node(0)
+        assert_input_spent()
+
 
 if __name__ == '__main__':
     ImportPrunedFundsTest(__file__).main()

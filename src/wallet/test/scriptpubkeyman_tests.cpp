@@ -36,6 +36,10 @@ struct WalletFlagTxnTestAccess
     }
 };
 
+struct ActivePQWalletTestingSetup : WalletTestingSetup {
+    ActivePQWalletTestingSetup() : WalletTestingSetup(ChainType::REGTEST) {}
+};
+
 BOOST_FIXTURE_TEST_SUITE(scriptpubkeyman_tests, WalletTestingSetup)
 
 class TxnPolicyFailBatch final : public DatabaseBatch
@@ -295,14 +299,18 @@ BOOST_AUTO_TEST_CASE(DescriptorScriptPubKeyManTests)
     std::string desc_str = "wpkh(" + EncodeSecret(key_internal) + ")";
     auto spk_man1 = CreateDescriptor(keystore, desc_str, true);
     BOOST_CHECK(spk_man1 != nullptr);
-    auto signprov_keypath_spendable = spk_man1->GetSigningProvider(key_internal.GetPubKey());
+    auto signprov_keypath_spendable = spk_man1->GetSigningProvider(key_internal.GetPubKey(), /*include_private=*/true);
     BOOST_CHECK(signprov_keypath_spendable != nullptr);
 
     desc_str = "wpkh(" + HexStr(key_scriptpath.GetPubKey()) + ")";
     auto spk_man2 = CreateDescriptor(keystore, desc_str, true);
     BOOST_CHECK(spk_man2 != nullptr);
-    auto signprov_keypath_pubonly = spk_man2->GetSigningProvider(key_scriptpath.GetPubKey());
+    auto signprov_keypath_pubonly = spk_man2->GetSigningProvider(key_scriptpath.GetPubKey(), /*include_private=*/true);
     BOOST_CHECK(signprov_keypath_pubonly == nullptr);
+    const auto public_provider = spk_man2->GetSigningProvider(key_scriptpath.GetPubKey(), /*include_private=*/false);
+    BOOST_REQUIRE(public_provider);
+    BOOST_CHECK(public_provider->keys.empty());
+    BOOST_CHECK(public_provider->pubkeys.contains(key_scriptpath.GetPubKey().GetID()));
 }
 
 BOOST_AUTO_TEST_CASE(PQHDSchemeGatePreAuxpow)
@@ -311,6 +319,7 @@ BOOST_AUTO_TEST_CASE(PQHDSchemeGatePreAuxpow)
     std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
 
     CWallet wallet(chain.get(), "", CreateMockableWalletDatabase());
+    wallet.m_keypool_size = 1; // This case tests state transitions, not pool capacity.
     {
         LOCK(wallet.cs_wallet);
         wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
@@ -341,7 +350,7 @@ BOOST_AUTO_TEST_CASE(PQHDSchemeGatePreAuxpow)
     }
 }
 
-BOOST_AUTO_TEST_CASE(PQHDInternalDescriptorUsesDefaultScheme)
+BOOST_AUTO_TEST_CASE(PQHDDefaultKeypoolAndInternalScheme)
 {
     REQUIRE_WALLET_TESTS_ENABLED();
     std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
@@ -351,6 +360,14 @@ BOOST_AUTO_TEST_CASE(PQHDInternalDescriptorUsesDefaultScheme)
         LOCK(wallet.cs_wallet);
         wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
         wallet.SetupDescriptorScriptPubKeyMans();
+    }
+
+    // Keep one real default-size prefill regression while the state-transition
+    // fixtures use small pools. Check every active receive/change manager.
+    BOOST_CHECK_EQUAL(wallet.m_keypool_size, DEFAULT_KEYPOOL_SIZE);
+    BOOST_REQUIRE(!wallet.GetAllScriptPubKeyMans().empty());
+    for (auto* manager : wallet.GetAllScriptPubKeyMans()) {
+        BOOST_CHECK_EQUAL(manager->GetKeyPoolSize(), DEFAULT_KEYPOOL_SIZE);
     }
 
     auto spk_man = wallet.GetScriptPubKeyMan(OutputType::BECH32, /*internal=*/true);
@@ -370,6 +387,7 @@ BOOST_AUTO_TEST_CASE(PQHDSeedRemovalBlockedForMixedDescriptorPaths)
     std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
 
     CWallet wallet(chain.get(), "", CreateMockableWalletDatabase());
+    wallet.m_keypool_size = 1; // This case tests state transitions, not pool capacity.
     uint256 default_seed_id;
     uint256 imported_seed_id;
     {
@@ -430,18 +448,16 @@ BOOST_AUTO_TEST_CASE(PQHDSeedImportRollsBackOnPolicyWriteFailure)
     BOOST_CHECK(!db.ContainsDBKey(DBKeys::PQHD_POLICY));
 }
 
-BOOST_AUTO_TEST_CASE(PQHDPolicyUpdatesRollbackWhenDescriptorReconciliationFails)
+BOOST_FIXTURE_TEST_CASE(PQHDPolicyUpdatesRollbackWhenDescriptorReconciliationFails, ActivePQWalletTestingSetup)
 {
     REQUIRE_WALLET_TESTS_ENABLED();
     std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
 
     CWallet wallet(chain.get(), "", CreateMockableWalletDatabase());
+    wallet.m_keypool_size = 1;
     LOCK(wallet.cs_wallet);
     wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
     wallet.SetupDescriptorScriptPubKeyMans();
-
-    const auto original_policy = wallet.GetPQHDPolicy();
-    BOOST_REQUIRE(original_policy);
 
     auto read_db_policy = [&wallet]() -> std::optional<PQHDPolicy> {
         auto db_batch = wallet.GetDatabase().MakeBatch();
@@ -450,9 +466,6 @@ BOOST_AUTO_TEST_CASE(PQHDPolicyUpdatesRollbackWhenDescriptorReconciliationFails)
         if (!db_batch->Read(DBKeys::PQHD_POLICY, policy)) return std::nullopt;
         return policy;
     };
-
-    const auto original_db_policy = read_db_policy();
-    BOOST_REQUIRE(original_db_policy);
 
     const SecureString passphrase{"passphrase"};
     BOOST_REQUIRE(wallet.EncryptWallet(passphrase));
@@ -466,6 +479,13 @@ BOOST_AUTO_TEST_CASE(PQHDPolicyUpdatesRollbackWhenDescriptorReconciliationFails)
 
     BOOST_REQUIRE(wallet.Lock());
     BOOST_REQUIRE(wallet.IsLocked());
+
+    // Encryption rotates the default seed. Snapshot the state being rolled back
+    // immediately before the failing policy update, after that successful rotation.
+    const auto original_policy = wallet.GetPQHDPolicy();
+    BOOST_REQUIRE(original_policy);
+    const auto original_db_policy = read_db_policy();
+    BOOST_REQUIRE(original_db_policy);
 
     const auto set_seed_result = wallet.SetPQHDSeedDefaults(imported_seed_id, imported_seed_id);
     BOOST_REQUIRE(!set_seed_result);
@@ -486,7 +506,7 @@ BOOST_AUTO_TEST_CASE(PQHDPolicyUpdatesRollbackWhenDescriptorReconciliationFails)
     const bool can_test_scheme_switch =
         pq::IsSchemeAllowedAtHeight(pq::SchemeId::MLDSA_44, params, target_height) &&
         pq::IsSchemeAllowedAtHeight(pq::SchemeId::MLDSA_65, params, target_height);
-    if (!can_test_scheme_switch) return;
+    BOOST_REQUIRE(can_test_scheme_switch);
 
     const auto set_policy_result = wallet.SetPQHDPolicy(static_cast<uint8_t>(pq::SchemeId::MLDSA_44),
                                                         static_cast<uint8_t>(pq::SchemeId::MLDSA_65));
@@ -504,7 +524,7 @@ BOOST_AUTO_TEST_CASE(PQHDPolicyUpdatesRollbackWhenDescriptorReconciliationFails)
     BOOST_CHECK_EQUAL(db_after_scheme_policy->default_change_scheme, original_db_policy->default_change_scheme);
 }
 
-BOOST_AUTO_TEST_CASE(PQHDPolicyUpdateWriteFailureDoesNotCreateDescriptors)
+BOOST_FIXTURE_TEST_CASE(PQHDPolicyUpdateWriteFailureDoesNotCreateDescriptors, ActivePQWalletTestingSetup)
 {
     REQUIRE_WALLET_TESTS_ENABLED();
     std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
@@ -512,6 +532,7 @@ BOOST_AUTO_TEST_CASE(PQHDPolicyUpdateWriteFailureDoesNotCreateDescriptors)
     auto database = std::make_unique<TxnPolicyFailDatabase>(/*fail_pqhd_policy_write=*/false);
     auto* db_ptr = database.get();
     CWallet wallet(chain.get(), "", std::move(database));
+    wallet.m_keypool_size = 1; // This case tests state transitions, not pool capacity.
     LOCK(wallet.cs_wallet);
     wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
     wallet.SetupDescriptorScriptPubKeyMans();
@@ -521,7 +542,7 @@ BOOST_AUTO_TEST_CASE(PQHDPolicyUpdateWriteFailureDoesNotCreateDescriptors)
     const bool can_test_scheme_switch =
         pq::IsSchemeAllowedAtHeight(pq::SchemeId::MLDSA_44, params, target_height) &&
         pq::IsSchemeAllowedAtHeight(pq::SchemeId::MLDSA_65, params, target_height);
-    if (!can_test_scheme_switch) return;
+    BOOST_REQUIRE(can_test_scheme_switch);
 
     const size_t spkm_count_before = wallet.GetAllScriptPubKeyMans().size();
     db_ptr->SetFailPQHDPolicyWrite(true);
@@ -533,7 +554,7 @@ BOOST_AUTO_TEST_CASE(PQHDPolicyUpdateWriteFailureDoesNotCreateDescriptors)
     BOOST_CHECK_EQUAL(wallet.GetAllScriptPubKeyMans().size(), spkm_count_before);
 }
 
-BOOST_AUTO_TEST_CASE(PQHDPolicyUpdateAbortRemovesCreatedDescriptors)
+BOOST_FIXTURE_TEST_CASE(PQHDPolicyUpdateAbortRemovesCreatedDescriptors, ActivePQWalletTestingSetup)
 {
     REQUIRE_WALLET_TESTS_ENABLED();
     std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
@@ -542,6 +563,7 @@ BOOST_AUTO_TEST_CASE(PQHDPolicyUpdateAbortRemovesCreatedDescriptors)
                                                              /*fail_active_spk_write=*/false);
     auto* db_ptr = database.get();
     CWallet wallet(chain.get(), "", std::move(database));
+    wallet.m_keypool_size = 1; // This case tests state transitions, not pool capacity.
     LOCK(wallet.cs_wallet);
     wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
     wallet.SetupDescriptorScriptPubKeyMans();
@@ -554,7 +576,7 @@ BOOST_AUTO_TEST_CASE(PQHDPolicyUpdateAbortRemovesCreatedDescriptors)
     const bool can_test_scheme_switch =
         pq::IsSchemeAllowedAtHeight(pq::SchemeId::MLDSA_44, params, target_height) &&
         pq::IsSchemeAllowedAtHeight(pq::SchemeId::MLDSA_65, params, target_height);
-    if (!can_test_scheme_switch) return;
+    BOOST_REQUIRE(can_test_scheme_switch);
 
     const size_t spkm_count_before = wallet.GetAllScriptPubKeyMans().size();
     db_ptr->SetFailActiveSPKWrite(true);
@@ -581,6 +603,7 @@ BOOST_AUTO_TEST_CASE(PQHDDescriptorSetupAbortPreservesBlankWalletFlag)
     auto database = std::make_unique<TxnPolicyFailDatabase>(/*fail_pqhd_policy_write=*/false,
                                                              /*fail_active_spk_write=*/true);
     CWallet wallet(chain.get(), "", std::move(database));
+    wallet.m_keypool_size = 1; // This case tests state transitions, not pool capacity.
     wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
     wallet.SetWalletFlag(WALLET_FLAG_BLANK_WALLET);
     BOOST_CHECK(wallet.IsWalletFlagSet(WALLET_FLAG_BLANK_WALLET));
@@ -698,7 +721,7 @@ BOOST_AUTO_TEST_CASE(RunWithinTxnExceptionAbortsAndRestoresWalletFlags)
     BOOST_CHECK(!db_ptr->ContainsDBKey(DBKeys::FLAGS));
 }
 
-BOOST_AUTO_TEST_CASE(PQHDOnDemandDescriptorCreationCommitFailureRollsBack)
+BOOST_FIXTURE_TEST_CASE(PQHDOnDemandDescriptorCreationCommitFailureRollsBack, ActivePQWalletTestingSetup)
 {
     REQUIRE_WALLET_TESTS_ENABLED();
     std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
@@ -708,13 +731,14 @@ BOOST_AUTO_TEST_CASE(PQHDOnDemandDescriptorCreationCommitFailureRollsBack)
                                                              /*fail_commit=*/false);
     auto* db_ptr = database.get();
     CWallet wallet(chain.get(), "", std::move(database));
+    wallet.m_keypool_size = 1; // This case tests state transitions, not pool capacity.
     LOCK(wallet.cs_wallet);
     wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
     wallet.SetupDescriptorScriptPubKeyMans();
 
     const int target_height = wallet.GetTargetHeightForOutputs();
     const Consensus::Params& params = Params().GetConsensus();
-    if (!pq::IsSchemeAllowedAtHeight(pq::SchemeId::MLDSA_44, params, target_height)) return;
+    BOOST_REQUIRE(pq::IsSchemeAllowedAtHeight(pq::SchemeId::MLDSA_44, params, target_height));
 
     const size_t spkm_count_before = wallet.GetAllScriptPubKeyMans().size();
     const size_t descriptor_records_before = db_ptr->CountDBKeys(DBKeys::WALLETDESCRIPTOR);
@@ -739,6 +763,7 @@ BOOST_AUTO_TEST_CASE(PQHDOnDemandDescriptorCreationPreAuxpowDoesNotThrow)
     std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
 
     CWallet wallet(chain.get(), "", CreateMockableWalletDatabase());
+    wallet.m_keypool_size = 1; // This case tests state transitions, not pool capacity.
     LOCK(wallet.cs_wallet);
     wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
     wallet.SetupDescriptorScriptPubKeyMans();
@@ -761,6 +786,7 @@ BOOST_AUTO_TEST_CASE(PQHDCryptedSeedDecryptRejectsSeedIdMismatch)
     std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
 
     CWallet wallet(chain.get(), "", CreateMockableWalletDatabase());
+    wallet.m_keypool_size = 1; // This case tests state transitions, not pool capacity.
     LOCK(wallet.cs_wallet);
     wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
     wallet.SetupDescriptorScriptPubKeyMans();

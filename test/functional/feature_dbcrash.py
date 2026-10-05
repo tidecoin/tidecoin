@@ -185,6 +185,7 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
             except OSError:
                 # probably a crash on db flushing
                 nodei_utxo_hash = self.restart_node(i, self.nodes[3].getbestblockhash())
+                self.restart_counts[i] += 1
             assert_equal(nodei_utxo_hash, node3_utxo_hash)
 
     def generate_small_transactions(self, node, count, utxo_list):
@@ -205,6 +206,33 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
                 fee_per_output=FEE // 3,
             )
             num_transactions += 1
+
+    def ensure_crash_during_replay(self):
+        """Guarantee replay interruption when the random workload missed it."""
+        if self.crashed_on_restart:
+            return
+        self.log.info("Random workload did not interrupt recovery; exercising a deterministic replay crash")
+        node = self.nodes[0]
+        self.stop_node(0)  # verify_utxo_hash already flushed every node.
+        crash_args = [arg for arg in self.node0_args if not arg.startswith(("-dbcrashratio=", "-dbbatchsize="))]
+        crash_args += ["-dbbatchsize=1", "-dbcrashat=1"]
+        self.start_node(0, extra_args=crash_args)
+        block_hash = self.generate(self.nodes[3], 1, sync_fun=self.no_op)[0]
+        block = self.nodes[3].getblock(block_hash, 0)
+        for peer in self.nodes[:3]:
+            assert_equal(peer.submitblock(block), None)
+        with node.assert_debug_log(["Simulating deterministic chainstate crash."]):
+            try:
+                node.gettxoutsetinfo()
+            except (OSError, http.client.HTTPException):
+                pass
+            node.wait_until_stopped(expect_error=True)
+        self.restart_counts[0] += 1
+        with node.assert_debug_log(["Replaying blocks", "Simulating deterministic chainstate crash."]):
+            node.assert_start_raises_init_error(extra_args=crash_args, expected_msg="")
+        self.crashed_on_restart += 1
+        self.start_node(0)
+        self.verify_utxo_hash()
 
     def run_test(self):
         self.wallet = MiniWallet(self.nodes[3])
@@ -273,6 +301,10 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
         # Useful side effect: each utxo cache gets flushed here, so that we
         # won't get crashes on shutdown at the end of the test.
         self.verify_utxo_hash()
+
+        # Coverage must not depend on randomly selecting a crash twice. Keep
+        # the randomized workload and supplement it only when replay was missed.
+        self.ensure_crash_during_replay()
 
         # Check the test coverage
         self.log.info(f"Restarted nodes: {self.restart_counts}; crashes on restart: {self.crashed_on_restart}")

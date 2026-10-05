@@ -12,8 +12,10 @@
 #include <node/interface_ui.h>
 #include <tinyformat.h>
 #include <util/byte_units.h>
+#include <util/overflow.h>
 
 #include <algorithm>
+#include <limits>
 #include <string>
 
 // Unlike for the UTXO database, for the txindex scenario the leveldb cache make
@@ -26,6 +28,27 @@ static constexpr size_t MAX_FILTER_INDEX_CACHE{1024_MiB};
 static constexpr size_t MAX_32BIT_DBCACHE{1024_MiB};
 
 namespace node {
+util::Result<void> CheckCacheOptions(const ArgsManager& args, int64_t max_mempool_bytes, size_t n_indexes)
+{
+    // Keep the existing 32-bit clamp. On 64-bit systems downstream cache
+    // accounting and snapshot activation require a signed byte budget.
+    constexpr int64_t max_dbcache_mib{std::numeric_limits<int64_t>::max() >> 20};
+    if (const auto dbcache{args.GetIntArg("-dbcache")}; sizeof(void*) != 4 && dbcache && *dbcache > max_dbcache_mib) {
+        return util::Error{Untranslated(strprintf("-dbcache must not exceed %d MiB", max_dbcache_mib))};
+    }
+    if (max_mempool_bytes < 0) {
+        return util::Error{Untranslated("-maxmempool must be non-negative")};
+    }
+    const auto cache_sizes{CalculateCacheSizes(args, n_indexes)};
+    // CheckCacheOptions limits dbcache before its MiB conversion, so this cast
+    // is safe even if the raw option would otherwise saturate to SIZE_MAX.
+    const auto total{CheckedAdd<int64_t>(static_cast<int64_t>(cache_sizes.kernel.coins), max_mempool_bytes)};
+    if (!total) {
+        return util::Error{Untranslated("Combined -dbcache and -maxmempool exceed the supported cache budget")};
+    }
+    return {};
+}
+
 size_t CalculateDbCacheBytes(const ArgsManager& args)
 {
     if (auto db_cache{args.GetIntArg("-dbcache")}) {

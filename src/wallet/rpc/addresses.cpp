@@ -148,8 +148,8 @@ RPCHelpMan dumpprivkey()
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "Multipath descriptors are not supported");
             }
             auto& desc = descs.at(0);
-            if (desc->IsRange() && index < 0) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "index must be non-negative for ranged descriptors");
+            if (desc->IsRange() && (index < 0 || index > std::numeric_limits<int32_t>::max())) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "index must be between 0 and 2147483647 for ranged descriptors");
             }
             if (!desc->IsRange() && index != 0) {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "index must be 0 for non-ranged descriptors");

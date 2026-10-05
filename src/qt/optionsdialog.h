@@ -8,6 +8,8 @@
 #include <QDialog>
 #include <QValidator>
 
+Q_MOC_INCLUDE("qt/qvalidatedlineedit.h")
+
 class ClientModel;
 class OptionsModel;
 class WalletModel;

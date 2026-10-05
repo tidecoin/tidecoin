@@ -26,9 +26,14 @@ class BitcoinChainstateTest(BitcoinTestFramework):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
         )
-        stdout, stderr = proc.communicate(input=input + "\n", timeout=5)
+        try:
+            stdout, stderr = proc.communicate(input=input + "\n", timeout=5 * self.options.timeout_factor)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
         self.log.debug("STDOUT: {0}".format(stdout.strip("\n")))
         self.log.info("STDERR: {0}".format(stderr.strip("\n")))
 

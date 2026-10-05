@@ -171,6 +171,7 @@ public:
     explicit PubkeyProvider(uint32_t exp_index) : m_expr_index(exp_index) {}
 
     virtual ~PubkeyProvider() = default;
+    uint32_t GetExpressionIndex() const { return m_expr_index; }
 
     /** Compare two public keys represented by this provider.
      * Used by the Miniscript descriptors to check for duplicate keys in the script.
@@ -324,6 +325,7 @@ public:
 
     std::optional<CPubKey> GetPubKey(int pos, const SigningProvider& arg, FlatSigningProvider& out, const DescriptorCache* read_cache, DescriptorCache* write_cache) const override
     {
+        if (pos < 0) return std::nullopt;
         const uint32_t der_index = (m_derive == DeriveType::NO) ? 0U : static_cast<uint32_t>(pos);
 
         if (read_cache) {
@@ -331,11 +333,10 @@ public:
             if (!read_cache->GetCachedDerivedPubKey(m_expr_index, der_index, cached)) {
                 return std::nullopt;
             }
+            if (!cached.IsValid() || cached[0] != m_scheme_prefix) return std::nullopt;
             out.pubkeys.emplace(cached.GetID(), cached);
             return cached;
         }
-
-        if (!write_cache) return std::nullopt;
 
         const auto master_seed = arg.GetPQHDSeed(m_seed_id);
         if (!master_seed) {
@@ -378,7 +379,7 @@ public:
         if (!pubkey.IsFullyValid()) return std::nullopt;
 
         out.pubkeys.emplace(pubkey.GetID(), pubkey);
-        write_cache->CacheDerivedPubKey(m_expr_index, der_index, pubkey);
+        if (write_cache) write_cache->CacheDerivedPubKey(m_expr_index, der_index, pubkey);
         return pubkey;
     }
 
@@ -404,6 +405,7 @@ public:
 
     void GetPrivKey(int pos, const SigningProvider& arg, FlatSigningProvider& out) const override
     {
+        if (pos < 0) return;
         const auto master_seed = arg.GetPQHDSeed(m_seed_id);
         if (!master_seed) {
             return;
@@ -719,6 +721,19 @@ public:
     }
 
     // NOLINTNEXTLINE(misc-no-recursion)
+    std::map<uint32_t, PQHDKeyPathInfo> GetPQHDKeyPaths() const override
+    {
+        std::map<uint32_t, PQHDKeyPathInfo> paths;
+        for (const auto& key : m_pubkey_args) {
+            if (auto path = key->GetPQHDKeyPathInfo()) paths.emplace(key->GetExpressionIndex(), *path);
+        }
+        for (const auto& sub : m_subdescriptor_args) {
+            paths.merge(sub->GetPQHDKeyPaths());
+        }
+        return paths;
+    }
+
+    // NOLINTNEXTLINE(misc-no-recursion)
     std::set<uint256> GetPQHDSeedIDs() const override
     {
         std::set<uint256> seed_ids;
@@ -994,7 +1009,7 @@ public:
     {
         std::vector<std::unique_ptr<PubkeyProvider>> providers;
         providers.reserve(m_pubkey_args.size());
-        std::transform(m_pubkey_args.begin(), m_pubkey_args.end(), providers.begin(), [](const std::unique_ptr<PubkeyProvider>& p) { return p->Clone(); });
+        std::transform(m_pubkey_args.begin(), m_pubkey_args.end(), std::back_inserter(providers), [](const std::unique_ptr<PubkeyProvider>& p) { return p->Clone(); });
         return std::make_unique<MultisigDescriptor>(m_threshold, std::move(providers), m_sorted);
     }
 };

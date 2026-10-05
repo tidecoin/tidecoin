@@ -1,0 +1,86 @@
+Fix confirmed Qt 6.7.3 date parser state and HMAC capacity assertion defects.
+Retain time-zone comparison state across sections; permit a full-capacity key.
+
+--- a/qtbase/src/corelib/time/qdatetimeparser.cpp
++++ b/qtbase/src/corelib/time/qdatetimeparser.cpp
+@@ -1233,6 +1233,7 @@
+     QTimeZone timeZone = defaultValue.timeRepresentation();
+ 
+     int ampm = -1;
++    int zoneOffset = 0; // Retain the value when comparing repeated time-zone sections.
+     Sections isSet = NoSection;
+ 
+     for (int index = 0; index < sectionNodesCount; ++index) {
+@@ -1248,7 +1249,6 @@
+         pos += step;
+         sectionNodes[index].pos = pos;
+         int *current = nullptr;
+-        int zoneOffset; // Needed to serve as *current when setting zone
+         const SectionNode sn = sectionNodes.at(index);
+         const QDateTime usedDateTime = [&] {
+             const QDate date = actualDate(isSet, calendar, defaultCenturyStart,
+--- a/qtbase/src/corelib/tools/qcryptographichash.cpp
++++ b/qtbase/src/corelib/tools/qcryptographichash.cpp
+@@ -149,7 +149,7 @@
+     constexpr void assign(const Container &c)
+     {
+         const size_t otherSize = size_t(std::size(c));
+-        Q_ASSERT(otherSize < N);
++        Q_ASSERT(otherSize <= N);
+         memcpy(data(), std::data(c), otherSize);
+         m_size = quint8(otherSize);
+     }
+--- a/qtbase/tests/auto/corelib/time/qdatetime/tst_qdatetime.cpp
++++ b/qtbase/tests/auto/corelib/time/qdatetime/tst_qdatetime.cpp
+@@ -3333,6 +3333,28 @@
+     QTest::newRow("integer overflow found by fuzzer")
+                 << u"EEE1200000MUB"_s << u"t"_s << 1900 << QDateTime();
+ 
++    // Repeated zone values must survive intervening sections.
++    QTest::newRow("timezone-repeat-positive")
++            << u"2008-10-13 +03:00 11.50 +03:00"_s << u"yyyy-MM-dd ttt hh.mm ttt"_s
++            << 1900 << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
++                                QTimeZone::fromSecondsAheadOfUtc(10800));
++    QTest::newRow("timezone-repeat-negative")
++            << u"2008-10-13 -03:00 11.50 -03:00"_s << u"yyyy-MM-dd ttt hh.mm ttt"_s
++            << 1900 << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
++                                QTimeZone::fromSecondsAheadOfUtc(-10800));
++    QTest::newRow("timezone-repeat-zero")
++            << u"2008-10-13 +00:00 11.50 +00:00"_s << u"yyyy-MM-dd ttt hh.mm ttt"_s
++            << 1900 << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
++                                QTimeZone::fromSecondsAheadOfUtc(0));
++    QTest::newRow("timezone-repeat-conflict")
++            << u"2008-10-13 +03:00 11.50 +02:00"_s << u"yyyy-MM-dd ttt hh.mm ttt"_s
++            << 1900 << QDateTime();
++    QTest::newRow("timezone-repeat-three")
++            << u"2008-10-13 +03:00 +03:00 11.50 +03:00"_s
++            << u"yyyy-MM-dd ttt ttt hh.mm ttt"_s
++            << 1900 << QDateTime(QDate(2008, 10, 13), QTime(11, 50),
++                                QTimeZone::fromSecondsAheadOfUtc(10800));
++
+     // Rich time-zone specifiers (QTBUG-95966):
+     const auto east3hours = QTimeZone::fromSecondsAheadOfUtc(10800);
+     QTest::newRow("timezone-tt-with-offset:+0300")
+--- a/qtbase/tests/auto/corelib/tools/qmessageauthenticationcode/tst_qmessageauthenticationcode.cpp
++++ b/qtbase/tests/auto/corelib/tools/qmessageauthenticationcode/tst_qmessageauthenticationcode.cpp
+@@ -125,6 +125,20 @@
+                        "b42af09057bac1e2d41708e48a902e09b5ff7f12ab428a4fe86653c73dd248fb82f948a549f"
+                        "7b791a5b41915ee4d1ec3935357e4e2317250d0372afa2ebeeb3a");
+ 
++    // SHA3-224 has the largest supported HMAC block (144 bytes).
++    QTest::newRow("sha3-224-key-143")
++            << QCryptographicHash::Sha3_224 << QByteArray(143, 'k')
++            << QByteArray("block boundary")
++            << QByteArray::fromHex("5665a94423cf19788b0fbc663512c8039da901cbe53e111e452d45cd");
++    QTest::newRow("sha3-224-key-144")
++            << QCryptographicHash::Sha3_224 << QByteArray(144, 'k')
++            << QByteArray("block boundary")
++            << QByteArray::fromHex("f11c695029fea4bc39139b99398cca846e37fc471ad29f900ba0636d");
++    QTest::newRow("sha3-224-key-145")
++            << QCryptographicHash::Sha3_224 << QByteArray(145, 'k')
++            << QByteArray("block boundary")
++            << QByteArray::fromHex("118fa24148f004c9800778dc4d410524d219cdba3c4e0095dd499e50");
++
+     // Some from rfc-2104
+     QTest::newRow("rfc-md5-1") << QCryptographicHash::Md5
+                                << QByteArray::fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")

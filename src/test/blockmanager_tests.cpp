@@ -13,6 +13,8 @@
 #include <util/chaintype.h>
 #include <validation.h>
 
+#include <algorithm>
+
 #include <boost/test/unit_test.hpp>
 #include <test/util/logging.h>
 #include <test/util/setup_common.h>
@@ -24,6 +26,59 @@ using node::MAX_BLOCKFILE_SIZE;
 
 // use BasicTestingSetup here for the data directory configuration, setup, and cleanup
 BOOST_FIXTURE_TEST_SUITE(blockmanager_tests, BasicTestingSetup)
+
+BOOST_FIXTURE_TEST_CASE(unlinked_blocks_unique_pairs, TestingSetup)
+{
+    LOCK(cs_main);
+    auto& blockman = m_node.chainman->m_blockman;
+    CBlockIndex parent, other_parent, first, sibling, other_child;
+    first.pprev = sibling.pprev = &parent;
+    other_child.pprev = &other_parent;
+    for (auto* block : {&first, &sibling, &other_child}) block->nStatus |= BLOCK_HAVE_DATA;
+
+    for (int repeat{0}; repeat < 3; ++repeat) {
+        for (auto* block : {&first, &sibling, &other_child, &first}) blockman.AddUnlinkedBlock(block);
+        BOOST_CHECK_EQUAL(blockman.m_blocks_unlinked.size(), 3U);
+        BOOST_CHECK_EQUAL(blockman.m_blocks_unlinked.count(&parent), 2U);
+        BOOST_CHECK_EQUAL(blockman.m_blocks_unlinked.count(&other_parent), 1U);
+    }
+    const auto [begin, end] = blockman.m_blocks_unlinked.equal_range(&parent);
+    BOOST_CHECK_EQUAL(std::count_if(begin, end, [&](const auto& entry) { return entry.second == &first; }), 1);
+    BOOST_CHECK_EQUAL(std::count_if(begin, end, [&](const auto& entry) { return entry.second == &sibling; }), 1);
+    blockman.m_blocks_unlinked.clear();
+}
+
+BOOST_FIXTURE_TEST_CASE(unlinked_blocks_reload_skips_pruned_data, TestChain100Setup)
+{
+    LOCK(cs_main);
+    auto& chainman = *m_node.chainman;
+    auto& blockman = chainman.m_blockman;
+    auto* missing = chainman.ActiveChain()[98];
+    auto* pruned = chainman.ActiveChain()[99];
+    auto* available = chainman.ActiveChain()[100];
+
+    // Model an unreceived ancestor, followed by a previously received but
+    // pruned block and a descendant whose data is still available.
+    missing->nStatus = BLOCK_VALID_TREE;
+    missing->nTx = 0;
+    missing->m_chain_tx_count = 0;
+    missing->nSequenceId = 0;
+    missing->nDataPos = missing->nUndoPos = 0;
+    pruned->nStatus &= ~(BLOCK_HAVE_DATA | BLOCK_HAVE_UNDO);
+    pruned->nDataPos = pruned->nUndoPos = 0;
+    BOOST_REQUIRE(blockman.WriteBlockIndexDB());
+    BOOST_REQUIRE(blockman.m_block_tree_db->WriteBatchSync({}, available->nFile, {missing, pruned}));
+    BOOST_REQUIRE(blockman.m_block_tree_db->WriteFlag("prunedblockfiles", true));
+
+    for (int repeat{0}; repeat < 2; ++repeat) {
+        BOOST_REQUIRE(blockman.LoadBlockIndexDB(std::nullopt));
+        BOOST_CHECK(!pruned->HaveNumChainTxs());
+        BOOST_CHECK(!available->HaveNumChainTxs());
+        BOOST_REQUIRE_EQUAL(blockman.m_blocks_unlinked.size(), 1U);
+        BOOST_CHECK(blockman.m_blocks_unlinked.begin()->first == pruned);
+        BOOST_CHECK(blockman.m_blocks_unlinked.begin()->second == available);
+    }
+}
 
 BOOST_AUTO_TEST_CASE(blockmanager_find_block_pos)
 {

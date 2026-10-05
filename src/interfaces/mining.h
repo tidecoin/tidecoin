@@ -72,6 +72,12 @@ public:
      * the tip is more than 20 minutes old.
      */
     virtual std::unique_ptr<BlockTemplate> waitNext(const node::BlockWaitOptions options = {}) = 0;
+
+    /** Interrupt a pending waitNext(), returning nullptr. If no wait is pending,
+     * the next wait consumes the interruption. Repeated interrupts coalesce.
+     * Callers must serialize waitNext() calls on each template.
+     */
+    virtual void interruptWait() = 0;
 };
 
 //! Interface giving clients (RPC, Stratum v2 Template Provider in the future)
@@ -133,7 +139,9 @@ public:
 };
 
 //! Return implementation of Mining interface.
-std::unique_ptr<Mining> MakeMining(node::NodeContext& node);
+//! External callers wait until startup has connected the tip, or return null on shutdown.
+//! Internal startup callers may opt out and must defer calls until chainstate is ready.
+std::unique_ptr<Mining> MakeMining(node::NodeContext& node, bool wait_loaded = true);
 
 } // namespace interfaces
 

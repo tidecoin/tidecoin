@@ -363,6 +363,7 @@ RPCErrorCode RPCErrorFromPSBTError(PSBTError err)
         case PSBTError::UNSUPPORTED:
             return RPC_INVALID_PARAMETER;
         case PSBTError::SIGHASH_MISMATCH:
+        case PSBTError::PQHD_ORIGIN_MISMATCH:
             return RPC_DESERIALIZATION_ERROR;
         default: break;
     }
@@ -1303,7 +1304,25 @@ std::pair<int64_t, int64_t> ParseDescriptorRange(const UniValue& value)
     return {low, high};
 }
 
-std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, FlatSigningProvider& provider, const bool expand_priv)
+std::optional<std::vector<CScript>> ExpandDescriptorRange(const std::vector<std::unique_ptr<Descriptor>>& descs, std::pair<int64_t, int64_t> range, const SigningProvider& provider, FlatSigningProvider& out, bool expand_priv, const DescriptorExpandFn& expand)
+{
+    Assert(range.first >= 0 && range.first <= range.second && range.second <= INT32_MAX);
+    std::vector<CScript> ret;
+    // The increment after the inclusive INT32_MAX endpoint must remain representable.
+    for (int64_t i = range.first; i <= range.second; ++i) {
+        for (const auto& desc : descs) {
+            std::vector<CScript> scripts;
+            if (!(expand ? expand(*desc, i, provider, scripts, out) : desc->Expand(i, provider, scripts, out))) return std::nullopt;
+            if (expand_priv) {
+                desc->ExpandPrivate(/*pos=*/i, provider, out);
+            }
+            std::move(scripts.begin(), scripts.end(), std::back_inserter(ret));
+        }
+    }
+    return ret;
+}
+
+std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, FlatSigningProvider& provider, const bool expand_priv, const DescriptorExpandFn& expand)
 {
     std::string desc_str;
     std::pair<int64_t, int64_t> range = {0, 1000};
@@ -1330,20 +1349,16 @@ std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, Fl
         range.first = 0;
         range.second = 0;
     }
-    std::vector<CScript> ret;
-    for (int i = range.first; i <= range.second; ++i) {
+    auto ret = ExpandDescriptorRange(descs, range, provider, provider, expand_priv, expand);
+    if (!ret) {
         for (const auto& desc : descs) {
-            std::vector<CScript> scripts;
-            if (!desc->Expand(i, provider, scripts, provider)) {
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Cannot derive script without private keys: '%s'", desc_str));
+            if (!desc->GetPQHDSeedIDs().empty()) {
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "PQHD expansion requires wallet seed access or cached public keys.");
             }
-            if (expand_priv) {
-                desc->ExpandPrivate(/*pos=*/i, provider, /*out=*/provider);
-            }
-            std::move(scripts.begin(), scripts.end(), std::back_inserter(ret));
         }
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Cannot derive script without private keys: '%s'", desc_str));
     }
-    return ret;
+    return std::move(*ret);
 }
 
 /** Convert a vector of bilingual strings to a UniValue::VARR containing their original untranslated values. */

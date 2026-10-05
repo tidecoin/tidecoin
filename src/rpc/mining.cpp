@@ -183,7 +183,7 @@ static UniValue generateBlocks(ChainstateManager& chainman, Mining& miner, const
     return blockHashes;
 }
 
-static bool getScriptFromDescriptor(const std::string& descriptor, CScript& script, std::string& error)
+static bool getScriptFromDescriptor(const JSONRPCRequest& request, const std::string& descriptor, CScript& script, std::string& error)
 {
     FlatSigningProvider key_provider;
     const auto descs = Parse(descriptor, key_provider, error, /* require_checksum = */ false);
@@ -198,9 +198,12 @@ static bool getScriptFromDescriptor(const std::string& descriptor, CScript& scri
 
     FlatSigningProvider provider;
     std::vector<CScript> scripts;
-    if (!desc->Expand(0, key_provider, scripts, provider)) {
+    RPCDescriptorResolver resolver{request};
+    if (!resolver.Expand(*desc, 0, key_provider, scripts, provider)) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Cannot derive script without private keys");
     }
+
+    resolver.Finish();
 
     // Combo descriptors can have 2 or 4 scripts, so we can't just check scripts.size() == 1
     CHECK_NONFATAL(scripts.size() > 0 && scripts.size() <= 4);
@@ -222,7 +225,8 @@ static RPCHelpMan generatetodescriptor()
 {
     return RPCHelpMan{
         "generatetodescriptor",
-        "Mine to a specified descriptor and return the block hashes.",
+        "Mine to a specified descriptor and return the block hashes.\n"
+        "Fixed registered PQHD descriptors require explicit wallet selection (-rpcwallet). Ranged descriptors are not accepted.\n",
         {
             {"num_blocks", RPCArg::Type::NUM, RPCArg::Optional::NO, "How many blocks are generated."},
             {"descriptor", RPCArg::Type::STR, RPCArg::Optional::NO, "The descriptor to send the newly generated Tidecoin to."},
@@ -243,7 +247,7 @@ static RPCHelpMan generatetodescriptor()
 
     CScript coinbase_output_script;
     std::string error;
-    if (!getScriptFromDescriptor(self.Arg<std::string>("descriptor"), coinbase_output_script, error)) {
+    if (!getScriptFromDescriptor(request, self.Arg<std::string>("descriptor"), coinbase_output_script, error)) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, error);
     }
 
@@ -336,7 +340,7 @@ static RPCHelpMan generateblock()
     CScript coinbase_output_script;
     std::string error;
 
-    if (!getScriptFromDescriptor(address_or_descriptor, coinbase_output_script, error)) {
+    if (!getScriptFromDescriptor(request, address_or_descriptor, coinbase_output_script, error)) {
         const auto destination = DecodeDestination(address_or_descriptor);
         if (!IsValidDestination(destination)) {
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Error: Invalid address or descriptor");
@@ -571,7 +575,7 @@ static RPCHelpMan getprioritisedtransactions()
                 if (delta_info.in_mempool) {
                     result_inner.pushKV("modified_fee", *delta_info.modified_fee);
                 }
-                rpc_result.pushKV(delta_info.txid.GetHex(), std::move(result_inner));
+                rpc_result.pushKVEnd(delta_info.txid.GetHex(), std::move(result_inner));
             }
             return rpc_result;
         },

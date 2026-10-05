@@ -921,9 +921,7 @@ RPCHelpMan abortrescan()
     std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
     if (!pwallet) return UniValue::VNULL;
 
-    if (!pwallet->IsScanning() || pwallet->IsAbortingRescan()) return false;
-    pwallet->AbortRescan();
-    return true;
+    return pwallet->AbortRescan();
 },
     };
 }

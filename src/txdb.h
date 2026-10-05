@@ -31,6 +31,10 @@ struct CoinsViewOptions {
     //! If non-zero, randomly exit when the database is flushed with (1/ratio)
     //! probability.
     int simulate_crash_ratio = 0;
+    //! Deterministic regtest crash: before any batch (0), or after batch N.
+    std::optional<size_t> simulate_crash_after_batch;
+    //! Deterministic regtest crash immediately before the completion batch.
+    bool simulate_crash_before_final{false};
 };
 
 enum class CoinsDBFormatState {

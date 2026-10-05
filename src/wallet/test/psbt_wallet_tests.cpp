@@ -5,6 +5,7 @@
 #include <key.h>
 #include <node/types.h>
 #include <addresstype.h>
+#include <pq/pq_api.h>
 #include <pq/pqhd_kdf.h>
 #include <pq/pqhd_params.h>
 #include <psbt.h>
@@ -62,6 +63,7 @@ BOOST_AUTO_TEST_CASE(psbt_fill_and_sign_pq_p2wpkh)
     REQUIRE_WALLET_TESTS_ENABLED();
     LOCK(m_wallet.cs_wallet);
     m_wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+    m_wallet.m_keypool_size = 4; // PSBT metadata/signing checks need only a few addresses.
     m_wallet.SetupDescriptorScriptPubKeyMans();
 
     // Create a wallet-owned destination and a corresponding P2WPKH scriptPubKey.
@@ -89,6 +91,7 @@ BOOST_AUTO_TEST_CASE(psbt_fill_default_omits_pqhd_origin_records)
     REQUIRE_WALLET_TESTS_ENABLED();
     LOCK(m_wallet.cs_wallet);
     m_wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+    m_wallet.m_keypool_size = 4; // PSBT metadata/signing checks need only a few addresses.
     m_wallet.SetupDescriptorScriptPubKeyMans();
 
     const CTxDestination input_dest = *Assert(m_wallet.GetNewDestination(OutputType::BECH32, ""));
@@ -115,6 +118,7 @@ BOOST_AUTO_TEST_CASE(psbt_fill_emits_pqhd_origin_records)
     REQUIRE_WALLET_TESTS_ENABLED();
     LOCK(m_wallet.cs_wallet);
     m_wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+    m_wallet.m_keypool_size = 4; // PSBT metadata/signing checks need only a few addresses.
     m_wallet.SetupDescriptorScriptPubKeyMans();
 
     const CTxDestination input_dest = *Assert(m_wallet.GetNewDestination(OutputType::BECH32, ""));
@@ -169,6 +173,96 @@ BOOST_AUTO_TEST_CASE(psbt_fill_emits_pqhd_origin_records)
     BOOST_CHECK(!complete);
     BOOST_CHECK(psbtx_no_origin.inputs.at(0).m_proprietary.empty());
     BOOST_CHECK(psbtx_no_origin.outputs.at(0).m_proprietary.empty());
+}
+
+BOOST_AUTO_TEST_CASE(public_fallback_and_multikey_origins)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    LOCK(m_wallet.cs_wallet);
+    m_wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+    m_wallet.m_keypool_size = 1;
+    m_wallet.SetupDescriptorScriptPubKeyMans();
+    const auto seed_id = m_wallet.GetPQHDPolicy()->default_seed_id;
+    std::vector<CPubKey> pubkeys;
+    for (int account : {42, 43}) {
+        FlatSigningProvider provider;
+        std::string error;
+        auto parsed = Parse(strprintf("wpkh(pqhd(%s)/10007h/6868h/7h/%dh/0h/*h)", seed_id.GetHex(), account), provider, error, false);
+        BOOST_REQUIRE_EQUAL(parsed.size(), 1U);
+        WalletDescriptor descriptor(std::move(parsed[0]), 1, 0, 1, 0);
+        auto imported = m_wallet.AddWalletDescriptor(descriptor, {}, "", false);
+        BOOST_REQUIRE(imported);
+        const auto saved = WITH_LOCK(imported->get().cs_desc_man, return imported->get().GetWalletDescriptor());
+        std::vector<CScript> scripts;
+        BOOST_REQUIRE(saved.descriptor->ExpandFromCache(0, saved.cache, scripts, provider));
+        pubkeys.push_back(provider.pubkeys.begin()->second);
+        auto public_provider = imported->get().GetSigningProvider(pubkeys.back(), /*include_private=*/false);
+        BOOST_REQUIRE(public_provider);
+        BOOST_CHECK(public_provider->keys.empty());
+    }
+    // This script is not registered with any wallet manager. Both constituent
+    // keys are known via other scripts, forcing the pubkey fallback path.
+    const auto witness = GetScriptForMultisig(2, pubkeys);
+    const auto script = GetScriptForDestination(WitnessV0ScriptHash(witness));
+    CMutableTransaction tx;
+    tx.vin.emplace_back(Txid::FromUint256(uint256::ONE), 0);
+    tx.vout.emplace_back(COIN - 1000, CScript{} << OP_TRUE);
+    PartiallySignedTransaction original(tx);
+    original.inputs[0].witness_utxo = CTxOut(COIN, script);
+    original.inputs[0].witness_script = witness;
+
+    const auto public_update = [&] {
+        // The existing deterministic failure counter proves that public updates
+        // do not enter key generation, even when secrets are available.
+        pq::SetDeterministicKeyGenTestFailCount(1);
+        auto psbt = original;
+        bool complete{true};
+        const auto error = m_wallet.FillPSBT(psbt, complete, std::nullopt, false, nullptr, false, true);
+        const int attempts = pq::GetDeterministicKeyGenTestFailCount();
+        pq::SetDeterministicKeyGenTestFailCount(0);
+        BOOST_REQUIRE(!error);
+        BOOST_CHECK_EQUAL(attempts, 1);
+        BOOST_CHECK(!complete);
+        BOOST_CHECK(psbt.inputs[0].partial_sigs.empty());
+        BOOST_CHECK_EQUAL(psbt.inputs[0].m_proprietary.size(), 2U);
+        std::set<uint32_t> accounts;
+        for (const auto& entry : psbt.inputs[0].m_proprietary) {
+            const auto origin = psbt::tidecoin::DecodePQHDOrigin(entry);
+            BOOST_REQUIRE(origin);
+            BOOST_CHECK(origin->seed_id == seed_id);
+            accounts.insert(origin->path_hardened[3] & 0x7fffffffU);
+        }
+        BOOST_CHECK(accounts == std::set<uint32_t>({42, 43}));
+        return psbt;
+    };
+    auto updated = public_update();
+    BOOST_REQUIRE(m_wallet.EncryptWallet(SecureString{"pass"}));
+    BOOST_REQUIRE(m_wallet.Unlock(SecureString{"pass"}));
+    BOOST_REQUIRE(m_wallet.Lock());
+    updated = public_update();
+    // Opt-out keeps existing origins but never adds new ones.
+    bool complete{false};
+    auto private_origin = original;
+    BOOST_REQUIRE(!m_wallet.FillPSBT(private_origin, complete, std::nullopt, false));
+    BOOST_CHECK(private_origin.inputs[0].m_proprietary.empty());
+    auto conflict = updated;
+    auto entry = *conflict.inputs[0].m_proprietary.begin();
+    conflict.inputs[0].m_proprietary.erase(entry);
+    entry.value[0] ^= 1;
+    conflict.inputs[0].m_proprietary.insert(entry);
+    for (bool opt_in : {false, true}) {
+        DataStream before;
+        before << conflict;
+        const auto error = m_wallet.FillPSBT(conflict, complete, std::nullopt, false, nullptr, false, opt_in);
+        BOOST_REQUIRE(error);
+        BOOST_CHECK(*error == common::PSBTError::PQHD_ORIGIN_MISMATCH);
+        DataStream after;
+        after << conflict;
+        BOOST_CHECK(std::ranges::equal(before, after));
+    }
+    BOOST_REQUIRE(m_wallet.Unlock(SecureString{"pass"}));
+    BOOST_REQUIRE(!m_wallet.FillPSBT(updated, complete, std::nullopt, true));
+    BOOST_CHECK(complete);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

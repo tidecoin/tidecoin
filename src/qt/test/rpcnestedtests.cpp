@@ -104,6 +104,17 @@ void RPCNestedTests::rpcNestedTests()
     RPCConsole::RPCParseCommandLine(nullptr, result, "help(encryptwallet(abc, def))", false, &filtered);
     QVERIFY(filtered == "help(encryptwallet(…))");
 
+    for (const std::string command : {"createwallet", "createwalletdescriptor", "migratewallet", "importpqhdseed"}) {
+        RPCConsole::RPCParseCommandLine(nullptr, result, command + "(synthetic_secret)", false, &filtered);
+        QVERIFY(filtered == command + "(…)");
+        RPCConsole::RPCParseCommandLine(nullptr, result, "help(" + command + "(synthetic_secret))", false, &filtered);
+        QVERIFY(filtered == "help(" + command + "(…))");
+    }
+    RPCConsole::RPCParseCommandLine(nullptr, result, "IMPORTPQHDSEED synthetic_secret", false, &filtered);
+    QVERIFY(filtered == "IMPORTPQHDSEED(…)");
+    RPCConsole::RPCParseCommandLine(nullptr, result, "listpqhdseeds", false, &filtered);
+    QVERIFY(filtered == "listpqhdseeds");
+
     RPCConsole::RPCExecuteCommandLine(m_node, result, "rpcNestedTest");
     QVERIFY(result == "[]");
     RPCConsole::RPCExecuteCommandLine(m_node, result, "rpcNestedTest ''");
@@ -134,6 +145,12 @@ void RPCNestedTests::rpcNestedTests()
     QVERIFY_EXCEPTION_THROWN(RPCConsole::RPCExecuteCommandLine(m_node, result, "getblockchaininfo() getblockchaininfo()"), std::runtime_error); //invalid syntax
     RPCConsole::RPCExecuteCommandLine(m_node, result, "getblockchaininfo("); //tolerate non closing brackets if we have no arguments
     RPCConsole::RPCExecuteCommandLine(m_node, result, "getblockchaininfo()()()"); //tolerate non command brackets
+    QVERIFY(RPCConsole::RPCExecuteCommandLine(m_node, result, "getblockchaininfo)"));
+    for (const std::string command : {")", "()", "(", ",", "", " ", "\t\n", "( )", "((()))", ",,,"}) {
+        QVERIFY(!RPCConsole::RPCExecuteCommandLine(m_node, result, command));
+        QVERIFY(!RPCConsole::RPCParseCommandLine(nullptr, result, command, false, &filtered));
+        QVERIFY(filtered == command);
+    }
     QVERIFY_EXCEPTION_THROWN(RPCConsole::RPCExecuteCommandLine(m_node, result, "getblockchaininfo(True)"), UniValue); //invalid argument
     QVERIFY_EXCEPTION_THROWN(RPCConsole::RPCExecuteCommandLine(m_node, result, "a(getblockchaininfo(True))"), UniValue); //method not found
     QVERIFY_EXCEPTION_THROWN(RPCConsole::RPCExecuteCommandLine(m_node, result, "rpcNestedTest abc,,abc"), std::runtime_error); //don't tolerate empty arguments when using ,

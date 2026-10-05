@@ -19,6 +19,8 @@ class JSONRPCRequest;
 class UniValue;
 struct bilingual_str;
 
+namespace interfaces { class WalletDescriptorExpansion; }
+
 namespace wallet {
 class LegacyScriptPubKeyMan;
 enum class DatabaseStatus;
@@ -44,6 +46,9 @@ bool GetWalletNameFromJSONRPCRequest(const JSONRPCRequest& request, std::string&
  * Throws `RPC_INVALID_PARAMETER` if none or different wallet names are specified.
  */
 std::string EnsureUniqueWalletName(const JSONRPCRequest& request, const std::string* wallet_name);
+
+std::unique_ptr<interfaces::WalletDescriptorExpansion> MakeWalletDescriptorExpansion(WalletContext& context, const std::string& wallet_name);
+std::unique_ptr<interfaces::WalletDescriptorExpansion> MakeWalletDescriptorExpansion(std::shared_ptr<CWallet> wallet);
 
 void EnsureWalletIsUnlocked(const CWallet&);
 WalletContext& EnsureWalletContext(const std::any& context);

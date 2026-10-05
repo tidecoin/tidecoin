@@ -4,6 +4,8 @@
 
 #include <psbt.h>
 
+#include <algorithm>
+
 #include <common/types.h>
 #include <node/types.h>
 #include <policy/policy.h>
@@ -119,7 +121,8 @@ bool AddPQHDOrigin(std::set<PSBTProprietary>& set,
     entry.key = MakeProprietaryKey(map_type, entry.identifier, entry.subtype, std::span{pubkey});
     entry.value = MakePQHDOriginValue(seed_id, path_hardened);
 
-    if (set.count(entry) > 0) return false;
+    if (!DecodePQHDOrigin(entry)) return false;
+    if (const auto existing = set.find(entry); existing != set.end()) return existing->value == entry.value;
     set.insert(std::move(entry));
     return true;
 }
@@ -136,11 +139,37 @@ bool PartiallySignedTransaction::IsNull() const
     return !tx && inputs.empty() && outputs.empty() && unknown.empty();
 }
 
+namespace {
+bool PQHDOriginsCompatible(const std::set<PSBTProprietary>& left, const std::set<PSBTProprietary>& right)
+{
+    for (const auto* records : {&left, &right}) {
+        for (const auto& entry : *records) {
+            if (!std::ranges::equal(entry.identifier, psbt::tidecoin::PROPRIETARY_IDENTIFIER) || entry.subtype != psbt::tidecoin::SUBTYPE_PQHD_ORIGIN) continue;
+            if (!psbt::tidecoin::DecodePQHDOrigin(entry)) return false;
+            if (const auto other = (records == &left ? right : left).find(entry);
+                other != (records == &left ? right : left).end() && other->value != entry.value) return false;
+        }
+    }
+    return true;
+}
+} // namespace
+
 bool PartiallySignedTransaction::Merge(const PartiallySignedTransaction& psbt)
 {
     // Prohibited to merge two PSBTs over different transactions
-    if (tx->GetHash() != psbt.tx->GetHash()) {
+    if (!tx || !psbt.tx || tx->GetHash() != psbt.tx->GetHash() ||
+        inputs.size() != psbt.inputs.size() || outputs.size() != psbt.outputs.size()) {
         return false;
+    }
+
+    // Check every origin map before publishing any merge, including metadata
+    // from a participant whose keys are unknown to the local wallet.
+    if (!PQHDOriginsCompatible(m_proprietary, psbt.m_proprietary)) return false;
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        if (!PQHDOriginsCompatible(inputs[i].m_proprietary, psbt.inputs[i].m_proprietary)) return false;
+    }
+    for (size_t i = 0; i < outputs.size(); ++i) {
+        if (!PQHDOriginsCompatible(outputs[i].m_proprietary, psbt.outputs[i].m_proprietary)) return false;
     }
 
     for (unsigned int i = 0; i < inputs.size(); ++i) {
@@ -324,7 +353,7 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned 
 {
     const bool allow_legacy = !(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT);
     CTxOut utxo;
-    assert(psbt.inputs.size() >= input_index);
+    assert(input_index < psbt.inputs.size());
     const PSBTInput& input = psbt.inputs[input_index];
 
     if (input.non_witness_utxo) {
@@ -412,6 +441,10 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
     if (PSBTInputSignedAndVerified(psbt, index, txdata, effective_flags)) {
         return PSBTError::OK;
     }
+
+    // Final fields are untrusted until script verification succeeds. In particular,
+    // FillSignatureData's presence marker must not turn invalid finals into success.
+    if (PSBTInputSigned(input)) return PSBTError::INCOMPLETE;
 
     // Fill SignatureData with input info
     SignatureData sigdata;
@@ -575,14 +608,17 @@ bool FinalizeAndExtractPSBT(PartiallySignedTransaction& psbtx, CMutableTransacti
 
 bool CombinePSBTs(PartiallySignedTransaction& out, const std::vector<PartiallySignedTransaction>& psbtxs)
 {
-    out = psbtxs[0]; // Copy the first one
+    if (psbtxs.empty()) return false;
+    auto merged = psbtxs[0];
+    if (!merged.Merge(psbtxs[0])) return false;
 
     // Merge
     for (auto it = std::next(psbtxs.begin()); it != psbtxs.end(); ++it) {
-        if (!out.Merge(*it)) {
+        if (!merged.Merge(*it)) {
             return false;
         }
     }
+    out = std::move(merged);
     return true;
 }
 

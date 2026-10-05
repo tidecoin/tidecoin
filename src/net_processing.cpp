@@ -1858,14 +1858,15 @@ std::optional<std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, const CBl
 {
     if (m_chainman.m_blockman.LoadingBlocks()) return "Loading blocks ...";
 
+    // Keep the peer and its node state alive until the request is set up.
+    LOCK(cs_main);
+
     // Ensure this peer exists and hasn't been disconnected
     PeerRef peer = GetPeerRef(peer_id);
     if (peer == nullptr) return "Peer does not exist";
 
     // Ignore pre-segwit peers
     if (!CanServeWitnesses(*peer)) return "Pre-SegWit peer";
-
-    LOCK(cs_main);
 
     // Forget about all prior requests
     RemoveBlockRequest(block_index.GetBlockHash(), std::nullopt);
@@ -3291,9 +3292,10 @@ void PeerManagerImpl::ProcessGetCFCheckPt(CNode& node, Peer& peer, DataStream& v
 
     std::vector<uint256> headers(stop_index->nHeight / CFCHECKPT_INTERVAL);
 
-    // Populate headers.
+    // Populate headers. The count is bounded by the nonnegative int block
+    // height divided by CFCHECKPT_INTERVAL, so conversion to int is safe.
     const CBlockIndex* block_index = stop_index;
-    for (int i = headers.size() - 1; i >= 0; i--) {
+    for (int i = int(headers.size()) - 1; i >= 0; i--) {
         int height = (i + 1) * CFCHECKPT_INTERVAL;
         block_index = block_index->GetAncestor(height);
 
@@ -3746,9 +3748,15 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
     }
 
     if (msg_type == NetMsgType::SENDCMPCT) {
-        bool sendcmpct_hb{false};
+        uint8_t sendcmpct_hb{0};
         uint64_t sendcmpct_version{0};
         vRecv >> sendcmpct_hb >> sendcmpct_version;
+
+        // BIP152 requires the announce byte to be either zero or one.
+        if (sendcmpct_hb > 1) {
+            Misbehaving(*peer, "invalid sendcmpct announce field");
+            return;
+        }
 
         // Only support compact block relay with witnesses
         if (sendcmpct_version != CMPCTBLOCKS_VERSION) return;

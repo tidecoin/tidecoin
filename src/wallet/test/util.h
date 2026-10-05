@@ -10,6 +10,7 @@
 #include <wallet/scriptpubkeyman.h>
 
 #include <memory>
+#include <optional>
 
 class ArgsManager;
 class CChain;
@@ -65,6 +66,7 @@ class MockableBatch : public DatabaseBatch
 private:
     MockableData& m_records;
     bool m_pass;
+    std::optional<MockableData> m_before_txn;
 
     bool ReadKey(DataStream&& key, DataStream& value) override;
     bool WriteKey(DataStream&& key, DataStream&& value, bool overwrite=true) override;
@@ -74,7 +76,7 @@ private:
 
 public:
     explicit MockableBatch(MockableData& records, bool pass) : m_records(records), m_pass(pass) {}
-    ~MockableBatch() = default;
+    ~MockableBatch() { if (m_before_txn) m_records = std::move(*m_before_txn); }
 
     void Close() override {}
 
@@ -85,10 +87,23 @@ public:
     std::unique_ptr<DatabaseCursor> GetNewPrefixCursor(std::span<const std::byte> prefix) override {
         return std::make_unique<MockableCursor>(m_records, m_pass, prefix);
     }
-    bool TxnBegin() override { return m_pass; }
-    bool TxnCommit() override { return m_pass; }
-    bool TxnAbort() override { return m_pass; }
-    bool HasActiveTxn() override { return false; }
+    bool TxnBegin() override {
+        if (!m_pass || m_before_txn) return false;
+        m_before_txn = m_records;
+        return true;
+    }
+    bool TxnCommit() override {
+        if (!m_pass || !m_before_txn) return false;
+        m_before_txn.reset();
+        return true;
+    }
+    bool TxnAbort() override {
+        if (!m_pass || !m_before_txn) return false;
+        m_records = std::move(*m_before_txn);
+        m_before_txn.reset();
+        return true;
+    }
+    bool HasActiveTxn() override { return m_before_txn.has_value(); }
 };
 
 /** A WalletDatabase whose contents and return values can be modified as needed for testing

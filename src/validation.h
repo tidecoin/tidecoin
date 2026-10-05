@@ -509,9 +509,12 @@ enum class CoinsCacheSizeState
 
 constexpr int64_t LargeCoinsCacheThreshold(int64_t total_space) noexcept
 {
+    assert(total_space >= 0);
     // No periodic flush needed if at least this much space is free
     constexpr int64_t MAX_BLOCK_COINSDB_USAGE_BYTES{int64_t(10_MiB)};
-    return std::max((total_space * 9) / 10,
+    // Preserve floor(90% * total_space) without overflowing the intermediate product.
+    const int64_t ninety_percent{(total_space / 10) * 9 + ((total_space % 10) * 9) / 10};
+    return std::max(ninety_percent,
                     total_space - MAX_BLOCK_COINSDB_USAGE_BYTES);
 }
 
@@ -545,6 +548,9 @@ protected:
 
     //! Manages the UTXO set, which is a reflection of the contents of `m_chain`.
     std::unique_ptr<CoinsViews> m_coins_views;
+
+    //! A failed write may have consumed cache entries. Never retry it during shutdown.
+    bool m_write_failed GUARDED_BY(::cs_main){false};
 
     //! This toggle exists for use when doing background validation for UTXO
     //! snapshots.
@@ -699,8 +705,8 @@ public:
         FlushStateMode mode,
         int nManualPruneHeight = 0);
 
-    //! Unconditionally flush all changes to disk.
-    void ForceFlushStateToDisk();
+    //! Unconditionally flush all changes to disk, returning false on failure.
+    bool ForceFlushStateToDisk();
 
     //! Prune blockfiles from the disk if necessary and then flush chainstate changes
     //! if we pruned.

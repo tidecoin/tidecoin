@@ -8,7 +8,13 @@ include(CheckCXXSymbolExists)
 check_cxx_symbol_exists(O_CLOEXEC "fcntl.h" HAVE_O_CLOEXEC)
 check_cxx_symbol_exists(fdatasync "unistd.h" HAVE_FDATASYNC)
 check_cxx_symbol_exists(fork "unistd.h" HAVE_DECL_FORK)
-check_cxx_symbol_exists(pipe2 "unistd.h" HAVE_DECL_PIPE2)
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  # New SDKs declare pipe2 even when targeting macOS versions without it.
+  # Override an earlier cached probe result when reconfiguring, too.
+  set(HAVE_DECL_PIPE2 0)
+else()
+  check_cxx_symbol_exists(pipe2 "unistd.h" HAVE_DECL_PIPE2)
+endif()
 check_cxx_symbol_exists(setsid "unistd.h" HAVE_DECL_SETSID)
 
 if(NOT WIN32)

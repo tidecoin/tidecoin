@@ -5,7 +5,10 @@
 #ifndef BITCOIN_NODE_CONTEXT_H
 #define BITCOIN_NODE_CONTEXT_H
 
+#include <sync.h>
+
 #include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <functional>
 #include <memory>
@@ -78,6 +81,11 @@ struct NodeContext {
     //! Reference to chain client that should used to load or create wallets
     //! opened by the gui.
     std::unique_ptr<interfaces::Mining> mining;
+    //! Stable across chainstate load retries. Publish only after the tip is connected.
+    Mutex mining_mutex;
+    std::condition_variable mining_cv;
+    bool mining_ready GUARDED_BY(mining_mutex){false};
+    bool mining_stopping GUARDED_BY(mining_mutex){false};
     interfaces::WalletLoader* wallet_loader{nullptr};
     std::unique_ptr<CScheduler> scheduler;
     std::function<void()> rpc_interruption_point = [] {};

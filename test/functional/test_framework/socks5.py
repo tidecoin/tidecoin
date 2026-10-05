@@ -9,6 +9,7 @@ import socket
 import threading
 import queue
 import logging
+import time
 
 from .netutil import (
     format_addr_port
@@ -112,6 +113,24 @@ class Socks5Connection():
     def __init__(self, serv, conn):
         self.serv = serv
         self.conn = conn
+        self._sockets = [conn]
+        self._sockets_lock = threading.Lock()
+
+    def shutdown(self):
+        # Interrupt recv/send/select without closing a descriptor still in use
+        # by its handler thread. The handler or stop() closes it after joining.
+        with self._sockets_lock:
+            for sock in self._sockets:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    def close(self):
+        with self._sockets_lock:
+            for sock in self._sockets:
+                sock.close()
+            self._sockets.clear()
 
     def handle(self):
         """Handle socks5 request according to RFC1928."""
@@ -180,7 +199,11 @@ class Socks5Connection():
                 if dest is not None:
                     logger.debug(f"Serving connection to {requested_to}, will redirect it to "
                                  f"{dest['actual_to_addr']}:{dest['actual_to_port']} instead")
-                    with socket.create_connection((dest["actual_to_addr"], dest["actual_to_port"])) as conn_to:
+                    with socket.create_connection((dest["actual_to_addr"], dest["actual_to_port"]), timeout=2) as conn_to:
+                        with self._sockets_lock:
+                            if not self.serv.is_running():
+                                return
+                            self._sockets.append(conn_to)
                         forward_sockets(self.conn, conn_to)
                 else:
                     logger.debug(f"Can't serve the connection to {requested_to}: the destinations factory returned None")
@@ -189,11 +212,12 @@ class Socks5Connection():
 
             # Fall through to disconnect
         except Exception as e:
-            logger.exception("socks5 request handling failed.")
-            self.serv.queue.put(e)
+            if self.serv.is_running():
+                logger.exception("socks5 request handling failed.")
+                self.serv.queue.put(e)
         finally:
-            if not self.serv.keep_alive:
-                self.conn.close()
+            if not self.serv.keep_alive or not self.serv.is_running():
+                self.close()
             else:
                 logger.debug("Keeping client connection alive")
 
@@ -203,32 +227,58 @@ class Socks5Server():
         self.s = socket.socket(conf.af)
         self.s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.s.bind(conf.addr)
+        self.conf.addr = self.s.getsockname()
         self.s.listen(5)
-        self.running = False
+        self.s.settimeout(0.1)
+        self._running = threading.Event()
+        self._closed = False
         self.thread = None
         self.queue = queue.Queue() # report connections and exceptions to client
         self.keep_alive = conf.keep_alive
+        # The listener owns this list until it is joined. Keep completed
+        # handlers too, so keep_alive sockets remain owned until stop().
+        self._handlers = []
+
+    def is_running(self):
+        return self._running.is_set()
 
     def run(self):
-        while self.running:
-            (sockconn, _) = self.s.accept()
-            if self.running:
-                conn = Socks5Connection(self, sockconn)
-                thread = threading.Thread(None, conn.handle)
-                thread.daemon = True
-                thread.start()
+        while self.is_running():
+            try:
+                sockconn, _ = self.s.accept()
+            except socket.timeout:
+                continue
+            if not self.is_running():
+                sockconn.close()
+                break
+            conn = Socks5Connection(self, sockconn)
+            thread = threading.Thread(target=conn.handle, name="Socks5Connection", daemon=True)
+            self._handlers.append((thread, conn))
+            thread.start()
 
     def start(self):
-        assert not self.running
-        self.running = True
-        self.thread = threading.Thread(None, self.run)
-        self.thread.daemon = True
+        assert self.thread is None and not self._closed
+        self._running.set()
+        self.thread = threading.Thread(target=self.run, name="Socks5Server", daemon=True)
         self.thread.start()
 
-    def stop(self):
-        self.running = False
-        # connect to self to end run loop
-        s = socket.socket(self.conf.af)
-        s.connect(self.conf.addr)
-        s.close()
-        self.thread.join()
+    def stop(self, *, timeout=5):
+        if self._closed:
+            return
+        self._running.clear()
+        deadline = time.monotonic() + timeout
+        if self.thread is not None:
+            self.thread.join(max(0, deadline - time.monotonic()))
+            if self.thread.is_alive():
+                raise AssertionError("SOCKS listener did not stop")
+        self.s.close()
+        # No handler can be added after the listener has joined.
+        for _, conn in self._handlers:
+            conn.shutdown()
+        for thread, conn in self._handlers:
+            thread.join(max(0, deadline - time.monotonic()))
+            if thread.is_alive():
+                raise AssertionError("SOCKS connection handler did not stop")
+            conn.close()
+        self._handlers.clear()
+        self._closed = True

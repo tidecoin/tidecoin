@@ -34,6 +34,57 @@ bool EqualDescriptor(std::string a, std::string b)
 
 BOOST_FIXTURE_TEST_SUITE(descriptor_tests, BasicTestingSetup)
 
+BOOST_AUTO_TEST_CASE(pqhd_optional_expansion_cache)
+{
+    struct SeedProvider final : SigningProvider {
+        std::array<uint8_t, 32> seed{};
+        mutable int calls{0};
+        uint256 id() const { return pqhd::ComputeSeedID32AsUint256(seed); }
+        std::optional<pqhd::SecureSeed32> GetPQHDSeed(const uint256& requested) const override
+        {
+            ++calls;
+            if (requested != id()) return std::nullopt;
+            std::optional<pqhd::SecureSeed32> result{std::in_place};
+            if (!result->Set(seed)) return std::nullopt;
+            return result;
+        }
+    } provider;
+    provider.seed.fill(42);
+    for (const int scheme : {7, 8, 9, 10, 11}) {
+        FlatSigningProvider parsed;
+        std::string error;
+        auto descs = Parse("wpkh(pqhd(" + provider.id().ToString() + ")/10007h/6868h/" + std::to_string(scheme) + "h/0h/0h/*h)", parsed, error);
+        BOOST_REQUIRE_EQUAL(descs.size(), 1U);
+        const int before = provider.calls;
+        FlatSigningProvider rejected;
+        std::vector<CScript> no_scripts;
+        BOOST_CHECK(!descs[0]->Expand(-1, provider, no_scripts, rejected));
+        descs[0]->ExpandPrivate(-1, provider, rejected);
+        BOOST_CHECK(rejected.keys.empty());
+        BOOST_CHECK_EQUAL(before, provider.calls);
+        for (const int index : {0, INT32_MAX}) {
+            std::vector<CScript> uncached_scripts, cached_scripts, read_scripts;
+            FlatSigningProvider uncached, cached, read;
+            DescriptorCache cache;
+            BOOST_REQUIRE(descs[0]->Expand(index, provider, uncached_scripts, uncached));
+            BOOST_REQUIRE(descs[0]->Expand(index, provider, cached_scripts, cached, &cache));
+            BOOST_CHECK(uncached_scripts == cached_scripts);
+            BOOST_CHECK(uncached.pubkeys == cached.pubkeys);
+            BOOST_CHECK(uncached.keys.empty());
+            BOOST_CHECK(cached.keys.empty());
+            const int calls = provider.calls;
+            BOOST_REQUIRE(descs[0]->ExpandFromCache(index, cache, read_scripts, read));
+            BOOST_CHECK(read_scripts == uncached_scripts);
+            BOOST_CHECK(read.pubkeys == uncached.pubkeys);
+            BOOST_CHECK_EQUAL(provider.calls, calls);
+            BOOST_CHECK(read.keys.empty());
+            BOOST_CHECK(!descs[0]->ExpandFromCache(index == 0 ? 1 : index - 1, cache, read_scripts, read));
+            BOOST_CHECK_EQUAL(provider.calls, calls);
+            BOOST_CHECK(!descs[0]->Expand(index, DUMMY_SIGNING_PROVIDER, read_scripts, read));
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(descriptor_pqhd_key_expression_parsing)
 {
     FlatSigningProvider out;

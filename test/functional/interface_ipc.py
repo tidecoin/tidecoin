@@ -4,10 +4,12 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the IPC (multiprocess) interface."""
 import asyncio
+import copy
 from io import BytesIO
 from pathlib import Path
 import shutil
-from test_framework.messages import (CBlock, CTransaction, ser_uint256, COIN)
+import socket
+from test_framework.messages import (CBlock, CTransaction, ser_uint256, COIN, MAX_BLOCK_WEIGHT, MINIMUM_BLOCK_RESERVED_WEIGHT)
 from test_framework.test_framework import (BitcoinTestFramework, assert_equal)
 from test_framework.wallet import MiniWallet
 
@@ -110,8 +112,8 @@ class IPCInterfaceTest(BitcoinTestFramework):
             self.log.debug("Create Mining proxy object")
             mining = init.makeMining(ctx)
             self.log.debug("Test simple inspectors")
-            assert (await mining.result.isTestChain(ctx))
-            assert (await mining.result.isInitialBlockDownload(ctx))
+            assert (await mining.result.isTestChain(ctx)).result
+            assert_equal((await mining.result.isInitialBlockDownload(ctx)).result, self.nodes[0].getblockchaininfo()["initialblockdownload"])
             blockref = await mining.result.getTip(ctx)
             assert blockref.hasResult
             assert_equal(len(blockref.result.hash), block_hash_size)
@@ -153,6 +155,7 @@ class IPCInterfaceTest(BitcoinTestFramework):
             self.log.debug("Wait for a new template")
             waitoptions = self.capnp_modules['mining'].BlockWaitOptions()
             waitoptions.timeout = timeout
+            waitoptions.feeThreshold = 1
             waitnext = template.result.waitNext(ctx, waitoptions)
             self.generate(self.nodes[0], 1)
             template2 = await waitnext
@@ -168,6 +171,7 @@ class IPCInterfaceTest(BitcoinTestFramework):
             block3 = await self.parse_and_deserialize_block(template4, ctx)
             assert_equal(len(block3.vtx), 2)
             self.log.debug("Wait again, this should return the same template, since the fee threshold is zero")
+            waitoptions.feeThreshold = 0
             template5 = await template4.result.waitNext(ctx, waitoptions)
             block4 = await self.parse_and_deserialize_block(template5, ctx)
             assert_equal(len(block4.vtx), 2)
@@ -181,6 +185,27 @@ class IPCInterfaceTest(BitcoinTestFramework):
             self.log.debug("Wait for another, but time out, since the fee threshold is set now")
             template7 = await template6.result.waitNext(ctx, waitoptions)
             assert_equal(template7.to_dict(), {})
+
+            self.log.debug("Interrupt a pending wait, then reuse the same template")
+            waitoptions.timeout = 60000.0
+            waitoptions.feeThreshold = 1
+            async def wait_for_template():
+                return await template6.result.waitNext(ctx, waitoptions)
+            wait_task = asyncio.create_task(wait_for_template())
+            await asyncio.sleep(0.1)
+            assert not wait_task.done()
+            await template6.result.interruptWait()
+            interrupted = await asyncio.wait_for(wait_task, timeout=10)
+            assert_equal(interrupted.to_dict(), {})
+            # Queued repeated interrupts coalesce into one interruption.
+            await template6.result.interruptWait()
+            await template6.result.interruptWait()
+            waitoptions.timeout = 0.0
+            waitoptions.feeThreshold = 0
+            assert_equal((await template6.result.waitNext(ctx, waitoptions)).to_dict(), {})
+            resumed = await template6.result.waitNext(ctx, waitoptions)
+            assert_equal(len((await self.parse_and_deserialize_block(resumed, ctx)).vtx), 3)
+            await resumed.result.destroy(ctx)
 
             current_block_height = self.nodes[0].getchaintips()[0]["height"]
             check_opts = self.capnp_modules['mining'].BlockCheckOptions()
@@ -201,6 +226,16 @@ class IPCInterfaceTest(BitcoinTestFramework):
             assert_equal(res.reason, "bad-version(0x00000000)")
             res = await template.result.submitSolution(ctx, block.nVersion, block.nTime, block.nNonce, coinbase.serialize())
             assert_equal(res.result, False)
+            self.log.debug("Reject a changed coinbase with an invalid witness commitment")
+            block.nVersion = original_version
+            invalid_coinbase = copy.deepcopy(coinbase)
+            assert invalid_coinbase.wit.vtxinwit[0].scriptWitness.stack
+            invalid_coinbase.wit.vtxinwit[0].scriptWitness.stack[0] = b'\xff' * 32
+            block.solve()
+            res = await template.result.submitSolution(ctx, block.nVersion, block.nTime, block.nNonce, invalid_coinbase.serialize())
+            assert_equal(res.result, False)
+            assert_equal(self.nodes[0].getblockcount(), current_block_height)
+
             self.log.debug("Submit a valid block")
             block.nVersion = original_version
             block.solve()
@@ -226,9 +261,90 @@ class IPCInterfaceTest(BitcoinTestFramework):
             template7.result.destroy(ctx)
         asyncio.run(capnp.run(async_routine()))
 
+    def run_option_test(self):
+        self.log.info("Test IPC option precedence and runtime validation")
+        node = self.nodes[0]
+        wallet = MiniWallet(node)
+        tx = wallet.send_self_transfer(from_node=node)
+        self.restart_node(0, extra_args=[f"-blockreservedweight={MAX_BLOCK_WEIGHT}"])
+        assert_equal(len(node.getblocktemplate({"rules": ["segwit"]})["transactions"]), 0)
+
+        async def async_routine():
+            ctx, init = await self.make_capnp_init_ctx()
+            mining = init.makeMining(ctx).result
+            opts = self.capnp_modules['mining'].BlockCreateOptions()
+            opts.useMempool = True
+            opts.blockReservedWeight = MINIMUM_BLOCK_RESERVED_WEIGHT
+            template = await mining.createNewBlock(opts)
+            block = await self.parse_and_deserialize_block(template, ctx)
+            assert_equal(len(block.vtx), 2)
+            assert_equal(block.vtx[1].txid_hex, tx["txid"])
+            await template.result.destroy(ctx)
+            for weight, message in [
+                (0, "lower than minimum safety value"),
+                (MINIMUM_BLOCK_RESERVED_WEIGHT - 1, "lower than minimum safety value"),
+                (MAX_BLOCK_WEIGHT + 1, "exceeds consensus maximum block weight"),
+                (2**64 - 1, "exceeds consensus maximum block weight"),
+            ]:
+                opts.blockReservedWeight = weight
+                try:
+                    await mining.createNewBlock(opts)
+                    raise AssertionError("invalid reserved weight accepted")
+                except capnp.lib.capnp.KjException as error:
+                    assert message in error.description
+                    assert_equal(error.type, "FAILED")
+            opts.blockReservedWeight = MINIMUM_BLOCK_RESERVED_WEIGHT
+            opts.coinbaseOutputMaxAdditionalSigops = 80001
+            try:
+                await mining.createNewBlock(opts)
+                raise AssertionError("invalid sigops accepted")
+            except capnp.lib.capnp.KjException as error:
+                assert "exceeds consensus maximum block sigops cost" in error.description
+            opts.coinbaseOutputMaxAdditionalSigops = 80000
+            opts.blockReservedWeight = MAX_BLOCK_WEIGHT
+            template = await mining.createNewBlock(opts)
+            assert_equal(len((await self.parse_and_deserialize_block(template, ctx)).vtx), 1)
+            await template.result.destroy(ctx)
+        asyncio.run(capnp.run(async_routine()))
+        self.restart_node(0)
+
+    def run_early_startup_test(self):
+        self.log.info("Request mining immediately when the startup IPC socket opens")
+        node = self.nodes[0]
+        self.stop_node(0)
+        node.start()
+        async def async_routine():
+            async def connect_and_create():
+                while True:
+                    try:
+                        ctx, init = await self.make_capnp_init_ctx()
+                        break
+                    except (ConnectionRefusedError, FileNotFoundError):
+                        await asyncio.sleep(0.005)
+                mining = init.makeMining(ctx).result
+                assert (await mining.getTip(ctx)).hasResult
+                opts = self.capnp_modules['mining'].BlockCreateOptions()
+                opts.blockReservedWeight = 4000
+                template = await mining.createNewBlock(opts)
+                assert_equal(len((await self.parse_and_deserialize_block(template, ctx)).vtx), 1)
+                await template.result.destroy(ctx)
+            await asyncio.wait_for(connect_and_create(), timeout=60 * self.options.timeout_factor)
+        asyncio.run(capnp.run(async_routine()))
+        node.wait_for_rpc_connection()
+
+    def run_aborted_connection_test(self):
+        self.log.info("IPC listener survives clients disconnecting immediately")
+        for _ in range(32):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.connect(str(self.nodes[0].ipc_socket_path))
+        self.run_echo_test()
+
     def run_test(self):
         self.run_echo_test()
         self.run_mining_test()
+        self.run_option_test()
+        self.run_early_startup_test()
+        self.run_aborted_connection_test()
 
 if __name__ == '__main__':
     IPCInterfaceTest(__file__).main()

@@ -28,6 +28,8 @@
 #include <validation.h>
 
 #include <algorithm>
+#include <numeric>
+#include <stdexcept>
 #include <utility>
 
 namespace node {
@@ -75,13 +77,25 @@ void RegenerateCommitments(CBlock& block, ChainstateManager& chainman)
     block.hashMerkleRoot = BlockMerkleRoot(block);
 }
 
-static BlockAssembler::Options ClampOptions(BlockAssembler::Options options)
+static BlockAssembler::Options CheckOptions(BlockAssembler::Options options)
 {
-    options.block_reserved_weight = std::clamp<size_t>(options.block_reserved_weight, MINIMUM_BLOCK_RESERVED_WEIGHT, MAX_BLOCK_WEIGHT);
-    options.coinbase_output_max_additional_sigops = std::clamp<size_t>(options.coinbase_output_max_additional_sigops, 0, MAX_BLOCK_SIGOPS_COST);
-    // Limit weight to between block_reserved_weight and MAX_BLOCK_WEIGHT for sanity:
-    // block_reserved_weight can safely exceed -blockmaxweight, but the rest of the block template will be empty.
-    options.nBlockMaxWeight = std::clamp<size_t>(options.nBlockMaxWeight, options.block_reserved_weight, MAX_BLOCK_WEIGHT);
+    options.block_reserved_weight = options.block_reserved_weight.value_or(DEFAULT_BLOCK_RESERVED_WEIGHT);
+    const auto reserved = *options.block_reserved_weight;
+    if (reserved < MINIMUM_BLOCK_RESERVED_WEIGHT) {
+        throw std::runtime_error(strprintf("block_reserved_weight (%u) is lower than minimum safety value of (%u)", reserved, MINIMUM_BLOCK_RESERVED_WEIGHT));
+    }
+    if (reserved > MAX_BLOCK_WEIGHT) {
+        throw std::runtime_error(strprintf("block_reserved_weight (%u) exceeds consensus maximum block weight (%u)", reserved, MAX_BLOCK_WEIGHT));
+    }
+    if (options.nBlockMaxWeight > MAX_BLOCK_WEIGHT) {
+        throw std::runtime_error(strprintf("block_max_weight (%u) exceeds consensus maximum block weight (%u)", options.nBlockMaxWeight, MAX_BLOCK_WEIGHT));
+    }
+    if (reserved > options.nBlockMaxWeight) {
+        throw std::runtime_error(strprintf("block_reserved_weight (%u) exceeds block_max_weight (%u)", reserved, options.nBlockMaxWeight));
+    }
+    if (options.coinbase_output_max_additional_sigops > MAX_BLOCK_SIGOPS_COST) {
+        throw std::runtime_error(strprintf("coinbase_output_max_additional_sigops (%u) exceeds consensus maximum block sigops cost (%d)", options.coinbase_output_max_additional_sigops, MAX_BLOCK_SIGOPS_COST));
+    }
     return options;
 }
 
@@ -89,7 +103,7 @@ BlockAssembler::BlockAssembler(Chainstate& chainstate, const CTxMemPool* mempool
     : chainparams{chainstate.m_chainman.GetParams()},
       m_mempool{options.use_mempool ? mempool : nullptr},
       m_chainstate{chainstate},
-      m_options{ClampOptions(options)}
+      m_options{CheckOptions(options)}
 {
 }
 
@@ -101,7 +115,9 @@ void ApplyArgsManOptions(const ArgsManager& args, BlockAssembler::Options& optio
         if (const auto parsed{ParseMoney(*blockmintxfee)}) options.blockMinFeeRate = CFeeRate{*parsed};
     }
     options.print_modified_fee = args.GetBoolArg("-printpriority", options.print_modified_fee);
-    options.block_reserved_weight = args.GetIntArg("-blockreservedweight", options.block_reserved_weight);
+    if (!options.block_reserved_weight) {
+        options.block_reserved_weight = args.GetIntArg("-blockreservedweight");
+    }
 }
 
 void BlockAssembler::resetBlock()
@@ -109,7 +125,7 @@ void BlockAssembler::resetBlock()
     inBlock.clear();
 
     // Reserve space for fixed-size block header, txs count, and coinbase tx.
-    nBlockWeight = m_options.block_reserved_weight;
+    nBlockWeight = *m_options.block_reserved_weight;
     nBlockSigOpsCost = m_options.coinbase_output_max_additional_sigops;
 
     // These counters do not include coinbase tx
@@ -453,6 +469,17 @@ void AddMerkleRootAndCoinbase(CBlock& block, CTransactionRef coinbase, uint32_t 
     block.nTime = timestamp;
     block.nNonce = nonce;
     block.hashMerkleRoot = BlockMerkleRoot(block);
+    // The cached checks describe the old coinbase and header.
+    block.m_checked_witness_commitment = false;
+    block.m_checked_merkle_root = false;
+    block.fChecked = false;
+}
+
+void InterruptWait(KernelNotifications& kernel_notifications, bool& interrupt_wait)
+{
+    LOCK(kernel_notifications.m_tip_block_mutex);
+    interrupt_wait = true;
+    kernel_notifications.m_tip_block_cv.notify_all();
 }
 
 std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainman,
@@ -460,7 +487,8 @@ std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainma
                                                       CTxMemPool* mempool,
                                                       const std::unique_ptr<CBlockTemplate>& block_template,
                                                       const BlockWaitOptions& options,
-                                                      const BlockAssembler::Options& assemble_options)
+                                                      const BlockAssembler::Options& assemble_options,
+                                                      bool& interrupt_wait)
 {
     // Delay calculating the current template fees, just in case a new block
     // comes in before the next tick.
@@ -485,8 +513,12 @@ std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainma
                 // method on BlockTemplate and no template could have been
                 // generated before a tip exists.
                 tip_changed = Assume(tip_block) && tip_block != block_template->block.hashPrevBlock;
-                return tip_changed || chainman.m_interrupt;
+                return tip_changed || chainman.m_interrupt || interrupt_wait;
             });
+            if (interrupt_wait) {
+                interrupt_wait = false;
+                return nullptr;
+            }
         }
 
         if (chainman.m_interrupt) return nullptr;
@@ -524,18 +556,12 @@ std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainma
 
             // Calculate the original template total fees if we haven't already
             if (current_fees == -1) {
-                current_fees = 0;
-                for (CAmount fee : block_template->vTxFees) {
-                    current_fees += fee;
-                }
+                current_fees = std::accumulate(block_template->vTxFees.begin(), block_template->vTxFees.end(), CAmount{0});
             }
 
-            CAmount new_fees = 0;
-            for (CAmount fee : new_tmpl->vTxFees) {
-                new_fees += fee;
-                Assume(options.fee_threshold != MAX_MONEY);
-                if (new_fees >= current_fees + options.fee_threshold) return new_tmpl;
-            }
+            const CAmount new_fees = std::accumulate(new_tmpl->vTxFees.begin(), new_tmpl->vTxFees.end(), CAmount{0});
+            Assume(options.fee_threshold != MAX_MONEY);
+            if (new_fees >= current_fees + options.fee_threshold) return new_tmpl;
         }
 
         now = NodeClock::now();

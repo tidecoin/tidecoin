@@ -70,13 +70,17 @@ const struct {
 
 namespace {
 
-// don't add private key handling cmd's to the history
+// Filter commands whose arguments can contain private keys, seeds, or passphrases.
 const QStringList historyFilter = QStringList()
     << "signmessagewithprivkey"
     << "signrawtransactionwithkey"
     << "walletpassphrase"
     << "walletpassphrasechange"
-    << "encryptwallet";
+    << "encryptwallet"
+    << "createwallet"
+    << "createwalletdescriptor"
+    << "migratewallet"
+    << "importpqhdseed";
 
 }
 
@@ -155,18 +159,19 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strRes
     } state = STATE_EATING_SPACES;
     std::string curarg;
     UniValue lastResult;
+    bool command_parsed = false;
     unsigned nDepthInsideSensitive = 0;
     size_t filter_begin_pos = 0, chpos;
     std::vector<std::pair<size_t, size_t>> filter_ranges;
 
     auto add_to_current_stack = [&](const std::string& strArg) {
+        // Make sure stack is not empty before inspecting or adding to it.
+        if (stack.empty()) {
+            stack.emplace_back();
+        }
         if (stack.back().empty() && (!nDepthInsideSensitive) && historyFilter.contains(QString::fromStdString(strArg), Qt::CaseInsensitive)) {
             nDepthInsideSensitive = 1;
             filter_begin_pos = chpos;
-        }
-        // Make sure stack is not empty before adding something
-        if (stack.empty()) {
-            stack.emplace_back();
         }
         stack.back().push_back(strArg);
     };
@@ -183,7 +188,7 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strRes
     };
 
     std::string strCommandTerminated = strCommand;
-    if (strCommandTerminated.back() != '\n')
+    if (strCommandTerminated.empty() || strCommandTerminated.back() != '\n')
         strCommandTerminated += "\n";
     for (chpos = 0; chpos < strCommandTerminated.size(); ++chpos)
     {
@@ -286,7 +291,7 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strRes
                         curarg.clear();
                         state = STATE_EATING_SPACES_IN_BRACKETS;
                     }
-                    if ((ch == ')' || ch == '\n') && stack.size() > 0)
+                    if ((ch == ')' || ch == '\n') && !stack.empty() && !stack.back().empty())
                     {
                         if (fExecute) {
                             // Convert argument list to JSON objects in method-dependent way,
@@ -302,6 +307,7 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strRes
                             lastResult = node->executeRpc(method, params, uri);
                         }
 
+                        command_parsed = true;
                         state = STATE_COMMAND_EXECUTED;
                         curarg.clear();
                     }
@@ -368,8 +374,10 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strRes
                 strResult = lastResult.write(2);
             [[fallthrough]];
         case STATE_ARGUMENT:
-        case STATE_EATING_SPACES:
             return true;
+        case STATE_EATING_SPACES:
+            // A line without a command name is invalid, including bare delimiters.
+            return command_parsed;
         default: // ERROR to end in one of the other states
             return false;
     }

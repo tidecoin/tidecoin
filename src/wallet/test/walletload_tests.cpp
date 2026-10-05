@@ -10,9 +10,15 @@
 #include <wallet/walletdb.h>
 #include <wallet/test/util.h>
 #include <wallet/wallet.h>
+#include <wallet/external_signer_scriptpubkeyman.h>
+#include <wallet/sqlite.h>
+#ifdef ENABLE_EXTERNAL_SIGNER
+#include <test/util/run_command.h>
+#endif
 #include <key.h>
 #include <pq/pqhd_kdf.h>
 #include <pq/pq_scheme.h>
+#include <univalue.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -21,178 +27,6 @@
 namespace wallet {
 
 BOOST_AUTO_TEST_SUITE(walletload_tests)
-
-class LoadTxnFailBatch final : public DatabaseBatch
-{
-public:
-    LoadTxnFailBatch(MockableData& records, bool fail_active_spk_write)
-        : m_records(records), m_fail_active_spk_write(fail_active_spk_write)
-    {
-    }
-
-    void Close() override {}
-
-    std::unique_ptr<DatabaseCursor> GetNewCursor() override
-    {
-        return std::make_unique<MockableCursor>(ActiveRecords(), true);
-    }
-
-    std::unique_ptr<DatabaseCursor> GetNewPrefixCursor(std::span<const std::byte> prefix) override
-    {
-        return std::make_unique<MockableCursor>(ActiveRecords(), true, prefix);
-    }
-
-    bool TxnBegin() override
-    {
-        if (m_txn_active) return false;
-        m_txn_records = m_records;
-        m_txn_active = true;
-        return true;
-    }
-
-    bool TxnCommit() override
-    {
-        if (!m_txn_active) return false;
-        m_records = std::move(m_txn_records);
-        m_txn_records.clear();
-        m_txn_active = false;
-        return true;
-    }
-
-    bool TxnAbort() override
-    {
-        if (!m_txn_active) return false;
-        m_txn_records.clear();
-        m_txn_active = false;
-        return true;
-    }
-
-    bool HasActiveTxn() override { return m_txn_active; }
-
-private:
-    const MockableData& ActiveRecords() const
-    {
-        return m_txn_active ? m_txn_records : m_records;
-    }
-
-    MockableData& MutableActiveRecords()
-    {
-        return m_txn_active ? m_txn_records : m_records;
-    }
-
-    bool IsActiveSpkKey(DataStream& key) const
-    {
-        DataStream copy{key};
-        std::string key_name;
-        try {
-            copy >> key_name;
-        } catch (const std::exception&) {
-            return false;
-        }
-        return key_name == DBKeys::ACTIVEEXTERNALSPK || key_name == DBKeys::ACTIVEINTERNALSPK;
-    }
-
-    bool ReadKey(DataStream&& key, DataStream& value) override
-    {
-        SerializeData key_data{key.begin(), key.end()};
-        const auto& records = ActiveRecords();
-        const auto it = records.find(key_data);
-        if (it == records.end()) {
-            return false;
-        }
-        value.clear();
-        value.write(it->second);
-        return true;
-    }
-
-    bool WriteKey(DataStream&& key, DataStream&& value, bool overwrite) override
-    {
-        if (m_fail_active_spk_write && IsActiveSpkKey(key)) {
-            return false;
-        }
-        SerializeData key_data{key.begin(), key.end()};
-        SerializeData value_data{value.begin(), value.end()};
-        auto& records = MutableActiveRecords();
-        auto [it, inserted] = records.emplace(key_data, value_data);
-        if (!inserted && overwrite) {
-            it->second = value_data;
-            inserted = true;
-        }
-        return inserted;
-    }
-
-    bool EraseKey(DataStream&& key) override
-    {
-        SerializeData key_data{key.begin(), key.end()};
-        auto& records = MutableActiveRecords();
-        records.erase(key_data);
-        return true;
-    }
-
-    bool HasKey(DataStream&& key) override
-    {
-        SerializeData key_data{key.begin(), key.end()};
-        const auto& records = ActiveRecords();
-        return records.count(key_data) > 0;
-    }
-
-    bool ErasePrefix(std::span<const std::byte> prefix) override
-    {
-        auto& records = MutableActiveRecords();
-        auto it = records.begin();
-        while (it != records.end()) {
-            auto& key = it->first;
-            if (key.size() < prefix.size() || std::search(key.begin(), key.end(), prefix.begin(), prefix.end()) != key.begin()) {
-                ++it;
-                continue;
-            }
-            it = records.erase(it);
-        }
-        return true;
-    }
-
-    MockableData& m_records;
-    MockableData m_txn_records;
-    bool m_txn_active{false};
-    bool m_fail_active_spk_write{false};
-};
-
-class LoadTxnFailDatabase final : public WalletDatabase
-{
-public:
-    explicit LoadTxnFailDatabase(bool fail_active_spk_write) : m_fail_active_spk_write(fail_active_spk_write) {}
-
-    void Open() override {}
-    bool Rewrite() override { return true; }
-    bool Backup(const std::string&) const override { return true; }
-    void Close() override {}
-    std::string Filename() override { return "load-txn-fail"; }
-    std::vector<fs::path> Files() override { return {}; }
-    std::string Format() override { return "mock"; }
-    std::unique_ptr<DatabaseBatch> MakeBatch() override
-    {
-        return std::make_unique<LoadTxnFailBatch>(m_records, m_fail_active_spk_write);
-    }
-
-    bool ContainsDBKey(const std::string& db_key)
-    {
-        for (const auto& [raw_key, _] : m_records) {
-            DataStream key_stream{raw_key};
-            std::string key_name;
-            try {
-                key_stream >> key_name;
-            } catch (const std::exception&) {
-                continue;
-            }
-            if (key_name == db_key) return true;
-        }
-        return false;
-    }
-
-private:
-    MockableData m_records;
-    bool m_fail_active_spk_write{false};
-};
 
 class DummyDescriptor final : public Descriptor {
 private:
@@ -219,52 +53,65 @@ public:
     std::optional<uint8_t> GetPQHDSchemePrefix() const override { return std::nullopt; }
     std::optional<PQHDKeyPathInfo> GetPQHDKeyPathInfo() const override { return std::nullopt; }
     std::set<uint256> GetPQHDSeedIDs() const override { return {}; }
+    std::map<uint32_t, PQHDKeyPathInfo> GetPQHDKeyPaths() const override { return {}; }
 };
 
-BOOST_FIXTURE_TEST_CASE(wallet_load_descriptors, TestingSetup)
+BOOST_FIXTURE_TEST_CASE(wallet_load_unknown_descriptor, TestingSetup)
 {
-    if (CKey::SIZE != 32) return;
-    std::unique_ptr<WalletDatabase> database = CreateMockableWalletDatabase();
+    auto database{CreateMockableWalletDatabase()};
     {
-        // Write unknown active descriptor
         WalletBatch batch(*database);
-        std::string unknown_desc = "unknown(00)";
-        WalletDescriptor wallet_descriptor(std::make_shared<DummyDescriptor>(unknown_desc), 0, 0, 0, 0);
-        BOOST_CHECK(batch.WriteDescriptor(uint256(), wallet_descriptor));
-        BOOST_CHECK(batch.WriteActiveScriptPubKeyMan(static_cast<uint8_t>(OutputType::UNKNOWN), uint256(), false));
+        BOOST_REQUIRE(batch.WriteWalletFlags(WALLET_FLAG_DESCRIPTORS));
+        // Use a valid checksum so parsing fails on the unknown function, not
+        // on an unrelated missing or incorrect checksum.
+        const std::string unknown_desc{"unknown(00)"};
+        WalletDescriptor wallet_descriptor(std::make_shared<DummyDescriptor>(unknown_desc + "#" + GetDescriptorChecksum(unknown_desc)), 0, 0, 0, 0);
+        BOOST_REQUIRE(batch.WriteDescriptor(uint256::ZERO, wallet_descriptor));
+        // Preserve UNKNOWN_DESCRIPTOR even when an active binding references
+        // the unrecognized descriptor, which cannot create a manager.
+        BOOST_REQUIRE(batch.WriteActiveScriptPubKeyMan(static_cast<uint8_t>(OutputType::UNKNOWN), uint256::ZERO, false));
     }
 
-    {
-        // Now try to load the wallet and verify the error.
-        const std::shared_ptr<CWallet> wallet(new CWallet(m_node.chain.get(), "", std::move(database)));
-        BOOST_CHECK_EQUAL(wallet->LoadWallet(), DBErrors::UNKNOWN_DESCRIPTOR);
-    }
+    CWallet wallet(m_node.chain.get(), "", std::move(database));
+    ASSERT_DEBUG_LOG("is not a valid descriptor function");
+    BOOST_CHECK_EQUAL(wallet.LoadWallet(), DBErrors::UNKNOWN_DESCRIPTOR);
+    BOOST_CHECK(wallet.GetAllScriptPubKeyMans().empty());
+}
 
-    // Test 2
-    // Now write a valid descriptor with an invalid ID.
-    // As the software produces another ID for the descriptor, the loading process must be aborted.
-    database = CreateMockableWalletDatabase();
+BOOST_FIXTURE_TEST_CASE(wallet_load_descriptor_id_mismatch, TestingSetup)
+{
+    // Construct a real, parseable Tidecoin descriptor; a dummy descriptor with
+    // stale syntax/checksum could fail before the ID check we intend to test.
+    const CKey key{GenerateRandomKey(pq::SchemeId::FALCON_512)};
+    FlatSigningProvider provider;
+    std::string error;
+    auto descriptors{Parse("wpkh(" + HexStr(key.GetPubKey()) + ")", provider, error, /*require_checksum=*/false)};
+    BOOST_REQUIRE_EQUAL(descriptors.size(), 1U);
+    const WalletDescriptor descriptor{std::move(descriptors.front()), 0, 0, 1, 0};
+    uint256 wrong_id{descriptor.id};
+    wrong_id.begin()[0] ^= 1;
+    BOOST_REQUIRE(wrong_id != descriptor.id);
 
-    // Verify the error
-    bool found = false;
-    DebugLogHelper logHelper("The descriptor ID calculated by the wallet differs from the one in DB", [&](const std::string* s) {
-        found = true;
-        return false;
-    });
-
-    {
-        // Write valid descriptor with invalid ID
-        WalletBatch batch(*database);
-        std::string desc = "wpkh(pqhd(08dbf2b54de8894fcd63ae0b6626e80180833984ac10cd947308d19455ffcdf4)/10007h/6868h/7h/0h/0h/*h)#mwsjdcmr";
-        WalletDescriptor wallet_descriptor(std::make_shared<DummyDescriptor>(desc), 0, 0, 0, 0);
-        BOOST_CHECK(batch.WriteDescriptor(uint256::ONE, wallet_descriptor));
-    }
-
-    {
-        // Now try to load the wallet and verify the error.
-        const std::shared_ptr<CWallet> wallet(new CWallet(m_node.chain.get(), "", std::move(database)));
-        BOOST_CHECK_EQUAL(wallet->LoadWallet(), DBErrors::CORRUPT);
-        BOOST_CHECK(found); // The error must be logged
+    // Only the database key differs. The correct-ID control must load, so a
+    // generic parsing/corruption error cannot satisfy the rejection test.
+    for (const bool correct_id : {false, true}) {
+        auto database{CreateMockableWalletDatabase()};
+        {
+            WalletBatch batch(*database);
+            BOOST_REQUIRE(batch.WriteWalletFlags(WALLET_FLAG_DESCRIPTORS | WALLET_FLAG_DISABLE_PRIVATE_KEYS));
+            BOOST_REQUIRE(batch.WriteDescriptor(correct_id ? descriptor.id : wrong_id, descriptor));
+        }
+        CWallet wallet(m_node.chain.get(), "", std::move(database));
+        if (correct_id) {
+            BOOST_REQUIRE_EQUAL(wallet.LoadWallet(), DBErrors::LOAD_OK);
+            BOOST_CHECK_EQUAL(wallet.GetAllScriptPubKeyMans().size(), 1U);
+            const auto* manager{wallet.GetScriptPubKeyMan(descriptor.id)};
+            BOOST_REQUIRE(manager);
+            BOOST_CHECK(manager->GetID() == descriptor.id);
+        } else {
+            ASSERT_DEBUG_LOG("The descriptor ID calculated by the wallet differs from the one in DB");
+            BOOST_CHECK_EQUAL(wallet.LoadWallet(), DBErrors::CORRUPT);
+        }
     }
 }
 
@@ -362,91 +209,93 @@ BOOST_FIXTURE_TEST_CASE(wallet_load_rejects_pqhd_policy_seed_mismatch, TestingSe
     BOOST_CHECK_EQUAL(wallet->LoadWallet(), DBErrors::CORRUPT);
 }
 
-BOOST_FIXTURE_TEST_CASE(wallet_load_pqhd_reconciliation_is_atomic, TestingSetup)
-{
-    auto database = std::make_unique<LoadTxnFailDatabase>(/*fail_active_spk_write=*/true);
-    auto* db_ptr = database.get();
-    {
-        WalletBatch batch(*database);
-        BOOST_CHECK(batch.WriteWalletFlags(WALLET_FLAG_DESCRIPTORS));
-
-        std::array<unsigned char, 32> seed_bytes{};
-        seed_bytes.fill(0x44);
-        const uint256 seed_id = pqhd::ComputeSeedID32AsUint256(std::span<const uint8_t, 32>(
-            reinterpret_cast<const uint8_t*>(seed_bytes.data()), seed_bytes.size()));
-
-        PQHDSeed seed;
-        seed.nCreateTime = 1;
-        seed.seed.assign(seed_bytes.begin(), seed_bytes.end());
-        BOOST_CHECK(batch.WritePQHDSeed(seed_id, seed));
-
-        PQHDPolicy policy;
-        policy.default_receive_scheme = static_cast<uint8_t>(pq::SchemeId::FALCON_512);
-        policy.default_change_scheme = static_cast<uint8_t>(pq::SchemeId::FALCON_512);
-        policy.default_seed_id = seed_id;
-        policy.default_change_seed_id = seed_id;
-        BOOST_CHECK(batch.WritePQHDPolicy(policy));
-    }
-
-    const std::shared_ptr<CWallet> wallet(new CWallet(m_node.chain.get(), "", std::move(database)));
-    const int64_t birth_time_before = wallet->GetBirthTime();
-    BOOST_CHECK_EQUAL(wallet->LoadWallet(), DBErrors::CORRUPT);
-    BOOST_CHECK_EQUAL(wallet->GetBirthTime(), birth_time_before);
-
-    // Reconciliation attempted descriptor creation but must not persist partial state on failure.
-    BOOST_CHECK(!db_ptr->ContainsDBKey(DBKeys::WALLETDESCRIPTOR));
-    BOOST_CHECK(!db_ptr->ContainsDBKey(DBKeys::ACTIVEEXTERNALSPK));
-    BOOST_CHECK(!db_ptr->ContainsDBKey(DBKeys::ACTIVEINTERNALSPK));
-}
+// Reconciliation rollback and recovery are tested against real SQLite databases
+// in wallet_persistence_tests.
 
 #ifdef ENABLE_EXTERNAL_SIGNER
-BOOST_FIXTURE_TEST_CASE(wallet_external_signer_imports_all_parsed_descriptors, TestingSetup)
+BOOST_FIXTURE_TEST_CASE(wallet_external_signer_imports_all_output_types, TestingSetup)
 {
-    const CKey key{GenerateRandomKey(pq::SchemeId::FALCON_512)};
-    const std::string pubkey_hex{HexStr(key.GetPubKey())};
-
-    const fs::path signer_script{m_args.GetDataDirBase() / "mock_ext_signer_combo.sh"};
-    {
-        std::ofstream script{signer_script};
-        BOOST_REQUIRE(script.good());
-        script << "#!/usr/bin/env bash\n";
-        script << "set -euo pipefail\n";
-        script << "if [[ \"$*\" == *\"enumerate\"* ]]; then\n";
-        script << "  echo '[{\"fingerprint\":\"00000001\",\"model\":\"mock\"}]'\n";
-        script << "  exit 0\n";
-        script << "fi\n";
-        script << "if [[ \"$*\" == *\"getdescriptors\"* ]]; then\n";
-        script << "  echo '{\"receive\":[\"combo(" << pubkey_hex << ")\"],\"internal\":[\"combo(" << pubkey_hex << ")\"]}'\n";
-        script << "  exit 0\n";
-        script << "fi\n";
-        script << "echo '{\"error\":\"unsupported\"}'\n";
-        script << "exit 1\n";
+    const auto executable{test::CopyMockProcess(m_args.GetDataDirBase() / "signer with spaces")};
+    const auto responses_path{m_args.GetDataDirBase() / fs::PathFromString("signer r\xc3\xa9ponses \xe6\x96\x87.json")};
+    UniValue descriptors{UniValue::VOBJ};
+    for (const auto* branch : {"receive", "internal"}) {
+        const CKey key{GenerateRandomKey(pq::SchemeId::FALCON_512)};
+        const std::string pubkey{HexStr(key.GetPubKey())};
+        UniValue values{UniValue::VARR};
+        // combo() is one descriptor with no single output type, not a list of
+        // active descriptors. Each side needs distinct, explicit descriptors.
+        values.push_back("pkh(" + pubkey + ")");
+        values.push_back("sh(wpkh(" + pubkey + "))");
+        values.push_back("wpkh(" + pubkey + ")");
+        descriptors.pushKV(branch, values);
     }
-    fs::permissions(
-        signer_script,
-        fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec,
-        fs::perm_options::replace);
-
-    m_args.ForceSetArg("-signer", fs::PathToString(signer_script));
-    gArgs.ForceSetArg("-signer", fs::PathToString(signer_script));
-
-    CWallet wallet(m_node.chain.get(), "", CreateMockableWalletDatabase());
-    wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
-    wallet.SetWalletFlag(WALLET_FLAG_DISABLE_PRIVATE_KEYS);
-    wallet.SetWalletFlag(WALLET_FLAG_EXTERNAL_SIGNER);
-
+    UniValue signer{UniValue::VOBJ};
+    signer.pushKV("fingerprint", "00000001");
+    signer.pushKV("model", "mock");
+    UniValue signers{UniValue::VARR};
+    signers.push_back(signer);
+    UniValue responses{UniValue::VOBJ};
+    responses.pushKV("enumerate", signers);
+    responses.pushKV("getdescriptors", descriptors);
     {
-        LOCK(wallet.cs_wallet);
-        wallet.SetupDescriptorScriptPubKeyMans();
+        std::ofstream file{responses_path};
+        BOOST_REQUIRE(file.good());
+        file << responses.write();
+        BOOST_REQUIRE(file.good());
     }
-
-    BOOST_CHECK(wallet.GetScriptPubKeyMan(OutputType::LEGACY, /*internal=*/false));
-    BOOST_CHECK(wallet.GetScriptPubKeyMan(OutputType::P2SH_SEGWIT, /*internal=*/false));
-    BOOST_CHECK(wallet.GetScriptPubKeyMan(OutputType::BECH32, /*internal=*/false));
-    BOOST_CHECK(wallet.GetScriptPubKeyMan(OutputType::LEGACY, /*internal=*/true));
-    BOOST_CHECK(wallet.GetScriptPubKeyMan(OutputType::P2SH_SEGWIT, /*internal=*/true));
-    BOOST_CHECK(wallet.GetScriptPubKeyMan(OutputType::BECH32, /*internal=*/true));
+    const std::string command{test::QuoteCommandArgument(fs::PathToString(executable)) + " signer " +
+                              test::QuoteCommandArgument(fs::PathToString(responses_path))};
+    // BasicTestingSetup owns and resets the argument managers at teardown.
+    m_args.ForceSetArg("-signer", command);
+    gArgs.ForceSetArg("-signer", command);
+    const auto path{m_args.GetDataDirBase() / "signer-wallet"};
+    auto open_wallet = [&] {
+        auto wallet{std::make_unique<CWallet>(m_node.chain.get(), "", std::make_unique<SQLiteDatabase>(path, path / "wallet.dat", DatabaseOptions{}))};
+        wallet->m_keypool_size = 1;
+        BOOST_REQUIRE(wallet->LoadWallet() == DBErrors::LOAD_OK);
+        return wallet;
+    };
+    auto wallet{open_wallet()};
+    {
+        LOCK(wallet->cs_wallet);
+        wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS | WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER);
+        wallet->SetupDescriptorScriptPubKeyMans();
+    }
+    const CKey additional_key = GenerateRandomKey(pq::SchemeId::FALCON_512);
+    FlatSigningProvider provider;
+    std::string error;
+    auto parsed = Parse("wpkh(" + HexStr(additional_key.GetPubKey()) + ")", provider, error, false);
+    BOOST_REQUIRE_EQUAL(parsed.size(), 1U);
+    WalletDescriptor additional{std::move(parsed[0]), 1, 0, 1, 0};
+    {
+        LOCK(wallet->cs_wallet);
+        auto imported = wallet->AddWalletDescriptor(additional, provider, "", false);
+        BOOST_REQUIRE(imported);
+        BOOST_CHECK(dynamic_cast<ExternalSignerScriptPubKeyMan*>(&imported->get()));
+    }
+    std::map<std::pair<OutputType, bool>, uint256> ids;
+    for (int pass = 0; pass < 2; ++pass) {
+        BOOST_CHECK_EQUAL(wallet->GetAllScriptPubKeyMans().size(), 7U);
+        BOOST_CHECK(dynamic_cast<ExternalSignerScriptPubKeyMan*>(wallet->GetDescriptorScriptPubKeyMan(additional)));
+        for (const auto type : {OutputType::LEGACY, OutputType::P2SH_SEGWIT, OutputType::BECH32}) {
+            auto* receive = wallet->GetScriptPubKeyMan(type, false);
+            auto* change = wallet->GetScriptPubKeyMan(type, true);
+            BOOST_REQUIRE(receive);
+            BOOST_REQUIRE(change);
+            BOOST_CHECK(receive->GetID() != change->GetID());
+            for (bool internal : {false, true}) {
+                const auto id{wallet->GetScriptPubKeyMan(type, internal)->GetID()};
+                if (pass == 0) ids[{type, internal}] = id;
+                else BOOST_CHECK(id == ids.at({type, internal}));
+            }
+        }
+        if (pass == 0) {
+            wallet.reset();
+            wallet = open_wallet();
+        }
+    }
 }
+
 #endif
 
 BOOST_AUTO_TEST_SUITE_END()

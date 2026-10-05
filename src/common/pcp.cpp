@@ -17,6 +17,8 @@
 #include <util/strencodings.h>
 #include <util/threadinterrupt.h>
 
+#include <atomic>
+
 namespace {
 
 // RFC6886 NAT-PMP and RFC6887 Port Control Protocol (PCP) implementation.
@@ -81,6 +83,8 @@ constexpr size_t NATPMP_MAP_RESPONSE_LIFETIME_OFS = 12;
 constexpr uint8_t NATPMP_RESULT_SUCCESS = 0;
 //! Result code representing unsupported version.
 constexpr uint8_t NATPMP_RESULT_UNSUPP_VERSION = 1;
+//! Result code representing a request denied by the gateway.
+constexpr uint8_t NATPMP_RESULT_NOT_AUTHORIZED = 2;
 //! Result code representing lack of resources.
 constexpr uint8_t NATPMP_RESULT_NO_RESOURCES = 4;
 
@@ -144,6 +148,8 @@ constexpr size_t PCP_MAP_EXTERNAL_IP_OFS = 20;
 
 //! Result code representing success (RFC6887 7.4), shared with NAT-PMP.
 constexpr uint8_t PCP_RESULT_SUCCESS = NATPMP_RESULT_SUCCESS;
+//! Authorization denial has the same result code in both protocols.
+constexpr uint8_t PCP_RESULT_NOT_AUTHORIZED = NATPMP_RESULT_NOT_AUTHORIZED;
 //! Result code representing lack of resources (RFC6887 7.4).
 constexpr uint8_t PCP_RESULT_NO_RESOURCES = 8;
 
@@ -170,6 +176,13 @@ std::string NATPMPResultString(uint16_t result_code)
 {
     auto result_i = NATPMP_RESULT_STR.find(result_code);
     return strprintf("%s (code %d)", result_i == NATPMP_RESULT_STR.end() ? "(unknown)" : result_i->second,  result_code);
+}
+
+//! Warn once per protocol per process about authorization denials. Other errors
+//! retain warning level; the flag affects diagnostics only, not mapping retries.
+BCLog::Level MappingFailureLogLevel(bool not_authorized, std::atomic<bool>& warned)
+{
+    return not_authorized && warned.exchange(true) ? BCLog::Level::Debug : BCLog::Level::Warning;
 }
 
 //! Return human-readable string from PCP result code.
@@ -276,6 +289,8 @@ std::optional<std::vector<uint8_t>> PCPSendRecv(Sock &sock, const std::string &p
 
 std::variant<MappingResult, MappingError> NATPMPRequestPortMap(const CNetAddr &gateway, uint16_t port, uint32_t lifetime, CThreadInterrupt& interrupt, int num_tries, std::chrono::milliseconds timeout_per_try)
 {
+    // Shared by address discovery and mapping failures, including future calls.
+    static std::atomic<bool> warned_not_authorized{false};
     struct sockaddr_storage dest_addr;
     socklen_t dest_addrlen = sizeof(struct sockaddr_storage);
 
@@ -332,7 +347,8 @@ std::variant<MappingResult, MappingError> NATPMPRequestPortMap(const CNetAddr &g
         Assume(response.size() >= NATPMP_GETEXTERNAL_RESPONSE_SIZE);
         uint16_t result_code = ReadBE16(response.data() + NATPMP_RESPONSE_HDR_RESULT_OFS);
         if (result_code != NATPMP_RESULT_SUCCESS) {
-            LogPrintLevel(BCLog::NET, BCLog::Level::Warning, "natpmp: Getting external address failed with result %s\n", NATPMPResultString(result_code));
+            const auto level = MappingFailureLogLevel(result_code == NATPMP_RESULT_NOT_AUTHORIZED, warned_not_authorized);
+            LogPrintLevel(BCLog::NET, level, "natpmp: Getting external address failed with result %s\n", NATPMPResultString(result_code));
             return MappingError::PROTOCOL_ERROR;
         }
 
@@ -374,7 +390,8 @@ std::variant<MappingResult, MappingError> NATPMPRequestPortMap(const CNetAddr &g
         Assume(response.size() >= NATPMP_MAP_RESPONSE_SIZE);
         uint16_t result_code = ReadBE16(response.data() + NATPMP_RESPONSE_HDR_RESULT_OFS);
         if (result_code != NATPMP_RESULT_SUCCESS) {
-            LogPrintLevel(BCLog::NET, BCLog::Level::Warning, "natpmp: Port mapping failed with result %s\n", NATPMPResultString(result_code));
+            const auto level = MappingFailureLogLevel(result_code == NATPMP_RESULT_NOT_AUTHORIZED, warned_not_authorized);
+            LogPrintLevel(BCLog::NET, level, "natpmp: Port mapping failed with result %s\n", NATPMPResultString(result_code));
             if (result_code == NATPMP_RESULT_NO_RESOURCES) {
                 return MappingError::NO_RESOURCES;
             }
@@ -391,6 +408,7 @@ std::variant<MappingResult, MappingError> NATPMPRequestPortMap(const CNetAddr &g
 
 std::variant<MappingResult, MappingError> PCPRequestPortMap(const PCPMappingNonce &nonce, const CNetAddr &gateway, const CNetAddr &bind, uint16_t port, uint32_t lifetime, CThreadInterrupt& interrupt, int num_tries, std::chrono::milliseconds timeout_per_try)
 {
+    static std::atomic<bool> warned_not_authorized{false};
     struct sockaddr_storage dest_addr, bind_addr;
     socklen_t dest_addrlen = sizeof(struct sockaddr_storage), bind_addrlen = sizeof(struct sockaddr_storage);
 
@@ -508,7 +526,8 @@ std::variant<MappingResult, MappingError> PCPRequestPortMap(const PCPMappingNonc
     uint16_t external_port = ReadBE16(response.data() + PCP_HDR_SIZE + PCP_MAP_EXTERNAL_PORT_OFS);
     CNetAddr external_addr{PCPUnwrapAddress(response.subspan(PCP_HDR_SIZE + PCP_MAP_EXTERNAL_IP_OFS, ADDR_IPV6_SIZE))};
     if (result_code != PCP_RESULT_SUCCESS) {
-        LogPrintLevel(BCLog::NET, BCLog::Level::Warning, "pcp: Mapping failed with result %s\n", PCPResultString(result_code));
+        const auto level = MappingFailureLogLevel(result_code == PCP_RESULT_NOT_AUTHORIZED, warned_not_authorized);
+        LogPrintLevel(BCLog::NET, level, "pcp: Mapping failed with result %s\n", PCPResultString(result_code));
         if (result_code == PCP_RESULT_NO_RESOURCES) {
             return MappingError::NO_RESOURCES;
         }

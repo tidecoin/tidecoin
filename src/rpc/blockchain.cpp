@@ -1075,14 +1075,13 @@ static RPCHelpMan gettxoutsetinfo()
 {
     UniValue ret(UniValue::VOBJ);
 
-    const CBlockIndex* pindex{nullptr};
     const CoinStatsHashType hash_type{request.params[0].isNull() ? CoinStatsHashType::HASH_SERIALIZED : ParseHashType(request.params[0].get_str())};
     bool index_requested = request.params[2].isNull() || request.params[2].get_bool();
 
     NodeContext& node = EnsureAnyNodeContext(request.context);
     ChainstateManager& chainman = EnsureChainman(node);
     Chainstate& active_chainstate = chainman.ActiveChainstate();
-    active_chainstate.ForceFlushStateToDisk();
+    if (!active_chainstate.ForceFlushStateToDisk()) throw JSONRPCError(RPC_DATABASE_ERROR, "Unable to flush chainstate");
 
     CCoinsView* coins_view;
     BlockManager* blockman;
@@ -1090,9 +1089,9 @@ static RPCHelpMan gettxoutsetinfo()
         LOCK(::cs_main);
         coins_view = &active_chainstate.CoinsDB();
         blockman = &active_chainstate.m_blockman;
-        pindex = blockman->LookupBlockIndex(coins_view->GetBestBlock());
     }
 
+    const CBlockIndex* pindex{nullptr};
     if (!request.params[1].isNull()) {
         if (!g_coin_stats_index) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Querying specific block heights requires coinstatsindex");
@@ -1114,7 +1113,7 @@ static RPCHelpMan gettxoutsetinfo()
 
             // If a specific block was requested and the index has already synced past that height, we can return the
             // data already even though the index is not fully synced yet.
-            if (pindex->nHeight > summary.best_block_height) {
+            if (pindex && pindex->nHeight > summary.best_block_height) {
                 throw JSONRPCError(RPC_INTERNAL_ERROR, strprintf("Unable to get data because coinstatsindex is still syncing. Current height: %d", summary.best_block_height));
             }
         }
@@ -1140,8 +1139,10 @@ static RPCHelpMan gettxoutsetinfo()
             ret.pushKV("disk_size", stats.nDiskSize);
         } else {
             CCoinsStats prev_stats{};
-            if (pindex->nHeight > 0) {
-                const std::optional<CCoinsStats> maybe_prev_stats = GetUTXOStats(coins_view, *blockman, hash_type, node.rpc_interruption_point, pindex->pprev, index_requested);
+            if (stats.nHeight > 0) {
+                const CBlockIndex* stats_index = WITH_LOCK(cs_main, return blockman->LookupBlockIndex(stats.hashBlock));
+                CHECK_NONFATAL(stats_index);
+                const std::optional<CCoinsStats> maybe_prev_stats = GetUTXOStats(coins_view, *blockman, hash_type, node.rpc_interruption_point, stats_index->pprev, index_requested);
                 if (!maybe_prev_stats) {
                     throw JSONRPCError(RPC_INTERNAL_ERROR, "Unable to read UTXO set");
                 }
@@ -1921,8 +1922,8 @@ static inline bool SetHasKeys(const std::set<T>& set, const Tk& key, const Args&
     return (set.count(key) != 0) || SetHasKeys(set, args...);
 }
 
-// outpoint (needed for the utxo index) + nHeight + fCoinBase
-static constexpr size_t PER_UTXO_OVERHEAD = sizeof(COutPoint) + sizeof(uint32_t) + sizeof(bool);
+// outpoint (needed for the utxo index) + packed nHeight|fCoinBase
+static constexpr size_t PER_UTXO_OVERHEAD = sizeof(COutPoint) + sizeof(uint32_t);
 
 static RPCHelpMan getblockstats()
 {
@@ -2221,6 +2222,7 @@ bool FindScriptPubKey(std::atomic<int>& scan_progress, const std::atomic<bool>& 
 static std::atomic<int> g_scan_progress;
 static std::atomic<bool> g_scan_in_progress;
 static std::atomic<bool> g_should_abort_scan;
+static Mutex g_scan_mutex;
 class CoinsViewScanReserver
 {
 private:
@@ -2228,20 +2230,30 @@ private:
 public:
     explicit CoinsViewScanReserver() = default;
 
-    bool reserve() {
+    bool reserve() EXCLUSIVE_LOCKS_REQUIRED(!g_scan_mutex) {
         CHECK_NONFATAL(!m_could_reserve);
+        LOCK(g_scan_mutex);
         if (g_scan_in_progress.exchange(true)) {
             return false;
         }
         CHECK_NONFATAL(g_scan_progress == 0);
+        g_should_abort_scan = false;
         m_could_reserve = true;
         return true;
     }
 
+    static bool Abort() EXCLUSIVE_LOCKS_REQUIRED(!g_scan_mutex) {
+        LOCK(g_scan_mutex);
+        if (!g_scan_in_progress) return false;
+        g_should_abort_scan = true;
+        return true;
+    }
+
     ~CoinsViewScanReserver() {
+        LOCK(g_scan_mutex);
         if (m_could_reserve) {
-            g_scan_in_progress = false;
             g_scan_progress = 0;
+            g_scan_in_progress = false;
         }
     }
 };
@@ -2263,6 +2275,8 @@ static const auto output_descriptor_obj = RPCArg{
 
 static const auto scan_objects_arg_desc = RPCArg{
     "scanobjects", RPCArg::Type::ARR, RPCArg::Optional::OMITTED, "Array of scan objects. Required for \"start\" action\n"
+        "Wallet-local PQHD descriptors require an explicitly selected wallet (-rpcwallet); structurally valid cached public keys work while locked, including after reload.\n"
+        "Fresh PQHD derivation requires an unlocked wallet with the seed. Scanning does not extend wallet monitoring.\n"
         "Every scan object is either a string descriptor or an object:",
     {
         {"descriptor", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "An output descriptor"},
@@ -2340,7 +2354,7 @@ static RPCHelpMan scantxoutset()
             HelpExampleRpc("scantxoutset", "\"status\"") +
             HelpExampleRpc("scantxoutset", "\"abort\"")
         },
-        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) EXCLUSIVE_LOCKS_REQUIRED(!g_scan_mutex) -> UniValue
 {
     UniValue result(UniValue::VOBJ);
     const auto action{self.Arg<std::string>("action")};
@@ -2353,14 +2367,7 @@ static RPCHelpMan scantxoutset()
         result.pushKV("progress", g_scan_progress.load());
         return result;
     } else if (action == "abort") {
-        CoinsViewScanReserver reserver;
-        if (reserver.reserve()) {
-            // reserve was possible which means no scan was running
-            return false;
-        }
-        // set the abort flag
-        g_should_abort_scan = true;
-        return true;
+        return CoinsViewScanReserver::Abort();
     } else if (action == "start") {
         CoinsViewScanReserver reserver;
         if (!reserver.reserve()) {
@@ -2375,10 +2382,13 @@ static RPCHelpMan scantxoutset()
         std::map<CScript, std::string> descriptors;
         CAmount total_in = 0;
 
+        RPCDescriptorResolver resolver{request, [] {
+            if (g_should_abort_scan) throw JSONRPCError(RPC_MISC_ERROR, "Descriptor expansion interrupted by scantxoutset abort");
+        }};
         // loop through the scan objects
         for (const UniValue& scanobject : request.params[1].get_array().getValues()) {
             FlatSigningProvider provider;
-            auto scripts = EvalDescriptorStringOrObject(scanobject, provider);
+            auto scripts = EvalDescriptorStringOrObject(scanobject, provider, /*expand_priv=*/false, resolver.GetExpander());
             for (CScript& script : scripts) {
                 std::string inferred = InferDescriptor(script, provider)->ToString();
                 needles.emplace(script);
@@ -2386,11 +2396,12 @@ static RPCHelpMan scantxoutset()
             }
         }
 
+        resolver.Finish();
+
         // Scan the unspent transaction output set for inputs
         UniValue unspents(UniValue::VARR);
         std::vector<CTxOut> input_txos;
         std::map<COutPoint, Coin> coins;
-        g_should_abort_scan = false;
         int64_t count = 0;
         std::unique_ptr<CCoinsViewCursor> pcursor;
         const CBlockIndex* tip;
@@ -2399,7 +2410,7 @@ static RPCHelpMan scantxoutset()
             ChainstateManager& chainman = EnsureChainman(node);
             LOCK(cs_main);
             Chainstate& active_chainstate = chainman.ActiveChainstate();
-            active_chainstate.ForceFlushStateToDisk();
+            if (!active_chainstate.ForceFlushStateToDisk()) throw JSONRPCError(RPC_DATABASE_ERROR, "Unable to flush chainstate");
             pcursor = CHECK_NONFATAL(active_chainstate.CoinsDB().Cursor());
             tip = CHECK_NONFATAL(active_chainstate.m_chain.Tip());
         }
@@ -2445,6 +2456,7 @@ static std::atomic<int> g_scanfilter_progress;
 static std::atomic<int> g_scanfilter_progress_height;
 static std::atomic<bool> g_scanfilter_in_progress;
 static std::atomic<bool> g_scanfilter_should_abort_scan;
+static Mutex g_scanfilter_mutex;
 class BlockFiltersScanReserver
 {
 private:
@@ -2452,16 +2464,28 @@ private:
 public:
     explicit BlockFiltersScanReserver() = default;
 
-    bool reserve() {
+    bool reserve() EXCLUSIVE_LOCKS_REQUIRED(!g_scanfilter_mutex) {
         CHECK_NONFATAL(!m_could_reserve);
+        LOCK(g_scanfilter_mutex);
         if (g_scanfilter_in_progress.exchange(true)) {
             return false;
         }
+        g_scanfilter_should_abort_scan = false;
+        g_scanfilter_progress = 0;
+        g_scanfilter_progress_height = 0;
         m_could_reserve = true;
         return true;
     }
 
+    static bool Abort() EXCLUSIVE_LOCKS_REQUIRED(!g_scanfilter_mutex) {
+        LOCK(g_scanfilter_mutex);
+        if (!g_scanfilter_in_progress) return false;
+        g_scanfilter_should_abort_scan = true;
+        return true;
+    }
+
     ~BlockFiltersScanReserver() {
+        LOCK(g_scanfilter_mutex);
         if (m_could_reserve) {
             g_scanfilter_in_progress = false;
         }
@@ -2536,7 +2560,7 @@ static RPCHelpMan scanblocks()
             HelpExampleRpc("scanblocks", "\"start\", [\"addr(bcrt1q4u4nsgk6ug0sqz7r3rj9tykjxrsl0yy4d0wwte)\"], 100, 150, \"basic\"") +
             HelpExampleRpc("scanblocks", "\"status\"")
         },
-        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) EXCLUSIVE_LOCKS_REQUIRED(!g_scanfilter_mutex) -> UniValue
 {
     UniValue ret(UniValue::VOBJ);
     if (request.params[0].get_str() == "status") {
@@ -2549,14 +2573,7 @@ static RPCHelpMan scanblocks()
         ret.pushKV("current_height", g_scanfilter_progress_height.load());
         return ret;
     } else if (request.params[0].get_str() == "abort") {
-        BlockFiltersScanReserver reserver;
-        if (reserver.reserve()) {
-            // reserve was possible which means no scan was running
-            return false;
-        }
-        // set the abort flag
-        g_scanfilter_should_abort_scan = true;
-        return true;
+        return BlockFiltersScanReserver::Abort();
     } else if (request.params[0].get_str() == "start") {
         BlockFiltersScanReserver reserver;
         if (!reserver.reserve()) {
@@ -2604,22 +2621,25 @@ static RPCHelpMan scanblocks()
         CHECK_NONFATAL(start_index);
         CHECK_NONFATAL(stop_block);
 
+        RPCDescriptorResolver resolver{request, [] {
+            if (g_scanfilter_should_abort_scan) throw JSONRPCError(RPC_MISC_ERROR, "Descriptor expansion interrupted by scanblocks abort");
+        }};
         // loop through the scan objects, add scripts to the needle_set
         GCSFilter::ElementSet needle_set;
         for (const UniValue& scanobject : request.params[1].get_array().getValues()) {
             FlatSigningProvider provider;
-            std::vector<CScript> scripts = EvalDescriptorStringOrObject(scanobject, provider);
+            std::vector<CScript> scripts = EvalDescriptorStringOrObject(scanobject, provider, /*expand_priv=*/false, resolver.GetExpander());
             for (const CScript& script : scripts) {
                 needle_set.emplace(script.begin(), script.end());
             }
         }
+        resolver.Finish();
         UniValue blocks(UniValue::VARR);
         const int amount_per_chunk = 10000;
         std::vector<BlockFilter> filters;
         int start_block_height = start_index->nHeight; // for progress reporting
         const int total_blocks_to_process = stop_block->nHeight - start_block_height;
 
-        g_scanfilter_should_abort_scan = false;
         g_scanfilter_progress = 0;
         g_scanfilter_progress_height = start_block_height;
         bool completed = true;
@@ -2693,7 +2713,7 @@ static RPCHelpMan getdescriptoractivity()
             RPCArg{"blockhashes", RPCArg::Type::ARR, RPCArg::Optional::NO, "The list of blockhashes to examine for activity. Order doesn't matter. Must be along main chain or an error is thrown.\n", {
                 {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "A valid blockhash"},
             }},
-            RPCArg{"scanobjects", RPCArg::Type::ARR, RPCArg::Optional::NO, "The list of descriptors (scan objects) to examine for activity. Every scan object is either a string descriptor or an object:",
+            RPCArg{"scanobjects", RPCArg::Type::ARR, RPCArg::Optional::NO, "The list of descriptors (scan objects) to examine for activity. Wallet-local PQHD descriptors require an explicitly selected wallet (-rpcwallet). Cached indices work while locked; fresh derivation requires an unlocked wallet with the seed. This call does not extend wallet monitoring. Every scan object is either a string descriptor or an object:",
                 {
                     {"descriptor", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "An output descriptor"},
                     output_descriptor_obj,
@@ -2765,15 +2785,18 @@ static RPCHelpMan getdescriptoractivity()
 
     std::set<CScript> scripts_to_watch;
 
+    RPCDescriptorResolver resolver{request};
     // Determine scripts to watch.
     for (const UniValue& scanobject : request.params[1].get_array().getValues()) {
         FlatSigningProvider provider;
-        std::vector<CScript> scripts = EvalDescriptorStringOrObject(scanobject, provider);
+        std::vector<CScript> scripts = EvalDescriptorStringOrObject(scanobject, provider, /*expand_priv=*/false, resolver.GetExpander());
 
         for (const CScript& script : scripts) {
             scripts_to_watch.insert(script);
         }
     }
+
+    resolver.Finish();
 
     const auto AddSpend = [&](
             const CScript& spk,
@@ -3219,7 +3242,7 @@ PrepareUTXOSnapshot(
         //
         AssertLockHeld(::cs_main);
 
-        chainstate.ForceFlushStateToDisk();
+        if (!chainstate.ForceFlushStateToDisk()) throw JSONRPCError(RPC_DATABASE_ERROR, "Unable to flush chainstate");
 
         maybe_stats = GetUTXOStats(&chainstate.CoinsDB(), chainstate.m_blockman, CoinStatsHashType::HASH_SERIALIZED, interruption_point);
         if (!maybe_stats) {

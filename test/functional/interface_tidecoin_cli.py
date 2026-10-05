@@ -5,7 +5,10 @@
 """Test tidecoin-cli"""
 
 from decimal import Decimal
+import os
 import re
+import select
+import subprocess
 
 from test_framework.blocktools import COINBASE_MATURITY
 from test_framework.netutil import test_ipv6_local
@@ -90,6 +93,52 @@ class TestBitcoinCli(BitcoinTestFramework):
         assert re.match(rf"^{re.escape(self.config['environment']['CLIENT_NAME'])} client.+services nwl2?$", det[0])
         assert not any(line.startswith("Local services:") for line in det)
 
+    def test_stdin_terminal(self, user, password):
+        if os.name != 'posix':
+            self.log.info("Skipping POSIX terminal echo test")
+            return
+        import termios
+
+        self.log.info("Test password echo suppression and restoration on a real PTY")
+        node = self.nodes[0]
+        args = node.cli.binaries.rpc_argv() + [
+            f'-datadir={node.datadir_path}', f'-rpcuser={user}', '-stdinrpcpass', 'getblockcount',
+        ]
+        for input_bytes, expected_error in [
+            ((password + '\n').encode(), None),
+            (b'incorrect-password\n', b'Incorrect rpcuser or rpcpassword'),
+            (b'\x04', b'failed to read from standard input'),
+        ]:
+            master, slave = os.openpty()
+            process = None
+            try:
+                original = termios.tcgetattr(slave)
+                assert original[3] & termios.ECHO
+                process = subprocess.Popen(args, stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                self.wait_until(lambda: not (termios.tcgetattr(slave)[3] & termios.ECHO))
+                self.wait_until(lambda: bool(select.select([process.stderr], [], [], 0)[0]))
+                prompt = os.read(process.stderr.fileno(), 4096)
+                assert b'RPC password>' in prompt
+                os.write(master, input_bytes)
+                stdout, stderr = process.communicate(timeout=30 * self.options.timeout_factor)
+                stderr = prompt + stderr
+                assert_equal(termios.tcgetattr(slave), original)
+                # stdout/stderr use pipes; any PTY output would be echoed input.
+                assert_equal(select.select([master], [], [], 0)[0], [])
+                assert b'RPC password>' in stderr
+                if expected_error is None:
+                    assert_equal(process.returncode, 0)
+                    assert_equal(int(stdout), node.getblockcount())
+                else:
+                    assert_equal(process.returncode, 1)
+                    assert expected_error in stderr
+            finally:
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.wait()
+                os.close(slave)
+                os.close(master)
+
     def run_test(self):
         """Main test logic"""
         self.generate(self.nodes[0], BLOCKS)
@@ -115,6 +164,7 @@ class TestBitcoinCli(BitcoinTestFramework):
         wallet_passphrase = "tidecoin-cli-wallet-passphrase"
 
         self.log.info("Test -stdinrpcpass option")
+        self.test_stdin_terminal(user, password)
         assert_equal(BLOCKS, self.nodes[0].cli(f'-rpcuser={user}', '-stdinrpcpass', input=password).getblockcount())
         assert_raises_process_error(1, 'Incorrect rpcuser or rpcpassword', self.nodes[0].cli(f'-rpcuser={user}', '-stdinrpcpass', input='foo').echo)
 

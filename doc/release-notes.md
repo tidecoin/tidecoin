@@ -202,6 +202,28 @@ A new `tidecoin` command line tool has been added:
 - `tidecoin rpc` is a synonym for `tidecoin-cli -named`
 - `tidecoin test` runs the test suite
 
+Mining and IPC reliability
+--------------------------
+
+- Mining IPC requests wait for startup to connect the chain tip. Shutdown or
+  failed initialization releases clients waiting for the mining interface.
+- `BlockTemplate.interruptWait()` cancels a pending `waitNext()` call. A queued
+  interruption is consumed by the next wait; repeated interruptions coalesce.
+  Clients must serialize waits on each template. Cancellation is cooperative
+  and does not stop a block assembly operation already in progress.
+- `waitNext()` with a zero fee threshold can return an empty template when the
+  mempool is empty.
+- Explicit IPC reserved-weight values take precedence over `-blockreservedweight`.
+  RPC mining continues to use the startup setting. IPC clients must supply a
+  valid reserved weight; zero is rejected. Invalid runtime weight and sigops
+  settings now raise errors instead of being silently clamped. Startup rejects
+  `-blockmaxweight` below `-blockreservedweight`.
+- Invalid JSON received over IPC is rejected. Failed JSON parsing clears the
+  destination value instead of leaving partially parsed data.
+- The bundled Cap'n Proto dependency handles aborted macOS socket accepts without
+  stopping the IPC listener. Builds using a system Cap'n Proto need the equivalent
+  dependency correction.
+
 Credits
 =======
 

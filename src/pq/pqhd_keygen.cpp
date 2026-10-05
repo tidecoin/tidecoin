@@ -72,6 +72,8 @@ bool KeyGenFromSeed(uint32_t pqhd_version,
         // Seed is the first seed_len bytes of the stream block.
         std::array<uint8_t, 48> seed48{};
         std::array<uint8_t, 32> seed32{};
+        const ScopedMemoryCleanse cleanse_seed48{seed48.data(), seed48.size()};
+        const ScopedMemoryCleanse cleanse_seed32{seed32.data(), seed32.size()};
         const uint8_t* seed_ptr{nullptr};
         if (seed_len == seed48.size()) {
             std::copy_n(block.begin(), seed48.size(), seed48.begin());

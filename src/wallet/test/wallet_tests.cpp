@@ -97,12 +97,10 @@ BOOST_FIXTURE_TEST_CASE(update_non_range_descriptor, TestingSetup)
     }
 }
 
-BOOST_FIXTURE_TEST_CASE(pqhd_policy_clamps_pre_auxpow, WalletTestingSetup)
+BOOST_FIXTURE_TEST_CASE(pqhd_policy_preserves_pre_auxpow_preferences, WalletTestingSetup)
 {
     REQUIRE_WALLET_TESTS_ENABLED();
     LOCK(m_wallet.cs_wallet);
-    const int target_height = m_wallet.GetTargetHeightForOutputs();
-    const Consensus::Params& params = Params().GetConsensus();
     PQHDPolicy policy;
     policy.default_receive_scheme = static_cast<uint8_t>(pq::SchemeId::MLDSA_44);
     policy.default_change_scheme = static_cast<uint8_t>(pq::SchemeId::MLDSA_65);
@@ -112,14 +110,12 @@ BOOST_FIXTURE_TEST_CASE(pqhd_policy_clamps_pre_auxpow, WalletTestingSetup)
 
     auto loaded = m_wallet.GetPQHDPolicy();
     BOOST_REQUIRE(loaded);
-    const uint8_t expected_receive = pq::IsSchemeAllowedAtHeight(pq::SchemeId::MLDSA_44, params, target_height)
-        ? static_cast<uint8_t>(pq::SchemeId::MLDSA_44)
-        : static_cast<uint8_t>(pq::SchemeId::FALCON_512);
-    const uint8_t expected_change = pq::IsSchemeAllowedAtHeight(pq::SchemeId::MLDSA_65, params, target_height)
-        ? static_cast<uint8_t>(pq::SchemeId::MLDSA_65)
-        : static_cast<uint8_t>(pq::SchemeId::FALCON_512);
-    BOOST_CHECK_EQUAL(loaded->default_receive_scheme, expected_receive);
-    BOOST_CHECK_EQUAL(loaded->default_change_scheme, expected_change);
+    BOOST_CHECK_EQUAL(loaded->default_receive_scheme, static_cast<uint8_t>(pq::SchemeId::MLDSA_44));
+    BOOST_CHECK_EQUAL(loaded->default_change_scheme, static_cast<uint8_t>(pq::SchemeId::MLDSA_65));
+    PQHDPolicy invalid{*loaded};
+    invalid.default_receive_scheme = 0xff;
+    BOOST_CHECK_THROW(m_wallet.LoadPQHDPolicy(std::move(invalid)), std::runtime_error);
+    BOOST_CHECK_EQUAL(m_wallet.GetPQHDPolicy()->default_receive_scheme, loaded->default_receive_scheme);
 }
 
 BOOST_FIXTURE_TEST_CASE(reload_wallet_preserves_descriptor_lookup_for_historical_address, WalletTestingSetup)
@@ -127,6 +123,7 @@ BOOST_FIXTURE_TEST_CASE(reload_wallet_preserves_descriptor_lookup_for_historical
     REQUIRE_WALLET_TESTS_ENABLED();
 
     WalletContext context;
+    m_args.ForceSetArg("-keypool", "4"); // Loading/notification behavior does not depend on pool capacity.
     context.args = &m_args;
     context.chain = m_node.chain.get();
 
@@ -676,6 +673,7 @@ BOOST_FIXTURE_TEST_CASE(CreateWallet, TestChain100Setup)
     m_args.ForceSetArg("-unsafesqlitesync", "1");
     // Create new wallet with known key and unload it.
     WalletContext context;
+    m_args.ForceSetArg("-keypool", "4"); // Loading/notification behavior does not depend on pool capacity.
     context.args = &m_args;
     context.chain = m_node.chain.get();
     auto wallet = TestLoadWallet(context);
@@ -774,6 +772,7 @@ BOOST_FIXTURE_TEST_CASE(CreateWallet, TestChain100Setup)
 BOOST_FIXTURE_TEST_CASE(CreateWalletWithoutChain, BasicTestingSetup)
 {
     WalletContext context;
+    m_args.ForceSetArg("-keypool", "4"); // Loading/notification behavior does not depend on pool capacity.
     context.args = &m_args;
     auto wallet = TestLoadWallet(context);
     BOOST_CHECK(wallet);
@@ -784,6 +783,7 @@ BOOST_FIXTURE_TEST_CASE(RemoveTxs, TestChain100Setup)
 {
     m_args.ForceSetArg("-unsafesqlitesync", "1");
     WalletContext context;
+    m_args.ForceSetArg("-keypool", "4"); // Loading/notification behavior does not depend on pool capacity.
     context.args = &m_args;
     context.chain = m_node.chain.get();
     auto wallet = TestLoadWallet(context);

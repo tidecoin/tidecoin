@@ -130,13 +130,16 @@ public:
      */
     void WriteHeader(const std::string& hdr, const std::string& value);
 
+    /** Whether a reply has been queued. Safe to query after WriteReply(). */
+    bool IsReplySent() const { return replySent; }
+
     /**
      * Write HTTP reply.
      * nStatus is the HTTP status code to send.
      * reply is the body of the reply. Keep it empty to send a standard message.
      *
      * @note Can be called only once. As this will give the request back to the
-     * main thread, do not call any other HTTPRequest methods after calling this.
+     * main thread, only IsReplySent() may be called after calling this.
      */
     void WriteReply(int nStatus, std::string_view reply = "")
     {

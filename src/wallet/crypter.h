@@ -5,12 +5,17 @@
 #ifndef BITCOIN_WALLET_CRYPTER_H
 #define BITCOIN_WALLET_CRYPTER_H
 
+#include <chrono>
+#include <optional>
 #include <serialize.h>
 #include <support/allocators/secure.h>
 #include <script/signingprovider.h>
 
 
 namespace wallet {
+/** Estimate rounds for 100ms without overflow. Invalid measurements return no value. */
+std::optional<unsigned int> CalibrateDeriveIterations(unsigned int rounds, std::chrono::nanoseconds elapsed);
+
 const unsigned int WALLET_CRYPTO_KEY_SIZE = 32;
 const unsigned int WALLET_CRYPTO_SALT_SIZE = 8;
 const unsigned int WALLET_CRYPTO_IV_SIZE = 16;
@@ -76,7 +81,7 @@ private:
     std::vector<unsigned char, secure_allocator<unsigned char>> vchIV;
     bool fKeySet;
 
-    int BytesToKeySHA512AES(std::span<const unsigned char> salt, const SecureString& key_data, int count, unsigned char* key, unsigned char* iv) const;
+    int BytesToKeySHA512AES(std::span<const unsigned char> salt, const SecureString& key_data, unsigned int count, unsigned char* key, unsigned char* iv) const;
 
 public:
     bool SetKeyFromPassphrase(const SecureString& key_data, std::span<const unsigned char> salt, const unsigned int rounds, const unsigned int derivation_method);

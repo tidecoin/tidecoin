@@ -56,6 +56,11 @@ BOOST_AUTO_TEST_CASE(netbase_properties)
     BOOST_CHECK(ResolveIP("198.18.0.0").IsRFC2544());
     BOOST_CHECK(ResolveIP("198.19.255.255").IsRFC2544());
     BOOST_CHECK(ResolveIP("2001:0DB8::").IsRFC3849());
+    BOOST_CHECK(ResolveIP("3FFF::").IsRFC9637());
+    BOOST_CHECK(ResolveIP("3FFF:0FFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF").IsRFC9637());
+    BOOST_CHECK(!ResolveIP("3FFF:1000::").IsRFC9637());
+    BOOST_CHECK(!ResolveIP("3FFE:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF:FFFF").IsRFC9637());
+    BOOST_CHECK(!ResolveIP("8.8.8.8").IsRFC9637());
     BOOST_CHECK(ResolveIP("169.254.1.1").IsRFC3927());
     BOOST_CHECK(ResolveIP("2002::1").IsRFC3964());
     BOOST_CHECK(ResolveIP("FC00::").IsRFC4193());
@@ -73,6 +78,22 @@ BOOST_AUTO_TEST_CASE(netbase_properties)
     BOOST_CHECK(CreateInternal("FD6B:88C0:8724:edb1:8e4:3588:e546:35ca").IsInternal());
     BOOST_CHECK(CreateInternal("bar.com").IsInternal());
 
+}
+
+BOOST_AUTO_TEST_CASE(netbase_documentation_ipv6)
+{
+    for (const auto* ip : {"3fff::", "3fff::1", "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff", "2001:db8::1"}) {
+        const auto addr = ResolveIP(ip);
+        BOOST_CHECK(addr.IsIPv6());
+        BOOST_CHECK(!addr.IsValid());
+        BOOST_CHECK(!addr.IsRoutable());
+        BOOST_CHECK(addr.GetNetwork() == NET_UNROUTABLE);
+    }
+    for (const auto* ip : {"3ffe:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "3fff:1000::", "4000::", "8.8.8.8"}) {
+        const auto addr = ResolveIP(ip);
+        BOOST_CHECK(addr.IsValid());
+        BOOST_CHECK(addr.IsRoutable());
+    }
 }
 
 bool static TestSplitHost(const std::string& test, const std::string& host, uint16_t port, bool validPort=true)

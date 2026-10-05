@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <common/settings.h>
+#include <interfaces/chain.h>
 
 #include <test/util/setup_common.h>
 #include <test/util/str.h>
@@ -50,6 +51,47 @@ inline void WriteText(const fs::path& path, const std::string& text)
 }
 
 BOOST_FIXTURE_TEST_SUITE(settings_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(chain_settings_disabled_preserves_memory)
+{
+    using interfaces::SettingsAction;
+    auto& args = *m_node.args;
+    const auto path = args.GetDataDirNet() / "chain-settings.json";
+    args.ForceSetArg("-settings", fs::PathToString(path));
+    auto& chain = *m_node.chain;
+    BOOST_REQUIRE(chain.overwriteRwSetting("test-setting", "original"));
+    std::map<std::string, common::SettingsValue> before, after;
+    std::vector<std::string> errors;
+    BOOST_REQUIRE(common::ReadSettings(path, before, errors));
+
+    args.LockSettings([](common::Settings& settings) { settings.forced_settings["settings"] = false; });
+    BOOST_REQUIRE(!args.GetSettingsPath());
+    bool result{true};
+    BOOST_CHECK_NO_THROW(result = chain.overwriteRwSetting("test-setting", "memory-only"));
+    BOOST_CHECK(!result);
+    BOOST_CHECK_EQUAL(chain.getRwSetting("test-setting").get_str(), "memory-only");
+    BOOST_CHECK(chain.overwriteRwSetting("test-setting", "skip", SettingsAction::SKIP_WRITE));
+    BOOST_CHECK(!chain.updateRwSetting("test-setting", [](common::SettingsValue& value) {
+        value = "no-action";
+        return std::nullopt;
+    }));
+    BOOST_CHECK_EQUAL(chain.getRwSetting("test-setting").get_str(), "no-action");
+    BOOST_CHECK_NO_THROW(result = chain.deleteRwSettings("test-setting"));
+    BOOST_CHECK(!result);
+    BOOST_CHECK(chain.getRwSetting("test-setting").isNull());
+    BOOST_CHECK(chain.overwriteRwSetting("test-setting", "persist-later", SettingsAction::SKIP_WRITE));
+    BOOST_REQUIRE(common::ReadSettings(path, after, errors));
+    BOOST_CHECK(before == after);
+    BOOST_CHECK(!fs::exists(path + ".tmp"));
+
+    args.ForceSetArg("-settings", fs::PathToString(path));
+    BOOST_REQUIRE(chain.updateRwSetting("test-setting", [](common::SettingsValue&) { return SettingsAction::WRITE; }));
+    BOOST_REQUIRE(common::ReadSettings(path, after, errors));
+    BOOST_CHECK_EQUAL(after.at("test-setting").get_str(), "persist-later");
+    BOOST_CHECK(chain.deleteRwSettings("test-setting"));
+    BOOST_REQUIRE(common::ReadSettings(path, after, errors));
+    BOOST_CHECK(!after.contains("test-setting"));
+}
 
 BOOST_AUTO_TEST_CASE(ReadWrite)
 {
@@ -106,6 +148,32 @@ BOOST_AUTO_TEST_CASE(ReadWrite)
                                                      fs::PathToString(path))};
     BOOST_CHECK_EQUAL_COLLECTIONS(errors.begin(), errors.end(), fail_parse.begin(), fail_parse.end());
 }
+
+#ifdef __linux__
+BOOST_AUTO_TEST_CASE(write_failure_preserves_settings)
+{
+    const auto path = m_args.GetDataDirBase() / "write_failure.json";
+    m_args.ForceSetArg("-settings", fs::PathToString(path));
+    const std::map<std::string, common::SettingsValue> expected{{"sentinel", "preserve me"}};
+    std::vector<std::string> errors;
+    BOOST_REQUIRE(common::WriteSettings(path, expected, errors));
+    fs::path temporary;
+    BOOST_REQUIRE(m_args.GetSettingsPath(&temporary, /*temp=*/true));
+    // /dev/full opens successfully but fails on write, unlike a permissions test.
+    fs::create_symlink("/dev/full", temporary);
+    BOOST_CHECK(!m_args.WriteSettingsFile(&errors));
+    BOOST_REQUIRE(!errors.empty());
+    BOOST_CHECK(errors.front().find("Unable to write settings file") != std::string::npos);
+    std::map<std::string, common::SettingsValue> actual;
+    errors.clear();
+    BOOST_REQUIRE(common::ReadSettings(path, actual, errors));
+    BOOST_CHECK(actual == expected);
+    BOOST_CHECK(fs::is_symlink(temporary));
+    fs::remove(temporary);
+    BOOST_CHECK(m_args.WriteSettingsFile(&errors));
+    BOOST_CHECK(errors.empty());
+}
+#endif
 
 //! Check settings struct contents against expected json strings.
 static void CheckValues(const common::Settings& settings, const std::string& single_val, const std::string& list_val)

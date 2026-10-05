@@ -382,6 +382,8 @@ class MultiWalletTest(BitcoinTestFramework):
             self.nodes[0].loadwallet(wallet_name)
         for wallet_name in wallet_names:
             rpc = self.nodes[0].get_wallet_rpc(wallet_name)
+            if wallet_name == 'w2':
+                assert_equal(rpc.getwalletinfo()['unlocked_until'], 0)
             addr = rpc.getnewaddress()
             backup = os.path.join(self.options.tmpdir, 'backup.dat')
             if os.path.exists(backup):

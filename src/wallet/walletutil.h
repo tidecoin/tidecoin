@@ -84,12 +84,21 @@ public:
         id = DescriptorID(*descriptor);
     }
 
+    // Keep the existing signed 32-bit on-disk exclusive endpoint. Wallet ranges
+    // stop before INT32_MAX; stateless descriptor expansion can use that index.
+    bool HasValidRange() const
+    {
+        return range_start >= 0 && range_start <= next_index && next_index <= range_end &&
+               (descriptor->IsRange() || (range_start == 0 && range_end <= 1));
+    }
+
     SERIALIZE_METHODS(WalletDescriptor, obj)
     {
         std::string descriptor_str;
         SER_WRITE(obj, descriptor_str = obj.descriptor->ToString());
         READWRITE(descriptor_str, obj.creation_time, obj.next_index, obj.range_start, obj.range_end);
         SER_READ(obj, obj.DeserializeDescriptor(descriptor_str));
+        SER_READ(obj, if (!obj.HasValidRange()) throw std::ios_base::failure("Invalid wallet descriptor range"));
     }
 
     WalletDescriptor() = default;

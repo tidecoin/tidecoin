@@ -54,7 +54,7 @@ std::vector<unsigned char> MakePQHDOriginValue(const uint256& seed_id,
 /** Try to parse a "tidecoin"/SUBTYPE_PQHD_ORIGIN proprietary record. */
 std::optional<PQHDOrigin> DecodePQHDOrigin(const PSBTProprietary& entry);
 
-/** Add a PQHD origin proprietary record to a set (returns false on duplicate). */
+/** Add a valid PQHD origin; identical records are idempotent, conflicts/invalid records return false. */
 [[nodiscard]] bool AddPQHDOrigin(std::set<PSBTProprietary>& set,
                                  uint8_t map_type,
                                  const CPubKey& pubkey,

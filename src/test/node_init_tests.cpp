@@ -4,7 +4,11 @@
 
 #include <init.h>
 #include <interfaces/init.h>
+#include <interfaces/mining.h>
+
+#include <future>
 #include <rpc/server.h>
+#include <util/signalinterrupt.h>
 
 #include <boost/test/unit_test.hpp>
 #include <test/util/setup_common.h>
@@ -50,7 +54,26 @@ BOOST_AUTO_TEST_CASE(init_test)
     BOOST_CHECK(AppInitInterfaces(m_node));
     BOOST_CHECK(AppInitMain(m_node));
     Interrupt(m_node);
+    BOOST_CHECK(!interfaces::MakeMining(m_node));
     Shutdown(m_node);
+}
+
+BOOST_AUTO_TEST_CASE(mining_wait_released_on_early_init_failure)
+{
+    // AppInit may fail before notifications or chainman exists and without a
+    // shutdown signal. Interrupt must still release a waiting external client.
+    NodeContext early;
+    util::SignalInterrupt interrupt;
+    early.args = m_node.args;
+    early.shutdown_signal = &interrupt;
+    auto pending = std::async(std::launch::async, [&] { return interfaces::MakeMining(early); });
+    const auto before = pending.wait_for(std::chrono::milliseconds{20});
+    Interrupt(early);
+    const auto after = pending.wait_for(std::chrono::seconds{5});
+    auto result = pending.get();
+    BOOST_CHECK(before == std::future_status::timeout);
+    BOOST_CHECK(after == std::future_status::ready);
+    BOOST_CHECK(!result);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

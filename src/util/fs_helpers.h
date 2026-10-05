@@ -44,7 +44,10 @@ bool FileCommit(FILE* file);
 void DirectoryCommit(const fs::path& dirname);
 
 bool TruncateFile(FILE* file, unsigned int length);
-int RaiseFileDescriptorLimit(int nMinFD);
+/** Try to raise the descriptor limit to min_fd (nonnegative), without exceeding
+ * the hard limit. Return the available limit, saturated at INT_MAX, including
+ * infinity. If the initial query fails, return min_fd; Windows returns 2048. */
+int RaiseFileDescriptorLimit(int min_fd);
 void AllocateFileRange(FILE* file, unsigned int offset, unsigned int length);
 
 /**
@@ -78,6 +81,9 @@ std::streampos GetFileSize(const char* path, std::streamsize max = std::numeric_
 void ReleaseDirectoryLocks();
 
 bool TryCreateDirectories(const fs::path& p);
+
+/** Probe directory writability by creating and removing a temporary file. */
+bool IsDirWritable(const fs::path& path);
 fs::path GetDefaultDataDir();
 
 /** Convert fs::perms to symbolic string of the form 'rwxrwxrwx'

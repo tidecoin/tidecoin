@@ -359,6 +359,8 @@ public:
     //! support for writing null values to settings.json.
     //! Depending on the action returned by the update function, this will either
     //! update the setting in memory or write the updated settings to disk.
+    //! Returns false when no action is requested or persistence fails (including
+    //! disabled settings). The in-memory update is retained on failure.
     virtual bool updateRwSetting(const std::string& name, const SettingsUpdate& update_function) = 0;
 
     //! Replace a setting in <datadir>/settings.json with a new value.

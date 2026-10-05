@@ -200,6 +200,7 @@ inline std::vector<OutputGroup>& KnapsackGroupOutputs(const CoinsResult& availab
 static std::unique_ptr<CWallet> NewWallet(const node::NodeContext& m_node, const std::string& wallet_name = "")
 {
     std::unique_ptr<CWallet> wallet = std::make_unique<CWallet>(m_node.chain.get(), wallet_name, CreateMockableWalletDatabase());
+    wallet->m_keypool_size = 4; // These fixtures exercise transactions, not default pool capacity.
     BOOST_CHECK(wallet->LoadWallet() == DBErrors::LOAD_OK);
     LOCK(wallet->cs_wallet);
     wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
@@ -717,17 +718,26 @@ BOOST_AUTO_TEST_CASE(SelectCoins_test)
     // Random generator stuff
     std::default_random_engine generator;
     std::exponential_distribution<double> distribution (100);
-    FastRandomContext rand;
+    // This seed exposed the oversized-pool assumption before the PQ fixture fix.
+    FastRandomContext rand{uint256{16}};
+
+    // "Ideal conditions" require the entire pool to fit, including change.
+    // A thousand PQ inputs exceed standard weight limits; a heuristic selector
+    // is not guaranteed to find the highest-value weight-bounded subset.
+    constexpr int change_output_size{34};
+    const int input_vsize{P2WPKHInputVsizeForWallet(*wallet)};
+    const int input_count{std::min(1000, (MAX_STANDARD_TX_WEIGHT - change_output_size * WITNESS_SCALE_FACTOR) / (input_vsize * WITNESS_SCALE_FACTOR))};
+    BOOST_REQUIRE_GT(input_count, 0);
 
     // Run this test 100 times
     for (int i = 0; i < 100; ++i)
     {
         CoinsResult available_coins;
         std::vector<CAmount> values;
-        values.reserve(1000);
+        values.reserve(input_count);
 
-        // Make a wallet with 1000 exponentially distributed random inputs
-        for (int j = 0; j < 1000; ++j)
+        // Make a pool of exponentially distributed random inputs that all fit
+        for (int j = 0; j < input_count; ++j)
         {
             CAmount val = distribution(generator)*10000000;
             add_coin(available_coins, *wallet, val);
@@ -737,13 +747,8 @@ BOOST_AUTO_TEST_CASE(SelectCoins_test)
         // Generate a random fee rate in the range of 100 - 400
         CFeeRate rate(rand.randrange(300) + 100);
 
-        const int input_vsize = P2WPKHInputVsizeForWallet(*wallet);
-        const int max_inputs = std::max(1, MAX_STANDARD_TX_WEIGHT / (input_vsize * WITNESS_SCALE_FACTOR));
-        std::sort(values.begin(), values.end(), std::greater<>());
         CAmount max_spendable{0};
-        for (int idx = 0; idx < std::min<int>(max_inputs, values.size()); ++idx) {
-            max_spendable += values[idx];
-        }
+        for (const auto value : values) max_spendable += value;
         if (max_spendable <= 1000) continue;
 
         // Generate a random target value between 1000 and the max spendable amount within weight limits
@@ -752,7 +757,7 @@ BOOST_AUTO_TEST_CASE(SelectCoins_test)
         // Perform selection
         CoinSelectionParams cs_params{
             rand,
-            /*change_output_size=*/ 34,
+            /*change_output_size=*/ change_output_size,
             /*change_spend_size=*/ 148,
             /*min_change_target=*/ CENT,
             /*effective_feerate=*/ CFeeRate(0),
@@ -1521,6 +1526,40 @@ BOOST_FIXTURE_TEST_CASE(wallet_coinsresult_test, WalletTestingSetup)
         }
         // And verify that no extra element were removed
         BOOST_CHECK_EQUAL(available_coins.Size(), 8);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(coinsresult_optional_effective_totals)
+{
+    for (bool priced : {false, true}) {
+        CoinsResult coins;
+        BOOST_CHECK_EQUAL(coins.GetTotalAmount(), 0);
+        BOOST_CHECK(!coins.GetEffectiveTotalAmount());
+        const auto rate = priced ? std::make_optional(CFeeRate{1000}) : std::nullopt;
+        COutput first{COutPoint{Txid::FromUint256(uint256::ONE), 0}, CTxOut{1000, CScript{}}, 6, 100, true, true, 0, true, rate};
+        COutput second{COutPoint{Txid::FromUint256(uint256::ONE), 1}, CTxOut{2000, CScript{}}, 6, 200, true, true, 0, true, rate};
+        coins.Add(OutputType::BECH32, first);
+        coins.Add(OutputType::LEGACY, second);
+        BOOST_CHECK_EQUAL(coins.GetTotalAmount(), 3000);
+        BOOST_CHECK(coins.GetEffectiveTotalAmount() == (priced ? std::make_optional<CAmount>(2700) : std::nullopt));
+        coins.Erase({first.outpoint});
+        BOOST_CHECK_EQUAL(coins.Size(), 1U);
+        BOOST_CHECK_EQUAL(coins.GetTotalAmount(), 2000);
+        BOOST_CHECK(coins.GetEffectiveTotalAmount() == (priced ? std::make_optional<CAmount>(1800) : std::nullopt));
+        coins.Erase({first.outpoint}); // Repeated erasure cannot subtract twice.
+        BOOST_CHECK_EQUAL(coins.GetTotalAmount(), 2000);
+        coins.Erase({second.outpoint});
+        BOOST_CHECK_EQUAL(coins.GetTotalAmount(), 0);
+        BOOST_CHECK(coins.GetEffectiveTotalAmount() == (priced ? std::make_optional<CAmount>(0) : std::nullopt));
+        coins.Add(OutputType::BECH32, first);
+        coins.Clear();
+        BOOST_CHECK_EQUAL(coins.Size(), 0U);
+        BOOST_CHECK_EQUAL(coins.GetTotalAmount(), 0);
+        BOOST_CHECK(!coins.GetEffectiveTotalAmount());
+        // Reusing a cleared collection cannot retain amounts from old outputs.
+        coins.Add(OutputType::LEGACY, second);
+        BOOST_CHECK_EQUAL(coins.GetTotalAmount(), 2000);
+        BOOST_CHECK(coins.GetEffectiveTotalAmount() == (priced ? std::make_optional<CAmount>(1800) : std::nullopt));
     }
 }
 

@@ -262,8 +262,83 @@ class InitTest(BitcoinTestFramework):
         assert not custom_pidfile_absolute.exists()
 
     def run_test(self):
+        self.init_cache_options_test()
+        self.init_rlimit_test()
         self.init_pid_test()
         self.init_stress_test()
+
+    def init_cache_options_test(self):
+        self.log.info("Test cache budget bounds before database initialization")
+        self.stop_node(0)
+        node = self.nodes[0]
+        max_signed = (1 << 63) - 1
+        max_mempool_mb = max_signed // 1_000_000
+        max_dbcache_mib = max_signed >> 20
+        # If a bounds check regresses, this later startup error stops the node
+        # before any enormous cache budget can reach database initialization.
+        bad_pid = Path(self.options.tmpdir) / "missing-cache-test-dir" / "node.pid"
+        assert not bad_pid.parent.exists()
+        guard = [f"-pid={bad_pid}"]
+        for value in [-1, -(1 << 63)]:
+            node.assert_start_raises_init_error(
+                guard + [f"-maxmempool={value}"],
+                f"Error: -maxmempool must be between 0 and {max_mempool_mb} MB",
+            )
+        for value in [max_mempool_mb + 1, max_signed]:
+            node.assert_start_raises_init_error(
+                guard + [f"-maxmempool={value}"],
+                expected_msg=rf"Error: (?:-maxmempool must be between 0 and {max_mempool_mb} MB|-maxmempool is set to {value} but can't be over 500 MB on 32-bit systems)",
+                match=ErrorMatch.PARTIAL_REGEX,
+            )
+        for value in [max_dbcache_mib + 1, max_signed]:
+            node.assert_start_raises_init_error(
+                guard + [f"-dbcache={value}", "-maxmempool=501"],
+                expected_msg=rf"Error: (?:-dbcache must not exceed {max_dbcache_mib} MiB|-maxmempool is set to 501 but can't be over 500 MB on 32-bit systems)",
+                match=ErrorMatch.PARTIAL_REGEX,
+            )
+        node.assert_start_raises_init_error(
+            guard + [f"-dbcache={max_dbcache_mib}", "-maxmempool=1024"],
+            expected_msg=r"Error: (?:Combined -dbcache and -maxmempool exceed the supported cache budget|-maxmempool is set to 1024 but can't be over 500 MB on 32-bit systems)",
+            match=ErrorMatch.PARTIAL_REGEX,
+        )
+        # These values must pass option validation. The PID guard prevents
+        # allocating their budgets, and also works with the 32-bit dbcache cap.
+        for value in [1 << 40, max_dbcache_mib]:
+            node.assert_start_raises_init_error(
+                guard + [f"-dbcache={value}", "-maxmempool=9"],
+                expected_msg="Error: Unable to create the PID file",
+                match=ErrorMatch.PARTIAL_REGEX,
+            )
+        # Ordinary configurations still start and recover after rejected options.
+        self.start_node(0, ["-dbcache=4", "-maxmempool=9"])
+        assert_equal(node.getblockcount(), 200)
+
+    def init_rlimit_test(self):
+        # Adapt Bitcoin's infinity/large-limit startup regression. Change only
+        # this test process's soft limit while spawning; never change the hard
+        # limit, and restore before waiting for node startup.
+        try:
+            import resource
+        except ImportError:
+            self.log.info("Skipping resource-limit startup tests: resource module unavailable")
+            return
+
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        for limit in [64, 1 << 31, resource.RLIM_INFINITY]:
+            self.stop_node(0)
+            try:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (limit, hard))
+            except (ValueError, OSError) as error:
+                self.log.info(f"Skipping fd limit {limit}: hard limit {hard}: {error}")
+                continue
+            try:
+                self.log.info(f"Testing startup with inherited soft fd limit {limit}")
+                self.nodes[0].start()
+            finally:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+            self.nodes[0].wait_for_rpc_connection()
+            assert_equal(self.nodes[0].getblockcount(), 200)
+            assert_equal(resource.getrlimit(resource.RLIMIT_NOFILE), (soft, hard))
 
 
 if __name__ == '__main__':

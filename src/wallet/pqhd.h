@@ -22,7 +22,9 @@ struct PQHDSeed
 
     SERIALIZE_METHODS(PQHDSeed, obj)
     {
-        READWRITE(obj.nVersion, obj.nCreateTime, obj.seed);
+        READWRITE(obj.nVersion);
+        SER_READ(obj, if (obj.nVersion != CURRENT_VERSION) throw std::ios_base::failure("Unsupported PQHD seed version"));
+        READWRITE(obj.nCreateTime, obj.seed);
     }
 };
 
@@ -38,7 +40,9 @@ struct PQHDCryptedSeed
 
     SERIALIZE_METHODS(PQHDCryptedSeed, obj)
     {
-        READWRITE(obj.nVersion, obj.nCreateTime, obj.crypted_seed);
+        READWRITE(obj.nVersion);
+        SER_READ(obj, if (obj.nVersion != CURRENT_VERSION) throw std::ios_base::failure("Unsupported encrypted PQHD seed version"));
+        READWRITE(obj.nCreateTime, obj.crypted_seed);
     }
 };
 
@@ -56,7 +60,9 @@ struct PQHDPolicy
 
     SERIALIZE_METHODS(PQHDPolicy, obj)
     {
-        READWRITE(obj.nVersion, obj.default_receive_scheme, obj.default_change_scheme, obj.default_seed_id,
+        READWRITE(obj.nVersion);
+        SER_READ(obj, if (obj.nVersion != CURRENT_VERSION) throw std::ios_base::failure("Unsupported PQHD policy version"));
+        READWRITE(obj.default_receive_scheme, obj.default_change_scheme, obj.default_seed_id,
                   obj.default_change_seed_id);
     }
 };

@@ -1,0 +1,320 @@
+Qt 6.7.3 compiler compatibility corrections, adapted locally for Tidecoin.
+
+Preserve Qt ordering representations while converting to the standard library,
+complete types before SFINAE checks, and remove the QChar/QStringView include cycle.
+Applied to target Qt and native Qt tools. Qt's original source licenses apply.
+
+Based on Qt upstream work by Thiago Macieira, Giuseppe D'Angelo and
+Allan Sandfeld Jensen (reviewed through Bitcoin PR 34754):
+7fccc79dd5744ea837ffe200bbfc9f2756870220 (ordering representations)
+3312e89b47f8c2ea0b4263b39841c25b83a37332 (regular expression completeness)
+05f201a3d559452287b20becb960de3a50249540 (QChar range conversion)
+679e8bda1eb0cc98acb981e9a10204bed1c179f2 (QBitArray completeness)
+27230157212c32420e71b28870d6c77630c3dc37 (QAnyStringView assertions)
+d68fc6ecc88a0e4532754b1a9f209881a248f4ee (QByteArrayView include)
+
+--- a/qtbase/src/corelib/global/qcompare.h
++++ b/qtbase/src/corelib/global/qcompare.h
+@@ -49,6 +49,16 @@
+ 
+ namespace QtOrderingPrivate {
+ 
++#if defined(__cpp_lib_bit_cast) && defined(__cpp_lib_three_way_comparison)
++inline constexpr bool OrderingValuesAreEqual =
++        std::bit_cast<QtPrivate::Ordering>(std::weak_ordering::equivalent) == QtPrivate::Ordering::Equivalent &&
++        std::bit_cast<QtPrivate::Ordering>(std::strong_ordering::equal) == QtPrivate::Ordering::Equal &&
++        std::bit_cast<QtPrivate::Ordering>(std::strong_ordering::less) == QtPrivate::Ordering::Less &&
++        std::bit_cast<QtPrivate::Ordering>(std::strong_ordering::greater) == QtPrivate::Ordering::Greater;
++inline constexpr bool UnorderedValueIsEqual =
++        std::bit_cast<QtPrivate::Uncomparable>(std::partial_ordering::unordered) == QtPrivate::Uncomparable::Unordered;
++#endif
++
+ template <typename O>
+ constexpr O reversed(O o) noexcept
+ {
+@@ -59,6 +69,9 @@
+ }
+ 
+ } // namespace QtOrderingPrivate
++
++QT_WARNING_PUSH
++QT_WARNING_DISABLE_MSVC(4702) // unreachable fallback after if constexpr
+ 
+ namespace Qt {
+ 
+@@ -156,12 +169,19 @@
+     constexpr Q_IMPLICIT operator std::partial_ordering() const noexcept
+     {
+         static_assert(sizeof(*this) == sizeof(std::partial_ordering));
+-#ifdef __cpp_lib_bit_cast
+-        return std::bit_cast<std::partial_ordering>(*this);
+-#else
+         using O = QtPrivate::Ordering;
+         using U = QtPrivate::Uncomparable;
+         using R = std::partial_ordering;
++#ifdef __cpp_lib_bit_cast
++        if constexpr (QtOrderingPrivate::OrderingValuesAreEqual) {
++            // Keep Qt's representation stable when libstdc++ changes unordered.
++            if constexpr (!QtOrderingPrivate::UnorderedValueIsEqual) {
++                if (m_order == qToUnderlying(U::Unordered))
++                    return R::unordered;
++            }
++            return std::bit_cast<R>(*this);
++        }
++#endif
+         switch (m_order) {
+         case qToUnderlying(O::Less):        return R::less;
+         case qToUnderlying(O::Greater):     return R::greater;
+@@ -169,7 +189,6 @@
+         case qToUnderlying(U::Unordered):   return R::unordered;
+         }
+         Q_UNREACHABLE_RETURN(R::unordered);
+-#endif // __cpp_lib_bit_cast
+     }
+ 
+     friend constexpr bool operator==(partial_ordering lhs, std::partial_ordering rhs) noexcept
+@@ -347,18 +366,19 @@
+     constexpr Q_IMPLICIT operator std::weak_ordering() const noexcept
+     {
+         static_assert(sizeof(*this) == sizeof(std::weak_ordering));
+-#ifdef __cpp_lib_bit_cast
+-        return std::bit_cast<std::weak_ordering>(*this);
+-#else
+         using O = QtPrivate::Ordering;
+         using R = std::weak_ordering;
++#ifdef __cpp_lib_bit_cast
++        if constexpr (QtOrderingPrivate::OrderingValuesAreEqual) {
++            return std::bit_cast<R>(*this);
++        }
++#endif
+         switch (m_order) {
+         case qToUnderlying(O::Less):          return R::less;
+         case qToUnderlying(O::Greater):       return R::greater;
+         case qToUnderlying(O::Equivalent):    return R::equivalent;
+         }
+         Q_UNREACHABLE_RETURN(R::equivalent);
+-#endif // __cpp_lib_bit_cast
+     }
+ 
+     friend constexpr bool operator==(weak_ordering lhs, std::weak_ordering rhs) noexcept
+@@ -544,18 +564,19 @@
+     constexpr Q_IMPLICIT operator std::strong_ordering() const noexcept
+     {
+         static_assert(sizeof(*this) == sizeof(std::strong_ordering));
+-#ifdef __cpp_lib_bit_cast
+-        return std::bit_cast<std::strong_ordering>(*this);
+-#else
+         using O = QtPrivate::Ordering;
+         using R = std::strong_ordering;
++#ifdef __cpp_lib_bit_cast
++        if constexpr (QtOrderingPrivate::OrderingValuesAreEqual) {
++            return std::bit_cast<R>(*this);
++        }
++#endif
+         switch (m_order) {
+         case qToUnderlying(O::Less):    return R::less;
+         case qToUnderlying(O::Greater): return R::greater;
+         case qToUnderlying(O::Equal):   return R::equal;
+         }
+         Q_UNREACHABLE_RETURN(R::equal);
+-#endif // __cpp_lib_bit_cast
+     }
+ 
+     friend constexpr bool operator==(strong_ordering lhs, std::strong_ordering rhs) noexcept
+@@ -620,6 +641,8 @@
+ inline constexpr strong_ordering strong_ordering::greater(QtPrivate::Ordering::Greater);
+ 
+ } // namespace Qt
++
++QT_WARNING_POP
+ 
+ QT_BEGIN_INCLUDE_NAMESPACE
+ 
+--- a/qtbase/src/corelib/global/qcompare.cpp
++++ b/qtbase/src/corelib/global/qcompare.cpp
+@@ -18,7 +18,9 @@
+     static_assert(std::bit_cast<std:: type ## _ordering>(Qt:: type ## _ordering:: flag) \
+                   == std:: type ## _ordering :: flag) \
+     /* end */
++#if !defined(__GLIBCXX__)
+ CHECK(partial, unordered);
++#endif
+ CHECK(partial, less);
+ CHECK(partial, greater);
+ CHECK(partial, equivalent);
+--- a/qtbase/tests/auto/corelib/global/qcompare/tst_qcompare.cpp
++++ b/qtbase/tests/auto/corelib/global/qcompare/tst_qcompare.cpp
+@@ -185,7 +185,9 @@
+         QCOMPARE_EQ(valueOf( Qt:: type ## _ordering :: flag), \
+                     valueOf(std:: type ## _ordering :: flag)) \
+         /* end */
++#  if !defined(__GLIBCXX__)
+     CHECK(partial, unordered);
++#  endif
+     CHECK(partial, less);
+     CHECK(partial, greater);
+     CHECK(partial, equivalent);
+--- a/qtbase/src/corelib/text/qchar.h
++++ b/qtbase/src/corelib/text/qchar.h
+@@ -96,7 +96,19 @@
+ #undef QCHAR_MAYBE_IMPLICIT
+ 
+     static constexpr QChar fromUcs2(char16_t c) noexcept { return QChar{c}; }
+-    static constexpr inline auto fromUcs4(char32_t c) noexcept;
++    [[nodiscard]] static constexpr auto fromUcs4(char32_t c) noexcept
++    {
++        struct R {
++            char16_t chars[2];
++            [[nodiscard]] constexpr const char16_t *data() const noexcept { return chars; }
++            [[nodiscard]] constexpr qsizetype size() const noexcept { return chars[1] ? 2 : 1; }
++            [[nodiscard]] constexpr const char16_t *begin() const noexcept { return chars; }
++            [[nodiscard]] constexpr const char16_t *end() const noexcept { return begin() + size(); }
++        };
++        return requiresSurrogates(c) ? R{{QChar::highSurrogate(c),
++                                          QChar::lowSurrogate(c)}} :
++                                       R{{char16_t(c), u'\0'}} ;
++    }
+ 
+     // Unicode information
+ 
+@@ -653,4 +665,3 @@
+ 
+ #endif // QCHAR_H
+ 
+-#include <QtCore/qstringview.h> // for QChar::fromUcs4() definition
+--- a/qtbase/src/corelib/text/qstringview.h
++++ b/qtbase/src/corelib/text/qstringview.h
+@@ -321,10 +321,7 @@
+     {
+         return QtPrivate::contains(*this, re, rmatch);
+     }
+-    [[nodiscard]] qsizetype count(const QRegularExpression &re) const
+-    {
+-        return QtPrivate::count(*this, re);
+-    }
++    [[nodiscard]] qsizetype count(const QRegularExpression &re) const;
+ #endif
+ 
+     [[nodiscard]] bool isRightToLeft() const noexcept
+@@ -447,22 +444,6 @@
+ inline QStringView qToStringViewIgnoringNull(const QStringLike &s) noexcept
+ { return QStringView(s.data(), s.size()); }
+ 
+-// QChar inline functions:
+-
+-[[nodiscard]] constexpr auto QChar::fromUcs4(char32_t c) noexcept
+-{
+-    struct R {
+-        char16_t chars[2];
+-        [[nodiscard]] constexpr operator QStringView() const noexcept { return {begin(), end()}; }
+-        [[nodiscard]] constexpr qsizetype size() const noexcept { return chars[1] ? 2 : 1; }
+-        [[nodiscard]] constexpr const char16_t *begin() const noexcept { return chars; }
+-        [[nodiscard]] constexpr const char16_t *end() const noexcept { return begin() + size(); }
+-    };
+-    return requiresSurrogates(c) ? R{{QChar::highSurrogate(c),
+-                                      QChar::lowSurrogate(c)}} :
+-                                   R{{char16_t(c), u'\0'}} ;
+-}
+-
+ QT_END_NAMESPACE
+ 
+ #endif /* QSTRINGVIEW_H */
+--- a/qtbase/src/corelib/text/qregularexpression.h
++++ b/qtbase/src/corelib/text/qregularexpression.h
+@@ -187,6 +187,11 @@
+ Q_CORE_EXPORT QDebug operator<<(QDebug debug, QRegularExpression::PatternOptions patternOptions);
+ #endif
+ 
++[[nodiscard]] inline qsizetype QStringView::count(const QRegularExpression &re) const
++{
++    return QtPrivate::count(*this, re);
++}
++
+ struct QRegularExpressionMatchPrivate;
+ QT_DECLARE_QESDP_SPECIALIZATION_DTOR_WITH_EXPORT(QRegularExpressionMatchPrivate, Q_CORE_EXPORT)
+ 
+--- a/qtbase/src/corelib/serialization/qtextstream.h
++++ b/qtbase/src/corelib/serialization/qtextstream.h
+@@ -6,6 +6,7 @@
+ 
+ #include <QtCore/qiodevicebase.h>
+ #include <QtCore/qchar.h>
++#include <QtCore/qlatin1stringview.h>
+ #include <QtCore/qscopedpointer.h>
+ #include <QtCore/qstringconverter_base.h>
+ 
+--- a/qtbase/src/corelib/tools/qhashfunctions.h
++++ b/qtbase/src/corelib/tools/qhashfunctions.h
+@@ -7,6 +7,9 @@
+ 
+ #include <QtCore/qstring.h>
+ #include <QtCore/qstringfwd.h>
++#ifndef QT_BOOTSTRAPPED
++#include <QtCore/qbitarray.h>
++#endif
+ 
+ #include <numeric> // for std::accumulate
+ #include <functional> // for std::hash
+@@ -24,7 +27,6 @@
+ 
+ QT_BEGIN_NAMESPACE
+ 
+-class QBitArray;
+ 
+ #if QT_DEPRECATED_SINCE(6,6)
+ QT_DEPRECATED_VERSION_X_6_6("Use QHashSeed instead")
+--- a/qtbase/src/corelib/text/qbytearrayview.h
++++ b/qtbase/src/corelib/text/qbytearrayview.h
+@@ -4,6 +4,7 @@
+ #define QBYTEARRAYVIEW_H
+ 
+ #include <QtCore/qbytearrayalgorithms.h>
++#include <QtCore/qchar.h>
+ #include <QtCore/qstringfwd.h>
+ #include <QtCore/qarraydata.h>
+ 
+--- a/qtbase/src/corelib/text/qanystringview.h
++++ b/qtbase/src/corelib/text/qanystringview.h
+@@ -96,10 +96,6 @@
+         // this is what we're really after:
+         std::is_convertible<T, QStringOrQByteArray>
+     >, bool>;
+-
+-    // confirm we don't make an accidental copy constructor:
+-    static_assert(QtPrivate::IsContainerCompatibleWithQStringView<QAnyStringView>::value == false);
+-    static_assert(QtPrivate::IsContainerCompatibleWithQUtf8StringView<QAnyStringView>::value == false);
+ 
+     template<typename Char>
+     static constexpr bool isAsciiOnlyCharsAtCompileTime(Char *str, qsizetype sz) noexcept
+--- a/qtbase/src/corelib/text/qanystringview.cpp
++++ b/qtbase/src/corelib/text/qanystringview.cpp
+@@ -6,6 +6,10 @@
+ #include "qttypetraits.h"
+ 
+ QT_BEGIN_NAMESPACE
++
++// confirm we don't make an accidental copy constructor:
++static_assert(QtPrivate::IsContainerCompatibleWithQStringView<QAnyStringView>::value == false);
++static_assert(QtPrivate::IsContainerCompatibleWithQUtf8StringView<QAnyStringView>::value == false);
+ 
+ /*!
+     \class QAnyStringView
+--- a/qtbase/tests/auto/corelib/text/qchar/tst_qchar.cpp
++++ b/qtbase/tests/auto/corelib/text/qchar/tst_qchar.cpp
+@@ -80,10 +80,16 @@
+         QCOMPARE(result.chars[0], QChar::highSurrogate(ucs4));
+         QCOMPARE(result.chars[1], QChar::lowSurrogate(ucs4));
+         QCOMPARE(QStringView{result}.size(), 2);
++        QStringView implicit = result;
++        QCOMPARE(implicit.size(), 2);
++        QCOMPARE(result.data(), result.begin());
+     } else {
+         QCOMPARE(result.chars[0], ucs4);
+         QCOMPARE(result.chars[1], 0u);
+         QCOMPARE(QStringView{result}.size(), 1);
++        QStringView implicit = result;
++        QCOMPARE(implicit.size(), 1);
++        QCOMPARE(result.data(), result.begin());
+     }
+ }
+ 

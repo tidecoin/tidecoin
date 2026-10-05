@@ -3,16 +3,67 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chainparams.h>
+#include <coins.h>
 #include <index/coinstatsindex.h>
 #include <interfaces/chain.h>
 #include <kernel/coinstats.h>
 #include <test/util/setup_common.h>
 #include <test/util/validation.h>
+#include <txdb.h>
 #include <validation.h>
 
 #include <boost/test/unit_test.hpp>
 
 BOOST_AUTO_TEST_SUITE(coinstatsindex_tests)
+
+BOOST_FIXTURE_TEST_CASE(coinstats_cursor_snapshot, TestChain100Setup)
+{
+    using kernel::CoinStatsHashType;
+    // Model a tip change between a separate GetBestBlock() read and Cursor().
+    // The cursor must be created under cs_main, and its block is authoritative.
+    class SnapshotView : public CCoinsViewBacked {
+        const uint256 m_old_tip;
+    public:
+        SnapshotView(CCoinsView* view, const uint256& old_tip) : CCoinsViewBacked{view}, m_old_tip{old_tip} {}
+        uint256 GetBestBlock() const override { return m_old_tip; }
+        std::unique_ptr<CCoinsViewCursor> Cursor() const override EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+        {
+            AssertLockHeld(cs_main);
+            return base->Cursor();
+        }
+    };
+
+    auto& chainstate = m_node.chainman->ActiveChainstate();
+    const CScript script_pub_key{CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG};
+    for (const auto hash_type : {CoinStatsHashType::NONE, CoinStatsHashType::MUHASH, CoinStatsHashType::HASH_SERIALIZED}) {
+        chainstate.ForceFlushStateToDisk();
+        const auto expected = kernel::ComputeUTXOStats(hash_type, WITH_LOCK(cs_main, return &chainstate.CoinsDB()), chainstate.m_blockman);
+        BOOST_REQUIRE(expected);
+        const auto old_tip = WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip()->pprev->GetBlockHash());
+        SnapshotView view{WITH_LOCK(cs_main, return &chainstate.CoinsDB()), old_tip};
+        bool advanced{false};
+        const auto stats = kernel::ComputeUTXOStats(hash_type, &view, chainstate.m_blockman, [&] {
+            // Once iteration starts, a subsequent flush must not change either
+            // the cursor's contents or the metadata describing those contents.
+            AssertLockNotHeld(cs_main);
+            if (advanced) return;
+            advanced = true;
+            CreateAndProcessBlock({}, script_pub_key);
+            chainstate.ForceFlushStateToDisk();
+        });
+        BOOST_REQUIRE(advanced);
+        BOOST_REQUIRE(stats);
+        BOOST_CHECK_EQUAL(stats->nHeight, expected->nHeight);
+        BOOST_CHECK(stats->hashBlock == expected->hashBlock);
+        BOOST_CHECK(stats->hashSerialized == expected->hashSerialized);
+        BOOST_CHECK(stats->total_amount == expected->total_amount);
+        BOOST_CHECK_EQUAL(stats->nTransactions, expected->nTransactions);
+        BOOST_CHECK_EQUAL(stats->nTransactionOutputs, expected->nTransactionOutputs);
+        BOOST_CHECK_EQUAL(stats->nBogoSize, expected->nBogoSize);
+        BOOST_CHECK_EQUAL(stats->coins_count, expected->coins_count);
+        BOOST_CHECK(WITH_LOCK(cs_main, return chainstate.CoinsDB().GetBestBlock()) != stats->hashBlock);
+    }
+}
 
 BOOST_FIXTURE_TEST_CASE(coinstatsindex_initial_sync, TestChain100Setup)
 {

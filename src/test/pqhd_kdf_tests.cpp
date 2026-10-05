@@ -9,6 +9,8 @@
 #include <array>
 #include <cstdint>
 #include <span>
+#include <stdexcept>
+#include <type_traits>
 #include <string_view>
 #include <vector>
 
@@ -27,6 +29,41 @@ std::array<uint8_t, N> ParseHexArray(std::string_view hex)
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(pqhd_kdf_tests)
+
+BOOST_AUTO_TEST_CASE(secret_lifetime_and_moves)
+{
+    static_assert(!std::is_copy_constructible_v<pqhd::KeygenStreamBlock64>);
+    static_assert(std::is_nothrow_move_constructible_v<pqhd::Node>);
+    std::array<unsigned char, 32> bytes;
+    bytes.fill(0x42);
+    try {
+        const ScopedMemoryCleanse guard{bytes.data(), bytes.size()};
+        throw std::runtime_error("exception exit");
+    } catch (const std::runtime_error&) {}
+    BOOST_CHECK(std::ranges::all_of(bytes, [](auto b) { return b == 0; }));
+    pqhd::Node original;
+    original.node_secret.fill(0x42);
+    original.chain_code.fill(0x24);
+    pqhd::Node copy = original;
+    pqhd::Node moved = std::move(original);
+    BOOST_CHECK(std::ranges::all_of(original.node_secret, [](auto b) { return b == 0; }));
+    BOOST_CHECK(std::ranges::all_of(original.chain_code, [](auto b) { return b == 0; }));
+    BOOST_CHECK(copy.node_secret == moved.node_secret);
+    BOOST_CHECK(copy.chain_code == moved.chain_code);
+    original = std::move(moved);
+    BOOST_CHECK(original.node_secret == copy.node_secret);
+    BOOST_CHECK(std::ranges::all_of(moved.node_secret, [](auto b) { return b == 0; }));
+    original.Clear();
+    BOOST_CHECK(std::ranges::all_of(original.chain_code, [](auto b) { return b == 0; }));
+    BOOST_CHECK_EQUAL(copy.node_secret[0], 0x42);
+    pqhd::KeygenStreamKey64 key;
+    std::ranges::fill(key.MutableSpan(), 0x99);
+    auto block = pqhd::DeriveKeygenStreamBlock(key.Span(), 0);
+    const auto expected = HexStr(block.Span());
+    auto moved_block = std::move(block);
+    BOOST_CHECK_EQUAL(HexStr(moved_block.Span()), expected);
+    BOOST_CHECK(std::ranges::all_of(block.Span(), [](auto b) { return b == 0; }));
+}
 
 BOOST_AUTO_TEST_CASE(vectors_master_seed_0)
 {

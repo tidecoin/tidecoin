@@ -1,3 +1,4 @@
+#include "../cleanse.h"
 #include "fips202.h"
 #include "packing.h"
 #include "params.h"
@@ -107,6 +108,13 @@ int PQCLEAN_MLDSA44_CLEAN_crypto_sign_keypair_deterministic(uint8_t *pk, uint8_t
     shake256(tr, TRBYTES, pk, PQCLEAN_MLDSA44_CLEAN_CRYPTO_PUBLICKEYBYTES);
     PQCLEAN_MLDSA44_CLEAN_pack_sk(sk, rho, tr, key, &t0, &s1, &s2);
 
+    pq_cleanse(seedbuf, sizeof seedbuf);
+    pq_cleanse(tr, sizeof tr);
+    pq_cleanse(&s1, sizeof s1);
+    pq_cleanse(&s1hat, sizeof s1hat);
+    pq_cleanse(&s2, sizeof s2);
+    pq_cleanse(&t0, sizeof t0);
+    pq_cleanse(&t1, sizeof t1);
     return 0;
 }
 

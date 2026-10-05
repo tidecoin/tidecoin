@@ -172,7 +172,7 @@ class ZMQTest (BitcoinTestFramework):
 
         # set subscriber's desired timeout for the test
         for sub in subscribers:
-            sub.socket.set(zmq.RCVTIMEO, recv_timeout*1000)
+            sub.socket.set(zmq.RCVTIMEO, int(recv_timeout * self.options.timeout_factor * 1000))
 
         self.connect_nodes(0, 1)
         if sync_blocks:
@@ -343,14 +343,14 @@ class ZMQTest (BitcoinTestFramework):
         }
         # Reorg notifications can be timing-sensitive across implementations;
         # if events are emitted, validate they belong to the expected set.
-        seq.socket.set(zmq.RCVTIMEO, 2000)
+        seq.socket.set(zmq.RCVTIMEO, int(2 * self.options.timeout_factor * 1000))
         for _ in range(3):
             try:
                 event = seq.receive_sequence()
             except zmq.error.Again:
                 break
             assert event in expected_block_events
-        seq.socket.set(zmq.RCVTIMEO, 60000)
+        seq.socket.set(zmq.RCVTIMEO, int(60 * self.options.timeout_factor * 1000))
 
         self.log.info("Wait for tx from second node")
         payment_tx = self.wallet.send_self_transfer(from_node=self.nodes[1])

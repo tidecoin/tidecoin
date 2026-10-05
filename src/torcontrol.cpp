@@ -71,6 +71,10 @@ static const float RECONNECT_TIMEOUT_MAX = 600.0;
  * this is belt-and-suspenders sanity limit to prevent memory exhaustion.
  */
 static const int MAX_LINE_LENGTH = 100000;
+/** Maximum lines per reply. Current commands need at most a handful of lines;
+ * reconsider this bound if commands with large replies are added.
+ */
+static constexpr size_t MAX_LINE_COUNT = 1000;
 
 /****** Low-level TorControlConnection ********/
 
@@ -97,6 +101,13 @@ void TorControlConnection::readcb(struct bufferevent *bev, void *ctx)
     {
         std::string s(line, n_read_out);
         free(line);
+        if (s.size() > MAX_LINE_LENGTH || self->message.lines.size() >= MAX_LINE_COUNT) {
+            LogPrintf("tor: Disconnecting because %s exceeded\n",
+                      s.size() > MAX_LINE_LENGTH ? "MAX_LINE_LENGTH" : "MAX_LINE_COUNT");
+            self->Disconnect();
+            self->disconnected(*self);
+            return;
+        }
         if (s.size() < 4) // Short line
             continue;
         // <status>(-|+| )<data><CRLF>
@@ -104,29 +115,45 @@ void TorControlConnection::readcb(struct bufferevent *bev, void *ctx)
         self->message.lines.push_back(s.substr(4));
         char ch = s[3]; // '-','+' or ' '
         if (ch == ' ') {
-            // Final line, dispatch reply and clean up
-            if (self->message.code >= 600) {
+            // Finish the reply before dispatch, allowing handlers to queue new
+            // commands or disconnect without retaining state from this reply.
+            TorControlReply reply = std::move(self->message);
+            self->message.Clear();
+            if (reply.code >= 600) {
                 // (currently unused)
                 // Dispatch async notifications to async handler
                 // Synchronous and asynchronous messages are never interleaved
             } else {
                 if (!self->reply_handlers.empty()) {
-                    // Invoke reply handler with message
-                    self->reply_handlers.front()(*self, self->message);
+                    auto handler = std::move(self->reply_handlers.front());
                     self->reply_handlers.pop_front();
+                    handler(*self, reply);
+                    if (self->b_conn != bev) return;
                 } else {
-                    LogDebug(BCLog::TOR, "Received unexpected sync reply %i\n", self->message.code);
+                    LogDebug(BCLog::TOR, "Received unexpected sync reply %i\n", reply.code);
                 }
             }
-            self->message.Clear();
         }
     }
     //  Check for size of buffer - protect against memory exhaustion with very long lines
     //  Do this after evbuffer_readln to make sure all full lines have been
     //  removed from the buffer. Everything left is an incomplete line.
-    if (evbuffer_get_length(input) > MAX_LINE_LENGTH) {
+    const size_t input_size = evbuffer_get_length(input);
+    // The line length excludes CRLF. Allow a trailing CR at the boundary
+    // while waiting for LF, so acceptance does not depend on read boundaries.
+    bool pending_cr{false};
+    if (input_size == MAX_LINE_LENGTH + 1) {
+        evbuffer_ptr last{};
+        char ch{0};
+        if (evbuffer_ptr_set(input, &last, input_size - 1, EVBUFFER_PTR_SET) == 0 &&
+            evbuffer_copyout_from(input, &last, &ch, 1) == 1) {
+            pending_cr = ch == '\r';
+        }
+    }
+    if (input_size > MAX_LINE_LENGTH && !pending_cr) {
         LogPrintf("tor: Disconnecting because MAX_LINE_LENGTH exceeded\n");
         self->Disconnect();
+        self->disconnected(*self);
     }
 }
 
@@ -189,6 +216,8 @@ void TorControlConnection::Disconnect()
     if (b_conn)
         bufferevent_free(b_conn);
     b_conn = nullptr;
+    message.Clear();
+    reply_handlers.clear();
 }
 
 bool TorControlConnection::Command(const std::string &cmd, const ReplyHandlerCB& reply_handler)

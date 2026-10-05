@@ -101,6 +101,23 @@ class AddrTest(BitcoinTestFramework):
         assert addr_receiver.addrv2_received_and_checked
         assert_equal(len(self.nodes[0].getnodeaddresses(count=0, network="i2p")), 0)
 
+        self.log.info('Reject IPv6 documentation addresses while accepting adjacent ranges')
+        documentation = ["3fff::", "3fff::1", "3fff:fff:ffff:ffff:ffff:ffff:ffff:ffff", "2001:db8::1"]
+        adjacent = ["3ffe:ffff:ffff:ffff:ffff:ffff:ffff:ffff", "3fff:1000::"]
+        addresses = []
+        for ip in documentation + adjacent:
+            addr = CAddress()
+            addr.net = addr.NET_IPV6
+            addr.ip = ip
+            addr.port = 12345
+            addr.time = int(time.time())
+            addr.nServices = P2P_SERVICES
+            addresses.append(addr)
+        msg.addrs = addresses
+        addr_source.send_and_ping(msg)
+        stored = {entry["address"] for entry in self.nodes[0].getnodeaddresses(count=0, network="ipv6")}
+        assert_equal(stored, set(adjacent))
+
         self.log.info('Send too-large addrv2 message')
         msg.addrs = ADDRS * 101
         with self.nodes[0].assert_debug_log(['addrv2 message size = 1010']):

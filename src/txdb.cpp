@@ -141,6 +141,14 @@ bool CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256 &hashB
     size_t changed = 0;
     assert(!hashBlock.IsNull());
 
+    const bool has_changes{cursor.Begin() != cursor.End()};
+    size_t batches_written{0};
+    const auto crash = [] {
+        LogPrintf("Simulating deterministic chainstate crash.\n");
+        _Exit(1);
+    };
+    if (has_changes && m_options.simulate_crash_after_batch == 0) crash();
+
     uint256 old_tip = GetBestBlock();
     if (old_tip.IsNull()) {
         // We may be in the middle of replaying.
@@ -179,6 +187,8 @@ bool CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256 &hashB
 
             m_db->WriteBatch(batch);
             batch.Clear();
+            ++batches_written;
+            if (has_changes && m_options.simulate_crash_after_batch == batches_written) crash();
             if (m_options.simulate_crash_ratio) {
                 static FastRandomContext rng;
                 if (rng.randrange(m_options.simulate_crash_ratio) == 0) {
@@ -190,6 +200,7 @@ bool CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256 &hashB
     }
 
     // In the last batch, mark the database as consistent with hashBlock again.
+    if (has_changes && m_options.simulate_crash_before_final) crash();
     batch.Erase(DB_HEAD_BLOCKS);
     batch.Write(DB_BEST_BLOCK, hashBlock);
     batch.Write(DB_CHAINSTATE_FORMAT, CHAINSTATE_FORMAT_CURRENT);

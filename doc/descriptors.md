@@ -139,3 +139,56 @@ Descriptors can be suffixed with `#CHECKSUM` (8 characters).
 - Ranged descriptors require an explicit range in `deriveaddresses`.
 - PQHD seeds are wallet-local; descriptor strings keep public derivation intent,
   while key material remains in wallet storage.
+
+## Wallet local PQHD descriptors in existing RPCs
+
+`deriveaddresses`, `scantxoutset`, `scanblocks`, and `getdescriptoractivity` can
+resolve registered PQHD descriptors through an explicitly selected wallet. Use
+`-rpcwallet=<name>` or the `/wallet/<name>` RPC endpoint, with a public descriptor
+from that wallet's `listdescriptors` result. The descriptor is matched in its
+canonical public form. Scanners continue to accept descriptors without a
+checksum; `deriveaddresses` continues to require one.
+
+```text
+tidecoin-cli -rpcwallet=mywallet deriveaddresses "<public descriptor>" '[0,9]'
+tidecoin-cli -rpcwallet=mywallet scantxoutset start '[{"desc":"<public descriptor>","range":[0,9]}]'
+tidecoin-cli -rpcwallet=mywallet scanblocks start '[{"desc":"<public descriptor>","range":[0,9]}]'
+tidecoin-cli -rpcwallet=mywallet getdescriptoractivity '["<block hash>"]' '[{"desc":"<public descriptor>","range":[0,9]}]'
+```
+
+Arguments and result formats are unchanged. Self-contained descriptors continue
+to work without any wallet, even if a wallet endpoint is present. PQHD resolution
+does not select a default wallet or search other wallets for a matching seed.
+Unregistered PQHD paths are rejected. These calls require their existing RPC
+method permissions; returned addresses and scripts are wallet public metadata.
+
+Verified cached indices work while the wallet is locked. After an encrypted
+wallet is reloaded, unlock it once to verify cached keys against its PQHD seeds;
+it may then be locked again. A seed/cache mismatch is rejected without rewriting
+the records. An uncached index requires the
+seed in the selected wallet and, for an encrypted wallet, a valid unlock via
+`walletpassphrase`. Fresh derivation checks the unlock deadline even if the
+scheduled relock callback has not run yet. Seeds and private keys are not
+returned or handed to the node's scanner. No seed argument is added to these RPCs.
+
+Derivation does not reserve a receiving address, advance the next-address index,
+refill the keypool, persist fresh cache entries, or extend wallet monitoring.
+Scanning also does not import discovered transactions into the wallet. Use
+`getnewaddress` to allocate a receiving address. Calculating an address outside
+the monitored range does not make the wallet track payments to it.
+
+The existing range rules apply: indices run from zero through `2147483647`,
+with at most 1,000,000 indices in an explicit range. `deriveaddresses` requires a
+range for ranged descriptors. Scanners retain their default inclusive range
+`[0,1000]`. Fresh PQHD key generation can be expensive; use small ranges when
+possible. There is no separate 100-index expansion limit.
+
+One wallet-backed expansion runs per wallet at a time. Wallet locks are released
+between indices and before the subsequent blockchain scan. `scantxoutset abort`
+and `scanblocks abort` also interrupt their descriptor expansion stage; during
+that stage status reports zero scan progress, and interruption returns an error
+without a partial scan result. The existing scan-stage result semantics remain
+unchanged. `deriveaddresses` and `getdescriptoractivity` have no new abort action.
+Wallet locking cancels an active wallet expansion, and shutdown is checked
+between indices. An individual cryptographic derivation is not interrupted
+midway. Client disconnection alone does not cancel a request.

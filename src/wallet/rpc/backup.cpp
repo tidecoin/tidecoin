@@ -16,7 +16,6 @@
 #include <sync.h>
 #include <uint256.h>
 #include <util/fs.h>
-#include <util/time.h>
 #include <util/translation.h>
 #include <wallet/rpc/util.h>
 #include <wallet/wallet.h>
@@ -184,10 +183,15 @@ static UniValue ProcessDescriptorImport(CWallet& wallet, const UniValue& data, c
             if (data.exists("next_index")) {
                 next_index = data["next_index"].getInt<int64_t>();
                 // bound checks
-                if (next_index < range_start || next_index >= range_end) {
+                // An exhausted exported range has next_index == range_end.
+                if (next_index < range_start || next_index > range_end) {
                     throw JSONRPCError(RPC_INVALID_PARAMETER, "next_index is out of range");
                 }
             }
+        }
+
+        if (range_end > std::numeric_limits<int32_t>::max()) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Wallet descriptor range end must be below 2147483647");
         }
 
         // Active descriptors must be ranged
@@ -220,71 +224,102 @@ static UniValue ProcessDescriptorImport(CWallet& wallet, const UniValue& data, c
             throw JSONRPCError(RPC_WALLET_ERROR, "Cannot import private keys to a wallet with private keys disabled");
         }
 
-        for (size_t j = 0; j < parsed_descs.size(); ++j) {
-            auto parsed_desc = std::move(parsed_descs[j]);
-            bool desc_internal = internal.has_value() && internal.value();
-            if (parsed_descs.size() == 2) {
-                desc_internal = j == 1;
-            } else if (parsed_descs.size() > 2) {
-                CHECK_NONFATAL(!desc_internal);
-            }
-            // Need to ExpandPrivate to check if private keys are available for all pubkeys
-            FlatSigningProvider expand_keys;
-            std::vector<CScript> scripts;
-            if (!parsed_desc->Expand(0, keys, scripts, expand_keys)) {
-                throw JSONRPCError(RPC_WALLET_ERROR, "Cannot expand descriptor. Probably because of hardened derivations without private keys provided");
-            }
-            parsed_desc->ExpandPrivate(0, keys, expand_keys);
-
-            // Check if all private keys are provided
-            bool have_all_privkeys = !expand_keys.keys.empty();
-            for (const auto& [key_id, pubkey] : expand_keys.pubkeys) {
-                CKey key;
-                if (!expand_keys.GetKey(key_id, key)) {
-                    have_all_privkeys = false;
-                    break;
+        if (!RunWithinTxn(wallet.GetDatabase(), "import descriptor request", [&](WalletBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(wallet.cs_wallet) {
+            for (size_t j = 0; j < parsed_descs.size(); ++j) {
+                auto parsed_desc = std::move(parsed_descs[j]);
+                bool desc_internal = internal.has_value() && internal.value();
+                if (parsed_descs.size() == 2) {
+                    desc_internal = j == 1;
+                } else if (parsed_descs.size() > 2) {
+                    CHECK_NONFATAL(!desc_internal);
                 }
-            }
+                WalletDescriptor w_desc(std::move(parsed_desc), timestamp, range_start, range_end, next_index);
+                auto* existing = wallet.GetDescriptorScriptPubKeyMan(w_desc);
 
-            // If private keys are enabled, check some things.
-            if (!wallet.IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS)) {
-               if (keys.keys.empty()) {
-                    throw JSONRPCError(RPC_WALLET_ERROR, "Cannot import descriptor without private keys to a wallet with private keys enabled");
-               }
-               if (!have_all_privkeys) {
-                   warnings.push_back("Not all private keys provided. Some wallet functionality may return unexpected errors");
-               }
-            }
+                // Ownership is distinct from expansion and from satisfying a
+                // transaction. Count only keys/seeds referenced by this descriptor;
+                // encrypted material still belongs to the wallet while locked.
+                bool have_any_privkeys{false};
+                bool have_all_privkeys{true};
+                FlatSigningProvider import_keys;
+                std::set<CPubKey> pubkeys;
+                w_desc.descriptor->GetPubKeys(pubkeys);
+                for (const auto& pubkey : pubkeys) {
+                    const auto key_id = pubkey.GetID();
+                    bool have_key{false};
+                    if (const auto it = keys.keys.find(key_id); it != keys.keys.end()) {
+                        EnsureWalletIsUnlocked(wallet);
+                        import_keys.keys.emplace(key_id, it->second);
+                        have_key = true;
+                    } else if (existing && WITH_LOCK(existing->cs_desc_man, return existing->HasPrivKey(key_id))) {
+                        have_key = true;
+                    } else {
+                        // Reuse an explicit private key already stored for another
+                        // descriptor, copying only the referenced key to this manager.
+                        for (auto* manager : wallet.GetAllScriptPubKeyMans()) {
+                            auto* desc_manager = dynamic_cast<DescriptorScriptPubKeyMan*>(manager);
+                            if (!desc_manager || !WITH_LOCK(desc_manager->cs_desc_man, return desc_manager->HasPrivKey(key_id))) continue;
+                            EnsureWalletIsUnlocked(wallet);
+                            const auto key = desc_manager->GetKey(key_id);
+                            if (!key) throw JSONRPCError(RPC_WALLET_ERROR, "Could not retrieve descriptor private key");
+                            import_keys.keys.emplace(key_id, *key);
+                            have_key = true;
+                            break;
+                        }
+                    }
+                    have_any_privkeys |= have_key;
+                    have_all_privkeys &= have_key;
+                }
+                for (const auto& seed_id : w_desc.descriptor->GetPQHDSeedIDs()) {
+                    const bool have_seed = wallet.HavePQHDSeed(seed_id);
+                    have_any_privkeys |= have_seed;
+                    have_all_privkeys &= have_seed;
+                }
 
-            WalletDescriptor w_desc(std::move(parsed_desc), timestamp, range_start, range_end, next_index);
+                if (!wallet.IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS)) {
+                    if (!have_any_privkeys) {
+                        throw JSONRPCError(RPC_WALLET_ERROR, "Cannot import descriptor without private keys to a wallet with private keys enabled");
+                    }
+                    if (!have_all_privkeys) {
+                        warnings.push_back("Not all private keys provided. Some wallet functionality may return unexpected errors");
+                    }
+                }
 
-            // Add descriptor to the wallet
-            auto spk_manager_res = wallet.AddWalletDescriptor(w_desc, keys, label, desc_internal);
+                // AddWalletDescriptor expands every requested index using wallet
+                // seeds or its existing verified cache, atomically with the import.
+                // Add descriptor to the wallet
+                auto spk_manager_res = wallet.AddWalletDescriptor(w_desc, import_keys, label, desc_internal, &batch);
 
-            if (!spk_manager_res) {
-                throw JSONRPCError(RPC_WALLET_ERROR, strprintf("Could not add descriptor '%s': %s", descriptor, util::ErrorString(spk_manager_res).original));
-            }
+                if (!spk_manager_res) {
+                    throw JSONRPCError(RPC_WALLET_ERROR, strprintf("Could not add descriptor '%s': %s", descriptor, util::ErrorString(spk_manager_res).original));
+                }
 
-            auto& spk_manager = spk_manager_res.value().get();
+                auto& spk_manager = spk_manager_res.value().get();
 
-            // Set descriptor as active if necessary
-            if (active) {
-                if (!w_desc.descriptor->GetOutputType()) {
-                    warnings.push_back("Unknown output type, cannot set descriptor to active.");
+                // Set descriptor as active if necessary
+                if (active) {
+                    if (!w_desc.descriptor->GetOutputType()) {
+                        warnings.push_back("Unknown output type, cannot set descriptor to active.");
+                    } else {
+                        wallet.AddActiveScriptPubKeyMan(spk_manager.GetID(), *w_desc.descriptor->GetOutputType(), desc_internal, &batch);
+                    }
                 } else {
-                    wallet.AddActiveScriptPubKeyMan(spk_manager.GetID(), *w_desc.descriptor->GetOutputType(), desc_internal);
-                }
-            } else {
-                if (w_desc.descriptor->GetOutputType()) {
-                    wallet.DeactivateScriptPubKeyMan(spk_manager.GetID(), *w_desc.descriptor->GetOutputType(), desc_internal);
+                    if (w_desc.descriptor->GetOutputType()) {
+                        wallet.DeactivateScriptPubKeyMan(spk_manager.GetID(), *w_desc.descriptor->GetOutputType(), desc_internal, &batch);
+                    }
                 }
             }
-        }
+
+            return true;
+        })) throw JSONRPCError(RPC_WALLET_ERROR, "Could not commit descriptor import");
 
         result.pushKV("success", UniValue(true));
     } catch (const UniValue& e) {
         result.pushKV("success", UniValue(false));
         result.pushKV("error", e);
+    } catch (const std::exception& e) {
+        result.pushKV("success", UniValue(false));
+        result.pushKV("error", JSONRPCError(RPC_WALLET_ERROR, e.what()));
     }
     PushWarnings(warnings, result);
     return result;
@@ -294,6 +329,13 @@ RPCHelpMan importdescriptors()
 {
     return RPCHelpMan{
         "importdescriptors",
+        "Import descriptors using private keys supplied in the descriptor or already held by the selected wallet.\n"
+        "PQHD seed references require the matching wallet seeds for fresh derivation; locked imports can reuse verified cached public keys.\n"
+        "An explicitly requested range is populated exactly; later keypool top-ups may extend it.\n"
+        "For recovery, first import every required PQHD seed, then import all historical descriptors with their ranges and timestamps.\n"
+        "Restore next_index to preserve previously issued addresses, including those never paid. Reimport cannot lower an existing next_index or move its timestamp forward.\n"
+        "Success covers the supplied descriptors, ranges and scan times; it does not discover unknown accounts, scripts or indices.\n"
+        "If scanning fails or is aborted, successfully registered descriptors remain in the wallet. Retry with the original historical timestamp.\n"
         "Import descriptors. This will trigger a rescan of the blockchain based on the earliest timestamp of all descriptors being imported. Requires a new wallet backup.\n"
         "When importing descriptors with multipath key expressions, if the multipath specifier contains exactly two elements, the descriptor produced from the second element will be imported as an internal descriptor.\n"
             "\nNote: This call can take over an hour to complete if using an early timestamp; during that time, other rpc calls\n"
@@ -307,7 +349,7 @@ RPCHelpMan importdescriptors()
                                     {"desc", RPCArg::Type::STR, RPCArg::Optional::NO, "Descriptor to import."},
                                     {"active", RPCArg::Type::BOOL, RPCArg::Default{false}, "Set this descriptor to be the active descriptor for the corresponding output type/externality"},
                                     {"range", RPCArg::Type::RANGE, RPCArg::Optional::OMITTED, "If a ranged descriptor is used, this specifies the end or the range (in the form [begin,end]) to import"},
-                                    {"next_index", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "If a ranged descriptor is set to active, this specifies the next index to generate addresses from"},
+                                    {"next_index", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Next index for a ranged descriptor. May equal range end plus one when exhausted. An existing wallet's higher next index is preserved."},
                                     {"timestamp", RPCArg::Type::NUM, RPCArg::Optional::NO, "Time from which to start rescanning the blockchain for this descriptor, in " + UNIX_EPOCH_TIME + "\n"
                                         "Use the string \"now\" to substitute the current synced blockchain time.\n"
                                         "\"now\" can be specified to bypass scanning, for outputs which are known to never have been used, and\n"
@@ -350,17 +392,22 @@ RPCHelpMan importdescriptors()
     if (!pwallet) return UniValue::VNULL;
     CWallet& wallet{*pwallet};
 
-    // Make sure the results are valid at least up to the most recent block
-    // the user could have gotten from another RPC command prior to now
-    wallet.BlockUntilSyncedToCurrentChain();
-
     WalletRescanReserver reserver(*pwallet);
     if (!reserver.reserve(/*with_passphrase=*/true)) {
         throw JSONRPCError(RPC_WALLET_ERROR, "Wallet is currently rescanning. Abort existing rescan or wait.");
     }
 
-    // Ensure that the wallet is not locked for the remainder of this RPC, as
-    // the passphrase is used to top up the keypool.
+    // Make sure the results are valid at least up to the most recent block
+    // the user could have gotten from another RPC command prior to now
+    wallet.BlockUntilSyncedToCurrentChain();
+
+    const auto check_abort = [&] {
+        if (pwallet->IsAbortingRescan()) throw JSONRPCError(RPC_MISC_ERROR, "Rescan aborted by user.");
+    };
+    check_abort();
+
+    // Keep the current lock state stable throughout import and rescan. Individual
+    // requests may use a verified public cache without accessing private material.
     LOCK(pwallet->m_relock_mutex);
 
     const UniValue& requests = main_request.params[0];
@@ -371,12 +418,12 @@ RPCHelpMan importdescriptors()
     UniValue response(UniValue::VARR);
     {
         LOCK(pwallet->cs_wallet);
-        EnsureWalletIsUnlocked(*pwallet);
 
         CHECK_NONFATAL(pwallet->chain().findBlock(pwallet->GetLastBlockHash(), FoundBlock().time(lowest_timestamp).mtpTime(now)));
 
         // Get all timestamps and extract the lowest timestamp
         for (const UniValue& request : requests.getValues()) {
+            check_abort();
             // This throws an error if "timestamp" doesn't exist
             const int64_t timestamp = std::max(GetImportTimestamp(request, now), minimum_timestamp);
             const UniValue result = ProcessDescriptorImport(*pwallet, request, timestamp);
@@ -394,15 +441,16 @@ RPCHelpMan importdescriptors()
         pwallet->ConnectScriptPubKeyManNotifiers();
         pwallet->RefreshAllTXOs();
     }
+    check_abort();
 
     // Rescan the blockchain using the lowest timestamp
     if (rescan) {
-        int64_t scanned_time = pwallet->RescanFromTime(lowest_timestamp, reserver, /*update=*/true);
-        pwallet->ResubmitWalletTransactions(/*relay=*/false, /*force=*/true);
-
-        if (pwallet->IsAbortingRescan()) {
-            throw JSONRPCError(RPC_MISC_ERROR, "Rescan aborted by user.");
+        const auto scanned_time_result = pwallet->RescanFromTime(lowest_timestamp, reserver, /*update=*/true);
+        if (!scanned_time_result || pwallet->IsAbortingRescan()) {
+            throw JSONRPCError(RPC_MISC_ERROR, pwallet->IsAbortingRescan() ? "Rescan aborted by user." : "Rescan interrupted by shutdown.");
         }
+        const int64_t scanned_time = *scanned_time_result;
+        pwallet->ResubmitWalletTransactions(/*relay=*/false, /*force=*/true);
 
         if (scanned_time > lowest_timestamp) {
             std::vector<UniValue> results = response.getValues();
@@ -456,9 +504,12 @@ RPCHelpMan listdescriptors()
 {
     return RPCHelpMan{
         "listdescriptors",
-        "List all descriptors present in a wallet.\n",
+        "List all descriptors present in a wallet.\n"
+        "Preserve descriptors, timestamps, ranges and next_index values as recovery metadata, together with every required seed or private key.\n"
+        "PQHD descriptors contain seed identifiers, not seed bytes, even when private=true. This output alone is not a complete wallet backup.\n"
+        "For finite watch-only transfer, getaddressinfo provides a public desc for each solvable address already monitored by this wallet.\n",
         {
-            {"private", RPCArg::Type::BOOL, RPCArg::Default{false}, "Show private descriptors."}
+            {"private", RPCArg::Type::BOOL, RPCArg::Default{false}, "Request private descriptor serialization; may fail for public-only keys. PQHD seed bytes are never included; preserve seeds separately or use a full wallet backup."}
         },
         RPCResult{RPCResult::Type::OBJ, "", "", {
             {RPCResult::Type::STR, "wallet_name", "Name of wallet this operation was performed on"},

@@ -255,6 +255,8 @@ std::vector<COutput> CoinsResult::All() const
 
 void CoinsResult::Clear() {
     coins.clear();
+    total_amount = 0;
+    total_effective_amount.reset();
 }
 
 void CoinsResult::Erase(const std::unordered_set<COutPoint, SaltedOutpointHasher>& coins_to_remove)
@@ -266,7 +268,7 @@ void CoinsResult::Erase(const std::unordered_set<COutPoint, SaltedOutpointHasher
 
             // update cached amounts
             total_amount -= coin.txout.nValue;
-            if (coin.HasEffectiveValue()) total_effective_amount = *total_effective_amount - coin.GetEffectiveValue();
+            if (coin.HasEffectiveValue() && total_effective_amount) total_effective_amount = *total_effective_amount - coin.GetEffectiveValue();
             return true;
         });
         vec.erase(remove_it, vec.end());
@@ -729,7 +731,8 @@ FilteredOutputGroups GroupOutputs(const CWallet& wallet,
                     filtered_groups[filter].Push(group, type, positive_only, /*insert_mixed=*/!positive_only);
                     accepted = true;
                 }
-                if (!accepted) ret_discarded_groups.emplace_back(group);
+                // Positive-only groups overlap the mixed groups already counted.
+                if (!accepted && !positive_only) ret_discarded_groups.emplace_back(group);
             }
         }
     };
@@ -986,7 +989,7 @@ util::Result<SelectionResult> AutomaticCoinSelection(const CWallet& wallet, Coin
             if (group.m_ancestors >= max_ancestors || group.m_descendants >= max_descendants) total_unconf_long_chain += group.GetSelectionAmount();
         }
 
-        if (CAmount total_amount = available_coins.GetTotalAmount() - total_discarded < value_to_select) {
+        if (const CAmount total_amount{available_coins.GetTotalAmount() - total_discarded}; total_amount < value_to_select) {
             // Special case, too-long-mempool cluster.
             if (total_amount + total_unconf_long_chain > value_to_select) {
                 return util::Error{_("Unconfirmed UTXOs are available, but spending them creates a chain of transactions that will be rejected by the mempool")};

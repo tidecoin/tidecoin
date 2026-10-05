@@ -8,6 +8,12 @@
 #include <boost/test/unit_test.hpp>
 
 #include <cstdint>
+#ifndef WIN32
+#include <csignal>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 #include <set>
 #include <span>
 #include <vector>
@@ -50,6 +56,81 @@ PartiallySignedTransaction MakeMinimalPSBT()
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(psbt_pqhd_origin_tests)
+
+BOOST_AUTO_TEST_CASE(invalid_final_fields_do_not_imply_completion)
+{
+    CMutableTransaction previous;
+    previous.vout.emplace_back(1000, CScript{} << OP_FALSE);
+    auto psbt = MakeMinimalPSBT();
+    psbt.tx->vin[0].prevout = COutPoint(previous.GetHash(), 0);
+    psbt.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+    psbt.inputs[0].final_script_sig = CScript{} << OP_TRUE;
+    const auto data = PrecomputePSBTData(psbt);
+    BOOST_CHECK(PSBTInputSigned(psbt.inputs[0]));
+    BOOST_CHECK(!PSBTInputSignedAndVerified(psbt, 0, &data, 0));
+    BOOST_CHECK(SignPSBTInput(DUMMY_SIGNING_PROVIDER, psbt, 0, &data, std::nullopt, nullptr, true, 0) == common::PSBTError::INCOMPLETE);
+    BOOST_CHECK(!FinalizePSBT(psbt, 0));
+    CMutableTransaction extracted;
+    BOOST_CHECK(!FinalizeAndExtractPSBT(psbt, extracted, 0));
+}
+
+BOOST_AUTO_TEST_CASE(psbt_verified_input_bounds)
+{
+    auto psbt = MakeMinimalPSBT();
+    // A valid index without UTXO data is incomplete, not an assertion failure.
+    BOOST_CHECK(!PSBTInputSignedAndVerified(psbt, 0, nullptr, 0));
+#ifndef WIN32
+    // Keep fatal assertion cases in children, without producing core dumps.
+    for (const bool empty : {false, true}) {
+        if (empty) psbt.inputs.clear();
+        const pid_t pid = fork();
+        BOOST_REQUIRE(pid >= 0);
+        if (pid == 0) {
+            std::signal(SIGABRT, SIG_DFL); // Do not inherit Boost.Test's signal handler.
+            const rlimit limit{0, 0};
+            setrlimit(RLIMIT_CORE, &limit);
+            PSBTInputSignedAndVerified(psbt, psbt.inputs.size(), nullptr, 0);
+            _exit(0);
+        }
+        int status{0};
+        BOOST_REQUIRE_EQUAL(waitpid(pid, &status, 0), pid);
+        BOOST_REQUIRE(WIFSIGNALED(status));
+        BOOST_CHECK_EQUAL(WTERMSIG(status), SIGABRT);
+    }
+#endif
+}
+
+BOOST_AUTO_TEST_CASE(pqhd_origin_conflicts_reject_before_merge)
+{
+    const auto key = MakeDummyTidePubKey(pq::SchemeId::FALCON_512);
+    const auto path = MakePQHDPathForScheme(pq::SchemeId::FALCON_512);
+    auto left = MakeMinimalPSBT();
+    BOOST_REQUIRE(psbt::tidecoin::AddPQHDOrigin(left.outputs[0].m_proprietary, PSBT_OUT_PROPRIETARY, key, uint256::ONE, path));
+    BOOST_CHECK(psbt::tidecoin::AddPQHDOrigin(left.outputs[0].m_proprietary, PSBT_OUT_PROPRIETARY, key, uint256::ONE, path));
+    BOOST_CHECK(!psbt::tidecoin::AddPQHDOrigin(left.outputs[0].m_proprietary, PSBT_OUT_PROPRIETARY, key, uint256{}, path));
+    auto right = MakeMinimalPSBT();
+    BOOST_REQUIRE(psbt::tidecoin::AddPQHDOrigin(right.outputs[0].m_proprietary, PSBT_OUT_PROPRIETARY, key, uint256{}, path));
+    right.inputs[0].witness_utxo = CTxOut(1, CScript{} << OP_TRUE);
+    DataStream original;
+    original << left;
+    BOOST_CHECK(!left.Merge(right));
+    DataStream after;
+    after << left;
+    BOOST_CHECK(std::ranges::equal(original, after));
+    auto combined = left;
+    BOOST_CHECK(!CombinePSBTs(combined, {left, right}));
+    DataStream unchanged;
+    unchanged << combined;
+    BOOST_CHECK(std::ranges::equal(original, unchanged));
+    auto same = left;
+    BOOST_CHECK(left.Merge(same));
+    auto malformed = MakeMinimalPSBT();
+    auto entry = *same.outputs[0].m_proprietary.begin();
+    entry.value.clear();
+    malformed.outputs[0].m_proprietary.insert(entry);
+    BOOST_CHECK(!left.Merge(malformed));
+    BOOST_CHECK(!CombinePSBTs(combined, {malformed}));
+}
 
 BOOST_AUTO_TEST_CASE(pqhd_origin_roundtrip_input_and_output)
 {

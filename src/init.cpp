@@ -266,6 +266,12 @@ void Interrupt(NodeContext& node)
 #if HAVE_SYSTEM
     ShutdownNotify(*node.args);
 #endif
+    // Also wake early IPC clients when startup fails before notifications exists.
+    {
+        LOCK(node.mining_mutex);
+        node.mining_stopping = true;
+        node.mining_cv.notify_all();
+    }
     // Wake any threads that may be waiting for the tip to change.
     if (node.notifications) WITH_LOCK(node.notifications->m_tip_block_mutex, node.notifications->m_tip_block_cv.notify_all());
     InterruptHTTPServer();
@@ -466,7 +472,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
 
     // Hidden Options
     std::vector<std::string> hidden_args = {
-        "-dbcrashratio", "-forcecompactdb",
+        "-dbcrashratio", "-dbcrashat", "-forcecompactdb",
         // GUI args. These will be overwritten by SetupUIArgs for the GUI
         "-choosedatadir", "-lang=<lang>", "-min", "-resetguisettings", "-splash", "-uiplatform"};
 
@@ -669,7 +675,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
 
 
     argsman.AddArg("-blockmaxweight=<n>", strprintf("Set maximum BIP141 block weight (default: %d)", DEFAULT_BLOCK_MAX_WEIGHT), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::BLOCK_CREATION);
-    argsman.AddArg("-blockreservedweight=<n>", strprintf("Reserve space for the fixed-size block header plus the largest coinbase transaction the mining software may add to the block. (default: %d).", DEFAULT_BLOCK_RESERVED_WEIGHT), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
+    argsman.AddArg("-blockreservedweight=<n>", strprintf("Reserve space for the fixed-size block header plus the largest coinbase transaction the mining software may add to the block. Only affects mining RPC clients, not IPC clients. (default: %d).", DEFAULT_BLOCK_RESERVED_WEIGHT), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-blockmintxfee=<amt>", strprintf("Set lowest fee rate (in %s/kvB) for transactions to be included in block creation. (default: %s)", CURRENCY_UNIT, FormatMoney(DEFAULT_BLOCK_MIN_TX_FEE)), ArgsManager::ALLOW_ANY, OptionsCategory::BLOCK_CREATION);
     argsman.AddArg("-blockversion=<n>", "Override block version to test forking scenarios", ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::BLOCK_CREATION);
 
@@ -1047,6 +1053,10 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         if (block_reserved_weight < MINIMUM_BLOCK_RESERVED_WEIGHT) {
             return InitError(strprintf(_("Specified -blockreservedweight (%d) is lower than minimum safety value of (%d)"), block_reserved_weight, MINIMUM_BLOCK_RESERVED_WEIGHT));
         }
+        const auto max_block_weight = args.GetIntArg("-blockmaxweight", DEFAULT_BLOCK_MAX_WEIGHT);
+        if (block_reserved_weight > max_block_weight) {
+            return InitError(Untranslated(strprintf("Specified -blockreservedweight (%d) exceeds -blockmaxweight (%d)", block_reserved_weight, max_block_weight)));
+        }
     }
 
     nBytesPerSigOp = args.GetIntArg("-bytespersigop", nBytesPerSigOp);
@@ -1107,6 +1117,9 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         if (!mempool_result) {
             return InitError(util::ErrorString(mempool_result));
         }
+        if (auto cache_result{node::CheckCacheOptions(args, mempool_opts.max_size_bytes, g_enabled_filter_types.size())}; !cache_result) {
+            return InitError(util::ErrorString(cache_result));
+        }
     }
 
     return true;
@@ -1160,7 +1173,8 @@ bool AppInitLockDirectories()
 bool AppInitInterfaces(NodeContext& node)
 {
     node.chain = node.init->makeChain();
-    node.mining = node.init->makeMining();
+    // Internal construction precedes chainstate loading; external IPC callers wait.
+    node.mining = interfaces::MakeMining(node, /*wait_loaded=*/false);
     return true;
 }
 
@@ -1967,6 +1981,12 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         return false;
     }
 
+    {
+        LOCK(node.mining_mutex);
+        node.mining_ready = true;
+        node.mining_cv.notify_all();
+    }
+
     // ********************************************************* Step 12: start node
 
     int64_t best_block_time{};
@@ -2085,7 +2105,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         StartTorControl(onion_service_target);
     }
 
-    if (connOptions.bind_on_any) {
+    if (connOptions.ShouldDiscover()) {
         // Only add all IP addresses of the machine if we would be listening on
         // any address - 0.0.0.0 (IPv4) and :: (IPv6).
         Discover();

@@ -91,6 +91,23 @@ class ScantxoutsetTest(BitcoinTestFramework):
         assert_raises_rpc_error(-8, "Range specified as [begin,end] must not have begin after end", self.nodes[0].scantxoutset, "start", [{"desc": "desc", "range": [2, 1]}])
         assert_raises_rpc_error(-8, "Range is too large", self.nodes[0].scantxoutset, "start", [{"desc": "desc", "range": [0, 1000001]}])
 
+        range_end = 2**31 - 1
+        for scan_range in [[range_end, range_end], [range_end - 1, range_end]]:
+            # Fixed descriptors ignore a valid range and still find the same UTXO.
+            terminal_scan = self.nodes[0].scantxoutset("start", [{"desc": f"wpkh({pub.hex()})", "range": scan_range}])
+            assert_equal(terminal_scan["success"], True)
+            assert has_sent_outpoint(terminal_scan, tx_wpkh)
+            # PQHD seeds stay wallet-local; scan RPCs must preserve this error.
+            pqhd_desc = f"wpkh(pqhd({'00' * 32})/10007h/6868h/7h/0h/0h/*h)"
+            assert_raises_rpc_error(-5, "PQHD expansion requires wallet seed access or cached public keys", self.nodes[0].scantxoutset, "start", [{"desc": pqhd_desc, "range": scan_range}])
+        for scan_range, message in [
+            ([range_end, range_end + 1], "End of range is too high"),
+            ([range_end, range_end - 1], "Range specified as [begin,end] must not have begin after end"),
+            ([range_end - 1000000, range_end], "Range is too large"),
+            ([0, "1"], "Range must be specified as end or as [begin,end]"),
+        ]:
+            assert_raises_rpc_error(-8, message, self.nodes[0].scantxoutset, "start", [{"desc": "raw(51)", "range": scan_range}])
+
         self.log.info("Test simple descriptor scans with raw pubkeys.")
         scan_wpkh_single = self.nodes[0].scantxoutset("start", [f"wpkh({pub.hex()})"])
         assert has_sent_outpoint(scan_wpkh_single, tx_wpkh)

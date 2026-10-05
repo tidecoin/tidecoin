@@ -9,8 +9,11 @@
 #include <consensus/merkle.h>
 #include <consensus/tx_verify.h>
 #include <interfaces/mining.h>
+#include <node/kernel_notifications.h>
+#include <util/signalinterrupt.h>
 #include <node/miner.h>
 #include <policy/policy.h>
+#include <test/util/mining.h>
 #include <test/util/random.h>
 #include <test/util/transaction_utils.h>
 #include <test/util/txmempool.h>
@@ -27,7 +30,9 @@
 
 #include <test/util/setup_common.h>
 
+#include <future>
 #include <memory>
+#include <numeric>
 #include <vector>
 
 #include <boost/test/unit_test.hpp>
@@ -62,7 +67,7 @@ struct MinerTestingSetup : public TestingSetup {
     }
     std::unique_ptr<Mining> MakeMining()
     {
-        return interfaces::MakeMining(m_node);
+        return interfaces::MakeMining(m_node, /*wait_loaded=*/false);
     }
 };
 } // namespace miner_tests
@@ -113,6 +118,8 @@ void MinerTestingSetup::TestPackageSelection(const CScript& scriptPubKey, const 
     options.coinbase_output_script = scriptPubKey;
 
     LOCK(tx_mempool.cs);
+    auto empty_template{mining->createNewBlock(options)};
+    BOOST_REQUIRE(empty_template);
     // Test the ancestor feerate transaction selection.
     TestMemPoolEntryHelper entry;
 
@@ -150,6 +157,12 @@ void MinerTestingSetup::TestPackageSelection(const CScript& scriptPubKey, const 
     BOOST_REQUIRE(block_template);
     CBlock block{block_template->getBlock()};
     BOOST_REQUIRE_EQUAL(block.vtx.size(), 4U);
+    // The wait threshold is inclusive and compares total template fees.
+    const auto fees = block_template->getTxFees();
+    const CAmount total_fees = std::accumulate(fees.begin(), fees.end(), CAmount{0});
+    BOOST_CHECK(!empty_template->waitNext({.timeout = 0ms, .fee_threshold = total_fees + 1}));
+    BOOST_CHECK(empty_template->waitNext({.timeout = 0ms, .fee_threshold = total_fees}) != nullptr);
+    BOOST_CHECK(empty_template->waitNext({.timeout = 0ms, .fee_threshold = total_fees - 1}) != nullptr);
     BOOST_CHECK(block.vtx[1]->GetHash() == hashParentTx);
     BOOST_CHECK(block.vtx[2]->GetHash() == hashHighFeeTx);
     BOOST_CHECK(block.vtx[3]->GetHash() == hashMediumFeeTx);
@@ -683,6 +696,137 @@ void MinerTestingSetup::TestPrioritisedMining(const CScript& scriptPubKey, const
     }
 }
 
+BOOST_AUTO_TEST_CASE(modified_template_rechecks_coinbase)
+{
+    auto mining = MakeMining();
+    auto block_template = mining->createNewBlock({});
+    BOOST_REQUIRE(block_template);
+    CBlock block = block_template->getBlock();
+    // Simulate a previously validated template, then supply an invalid coinbase.
+    block.fChecked = true;
+    block.m_checked_merkle_root = true;
+    block.m_checked_witness_commitment = true;
+    CMutableTransaction coinbase{*block.vtx[0]};
+    coinbase.vout[0].nValue = -1;
+    node::AddMerkleRootAndCoinbase(block, MakeTransactionRef(coinbase), block.nVersion, block.nTime, block.nNonce);
+    BOOST_CHECK(!block.fChecked);
+    BOOST_CHECK(!block.m_checked_merkle_root);
+    BOOST_CHECK(!block.m_checked_witness_commitment);
+    std::string reason, debug;
+    BOOST_CHECK(!mining->checkBlock(block, {.check_pow = false}, reason, debug));
+    BOOST_CHECK_EQUAL(reason, "bad-txns-vout-negative");
+
+    // Also exercise insertion into an empty template and an ordinary valid coinbase.
+    block.vtx.clear();
+    node::AddMerkleRootAndCoinbase(block, block_template->getBlock().vtx[0], block.nVersion, block.nTime, block.nNonce);
+    BOOST_REQUIRE_EQUAL(block.vtx.size(), 1U);
+    BOOST_CHECK(mining->checkBlock(block, {.check_pow = false}, reason, debug));
+}
+
+BOOST_AUTO_TEST_CASE(empty_template_fee_threshold)
+{
+    auto mining{MakeMining()};
+    auto block_template{mining->createNewBlock()};
+    BOOST_REQUIRE(block_template);
+    BOOST_CHECK_EQUAL(block_template->getBlock().vtx.size(), 1U);
+    BOOST_CHECK(!block_template->waitNext({.timeout = 0ms, .fee_threshold = 1}));
+    auto same{block_template->waitNext({.timeout = 0ms, .fee_threshold = 0})};
+    BOOST_CHECK(same != nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(mining_option_validation)
+{
+    auto mining{MakeMining()};
+    m_node.args->ForceSetArg("-blockreservedweight", "12000");
+    BOOST_REQUIRE(mining->createNewBlock());
+    BOOST_CHECK_EQUAL(*BlockAssembler::m_last_block_weight, 12000);
+    BOOST_REQUIRE(mining->createNewBlock({.block_reserved_weight = 4000}));
+    BOOST_CHECK_EQUAL(*BlockAssembler::m_last_block_weight, 4000);
+    for (size_t weight : {size_t{0}, size_t{MINIMUM_BLOCK_RESERVED_WEIGHT - 1}, size_t{MAX_BLOCK_WEIGHT + 1}}) {
+        BOOST_CHECK_THROW(mining->createNewBlock({.block_reserved_weight = weight}), std::runtime_error);
+    }
+    BOOST_CHECK_THROW(mining->createNewBlock({.coinbase_output_max_additional_sigops = MAX_BLOCK_SIGOPS_COST + 1}), std::runtime_error);
+    m_node.args->ForceSetArg("-blockmaxweight", "11999");
+    BOOST_CHECK_THROW(mining->createNewBlock(), std::runtime_error);
+    m_node.args->ForceSetArg("-blockmaxweight", "12000");
+    BOOST_REQUIRE(mining->createNewBlock());
+    m_node.args->ForceSetArg("-blockmaxweight", std::to_string(MAX_BLOCK_WEIGHT + 1));
+    BOOST_CHECK_THROW(mining->createNewBlock(), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(mining_wait_interruption)
+{
+    auto mining{MakeMining()};
+    auto block_template{mining->createNewBlock()};
+    BOOST_REQUIRE(block_template);
+    // A queued interrupt is consumed once; duplicates coalesce.
+    block_template->interruptWait();
+    block_template->interruptWait();
+    BOOST_CHECK(!block_template->waitNext({.timeout = 0ms, .fee_threshold = 0}));
+    BOOST_CHECK(block_template->waitNext({.timeout = 0ms, .fee_threshold = 0}) != nullptr);
+
+    // A pending long wait is woken promptly, and later waits still work.
+    auto wait = std::async(std::launch::async, [&] { return block_template->waitNext({.timeout = 30s}); });
+    const auto before = wait.wait_for(20ms);
+    block_template->interruptWait();
+    const auto interrupted = wait.wait_for(5s);
+    BOOST_CHECK(before == std::future_status::timeout);
+    BOOST_CHECK(interrupted == std::future_status::ready);
+    BOOST_CHECK(!wait.get());
+    BOOST_CHECK(block_template->waitNext({.timeout = 0ms, .fee_threshold = 0}) != nullptr);
+
+    // If a new tip and an interruption are both ready, consume interruption
+    // first. The following wait must still return the new tip's template.
+    block_template->interruptWait();
+    BOOST_CHECK(!MineBlock(m_node, BlockAssembler::Options{}).IsNull());
+    BOOST_CHECK(!block_template->waitNext({.timeout = 0ms}));
+    auto next_tip = block_template->waitNext({.timeout = 0ms});
+    BOOST_REQUIRE(next_tip);
+    BOOST_CHECK(next_tip->getBlockHeader().hashPrevBlock != block_template->getBlockHeader().hashPrevBlock);
+
+    // Node shutdown also terminates waits.
+    BOOST_REQUIRE((*m_node.shutdown_signal)());
+    WITH_LOCK(m_node.notifications->m_tip_block_mutex, m_node.notifications->m_tip_block_cv.notify_all());
+    BOOST_CHECK(!block_template->waitNext({.timeout = 0ms}));
+    BOOST_REQUIRE(m_node.shutdown_signal->reset());
+}
+
+BOOST_AUTO_TEST_CASE(mining_startup_readiness)
+{
+    // External clients must not obtain an interface before state is published.
+    // This synchronization object survives replacement of chainstate/notifications.
+    auto wait = std::async(std::launch::async, [&] { return interfaces::MakeMining(m_node); });
+    const auto before = wait.wait_for(20ms);
+    {
+        LOCK(m_node.mining_mutex);
+        m_node.mining_ready = true;
+        m_node.mining_cv.notify_all();
+    }
+    auto mining = wait.get();
+    BOOST_CHECK(before == std::future_status::timeout);
+    BOOST_REQUIRE(mining);
+    BOOST_CHECK(mining->getTip().has_value());
+    BOOST_CHECK(mining->createNewBlock() != nullptr);
+
+    // Shutdown before even allocating chainstate/notifications must also release callers.
+    node::NodeContext early;
+    util::SignalInterrupt interrupt;
+    early.shutdown_signal = &interrupt;
+    auto early_wait = std::async(std::launch::async, [&] { return interfaces::MakeMining(early); });
+    const auto early_before = early_wait.wait_for(20ms);
+    // Failed initialization reaches Interrupt without necessarily setting the
+    // shutdown signal. The stable stopping flag must handle that case too.
+    {
+        LOCK(early.mining_mutex);
+        early.mining_stopping = true;
+        early.mining_cv.notify_all();
+    }
+    const auto stopped = early_wait.wait_for(5s);
+    BOOST_CHECK(early_before == std::future_status::timeout);
+    BOOST_CHECK(stopped == std::future_status::ready);
+    BOOST_CHECK(!early_wait.get());
+}
+
 // NOTE: These tests rely on CreateNewBlock doing its own self-validation!
 BOOST_AUTO_TEST_CASE(CreateNewBlock_validity)
 {
@@ -761,6 +905,7 @@ BOOST_AUTO_TEST_CASE(CreateNewBlock_validity)
             txCoinbase.version = 1;
             txCoinbase.vin[0].scriptSig = CScript{} << (current_height + 1) << bi.extranonce;
             txCoinbase.vout.resize(1); // Ignore the (optional) segwit commitment added by CreateNewBlock (as the hardcoded nonces don't account for this)
+            txCoinbase.vin[0].scriptWitness.SetNull(); // No witness data without a commitment.
             txCoinbase.vout[0].scriptPubKey = CScript();
             block.vtx[0] = MakeTransactionRef(txCoinbase);
             if (txFirst.size() == 0)

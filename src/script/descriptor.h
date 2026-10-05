@@ -148,6 +148,9 @@ struct Descriptor {
     /** Return PQHD seed/path information if this descriptor maps to a single PQHD key path. */
     virtual std::optional<PQHDKeyPathInfo> GetPQHDKeyPathInfo() const = 0;
 
+    /** PQHD key paths indexed by their cache expression position. */
+    virtual std::map<uint32_t, PQHDKeyPathInfo> GetPQHDKeyPaths() const = 0;
+
     /** Return all PQHD seed ids referenced by this descriptor. */
     virtual std::set<uint256> GetPQHDSeedIDs() const = 0;
 };

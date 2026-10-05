@@ -45,6 +45,17 @@ struct ConnmanTestMsg : public CConnman {
         m_peer_connect_timeout = timeout;
     }
 
+    bool StopWithPendingReconnection() EXCLUSIVE_LOCKS_REQUIRED(!m_reconnections_mutex)
+    {
+        semOutbound = std::make_unique<std::counting_semaphore<>>(1);
+        {
+            LOCK(m_reconnections_mutex);
+            m_reconnections.push_back({CAddress{}, CountingSemaphoreGrant<>{*semOutbound}, "", ConnectionType::OUTBOUND_FULL_RELAY, false});
+        }
+        StopNodes();
+        return WITH_LOCK(m_reconnections_mutex, return m_reconnections.empty());
+    }
+
     void ResetAddrCache();
     void ResetMaxOutboundCycle();
 

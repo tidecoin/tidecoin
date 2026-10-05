@@ -113,10 +113,17 @@ static void ApplyStats(CCoinsStats& stats, const std::map<uint32_t, Coin>& outpu
 
 //! Calculate statistics about the unspent transaction output set
 template <typename T>
-static bool ComputeUTXOStats(CCoinsView* view, CCoinsStats& stats, T hash_obj, const std::function<void()>& interruption_point)
+static std::optional<CCoinsStats> ComputeUTXOStats(CCoinsView* view, node::BlockManager& blockman, T hash_obj, const std::function<void()>& interruption_point)
 {
-    std::unique_ptr<CCoinsViewCursor> pcursor(view->Cursor());
-    assert(pcursor);
+    std::unique_ptr<CCoinsViewCursor> pcursor;
+    const CBlockIndex* pindex;
+    {
+        LOCK(cs_main);
+        pcursor = view->Cursor();
+        assert(pcursor);
+        pindex = blockman.LookupBlockIndex(pcursor->GetBestBlock());
+    }
+    CCoinsStats stats{Assert(pindex)->nHeight, pindex->GetBlockHash()};
 
     Txid prevkey;
     std::map<uint32_t, Coin> outputs;
@@ -135,7 +142,7 @@ static bool ComputeUTXOStats(CCoinsView* view, CCoinsStats& stats, T hash_obj, c
             stats.coins_count++;
         } else {
             LogError("%s: unable to read value\n", __func__);
-            return false;
+            return std::nullopt;
         }
         pcursor->Next();
     }
@@ -148,35 +155,25 @@ static bool ComputeUTXOStats(CCoinsView* view, CCoinsStats& stats, T hash_obj, c
 
     stats.nDiskSize = view->EstimateSize();
 
-    return true;
+    return stats;
 }
 
 std::optional<CCoinsStats> ComputeUTXOStats(CoinStatsHashType hash_type, CCoinsView* view, node::BlockManager& blockman, const std::function<void()>& interruption_point)
 {
-    CBlockIndex* pindex = WITH_LOCK(::cs_main, return blockman.LookupBlockIndex(view->GetBestBlock()));
-    CCoinsStats stats{Assert(pindex)->nHeight, pindex->GetBlockHash()};
-
-    bool success = [&]() -> bool {
-        switch (hash_type) {
-        case(CoinStatsHashType::HASH_SERIALIZED): {
-            HashWriter ss{};
-            return ComputeUTXOStats(view, stats, ss, interruption_point);
-        }
-        case(CoinStatsHashType::MUHASH): {
-            MuHash3072 muhash;
-            return ComputeUTXOStats(view, stats, muhash, interruption_point);
-        }
-        case(CoinStatsHashType::NONE): {
-            return ComputeUTXOStats(view, stats, nullptr, interruption_point);
-        }
-        } // no default case, so the compiler can warn about missing cases
-        assert(false);
-    }();
-
-    if (!success) {
-        return std::nullopt;
+    switch (hash_type) {
+    case(CoinStatsHashType::HASH_SERIALIZED): {
+        HashWriter ss{};
+        return ComputeUTXOStats(view, blockman, ss, interruption_point);
     }
-    return stats;
+    case(CoinStatsHashType::MUHASH): {
+        MuHash3072 muhash;
+        return ComputeUTXOStats(view, blockman, muhash, interruption_point);
+    }
+    case(CoinStatsHashType::NONE): {
+        return ComputeUTXOStats(view, blockman, nullptr, interruption_point);
+    }
+    } // no default case, so the compiler can warn about missing cases
+    assert(false);
 }
 
 static void FinalizeHash(HashWriter& ss, CCoinsStats& stats)

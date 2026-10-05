@@ -77,6 +77,8 @@ void TestAddAddressesToSendBook(interfaces::Node& node)
     test.m_node.wallet_loader = wallet_loader.get();
     node.setContext(&test.m_node);
     const std::shared_ptr<CWallet> wallet = std::make_shared<CWallet>(node.context()->chain.get(), "", CreateMockableWalletDatabase());
+    // Address-book behavior does not depend on the default keypool size.
+    wallet->m_keypool_size = 4;
     wallet->LoadWallet();
     wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
     {

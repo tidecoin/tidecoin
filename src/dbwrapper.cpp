@@ -223,6 +223,10 @@ CDBWrapper::CDBWrapper(const DBParams& params)
     DBContext().syncoptions.sync = true;
     DBContext().options = GetOptions(params.cache_bytes);
     DBContext().options.create_if_missing = true;
+    if (params.options.env) {
+        assert(!params.memory_only);
+        DBContext().options.env = params.options.env;
+    }
     if (params.memory_only) {
         DBContext().penv = leveldb::NewMemEnv(leveldb::Env::Default());
         DBContext().options.env = DBContext().penv;

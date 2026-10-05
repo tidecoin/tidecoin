@@ -455,8 +455,24 @@ void univalue_readwrite()
     BOOST_CHECK(!v.read("{} 42"));
 }
 
+void univalue_failed_read_clears_value()
+{
+    for (const auto json : {"", "{\"key\":", "[1,", "{\"key\":1}garbage", "null false"}) {
+        UniValue value{"previous value"};
+        BOOST_CHECK(!value.read(json));
+        BOOST_CHECK(value.isNull());
+        BOOST_CHECK_EQUAL(value.write(), "null");
+        BOOST_CHECK(value.read("{\"ok\":true}"));
+        BOOST_CHECK(value["ok"].get_bool());
+    }
+    UniValue value{"previous value"};
+    BOOST_CHECK(value.read("null"));
+    BOOST_CHECK(value.isNull());
+}
+
 int main(int argc, char* argv[])
 {
+    univalue_failed_read_clears_value();
     univalue_constructor();
     univalue_push_throw();
     univalue_typecheck();

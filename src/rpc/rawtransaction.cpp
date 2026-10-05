@@ -1309,7 +1309,7 @@ static RPCHelpMan combinepsbt()
 
     PartiallySignedTransaction merged_psbt;
     if (!CombinePSBTs(merged_psbt, psbtxs)) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "PSBTs not compatible (different transactions)");
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "PSBTs not compatible (different transactions or conflicting PQHD origins)");
     }
 
     DataStream ssTx{};
@@ -1493,7 +1493,8 @@ static RPCHelpMan utxoupdatepsbt()
 {
     return RPCHelpMan{
         "utxoupdatepsbt",
-        "Updates all segwit inputs and outputs in a PSBT with data from output descriptors, the UTXO set, txindex, or the mempool.\n",
+        "Updates all segwit inputs and outputs in a PSBT with data from output descriptors, the UTXO set, txindex, or the mempool.\n"
+        "Registered PQHD descriptors use public data from the explicitly selected wallet (-rpcwallet); no wallet signing is performed.\n",
             {
                 {"psbt", RPCArg::Type::STR, RPCArg::Optional::NO, "A base64 string of a PSBT"},
                 {"descriptors", RPCArg::Type::ARR, RPCArg::Optional::OMITTED, "An array of either strings or objects", {
@@ -1514,12 +1515,15 @@ static RPCHelpMan utxoupdatepsbt()
 {
     // Parse descriptors, if any.
     FlatSigningProvider provider;
+    RPCDescriptorResolver resolver{request};
     if (!request.params[1].isNull()) {
         auto descs = request.params[1].get_array();
         for (size_t i = 0; i < descs.size(); ++i) {
-            EvalDescriptorStringOrObject(descs[i], provider);
+            EvalDescriptorStringOrObject(descs[i], provider, /*expand_priv=*/false, resolver.GetExpander());
         }
     }
+
+    resolver.Finish();
 
     // We don't actually need private keys further on; hide them as a precaution.
     const PartiallySignedTransaction& psbtx = ProcessPSBT(
@@ -1748,7 +1752,9 @@ RPCHelpMan descriptorprocesspsbt()
     return RPCHelpMan{
         "descriptorprocesspsbt",
         "Update all segwit inputs in a PSBT with information from output descriptors, the UTXO set or the mempool. \n"
-                "Then, sign the inputs we are able to with information from the output descriptors. ",
+                "Then, sign using only private keys supplied in the descriptors.\n"
+                "Registered PQHD descriptors may resolve public data through an explicitly selected wallet (-rpcwallet).\n"
+                "This does not authorize use of wallet private keys or seeds for signing; use walletprocesspsbt for wallet signing.\n",
                 {
                     {"psbt", RPCArg::Type::STR, RPCArg::Optional::NO, "The transaction base64 string"},
                     {"descriptors", RPCArg::Type::ARR, RPCArg::Optional::NO, "An array of either strings or objects", {
@@ -1783,11 +1789,14 @@ RPCHelpMan descriptorprocesspsbt()
 {
     // Add descriptor information to a signing provider
     FlatSigningProvider provider;
+    RPCDescriptorResolver resolver{request};
 
     auto descs = request.params[1].get_array();
     for (size_t i = 0; i < descs.size(); ++i) {
-        EvalDescriptorStringOrObject(descs[i], provider, /*expand_priv=*/true);
+        EvalDescriptorStringOrObject(descs[i], provider, /*expand_priv=*/true, resolver.GetExpander());
     }
+
+    resolver.Finish();
 
     std::optional<int> sighash_type = ParseSighashString(request.params[2]);
     bool finalize = request.params[3].isNull() ? true : request.params[3].get_bool();
@@ -1800,10 +1809,12 @@ RPCHelpMan descriptorprocesspsbt()
         finalize,
         GetCurrentScriptVerifyFlags(request.context));
 
-    // Check whether or not all of the inputs are now signed
+    // Presence of final fields is not proof that their scripts/signatures verify.
+    const auto txdata = PrecomputePSBTData(psbtx);
+    const unsigned int script_verify_flags = GetCurrentScriptVerifyFlags(request.context);
     bool complete = true;
-    for (const auto& input : psbtx.inputs) {
-        complete &= PSBTInputSigned(input);
+    for (size_t i = 0; i < psbtx.inputs.size(); ++i) {
+        complete &= PSBTInputSignedAndVerified(psbtx, i, &txdata, script_verify_flags);
     }
 
     DataStream ssTx{};
@@ -1814,7 +1825,6 @@ RPCHelpMan descriptorprocesspsbt()
     result.pushKV("psbt", EncodeBase64(ssTx));
     result.pushKV("complete", complete);
     if (complete) {
-        const unsigned int script_verify_flags = GetCurrentScriptVerifyFlags(request.context);
         CMutableTransaction mtx;
         PartiallySignedTransaction psbtx_copy = psbtx;
         CHECK_NONFATAL(FinalizeAndExtractPSBT(psbtx_copy, mtx, script_verify_flags));

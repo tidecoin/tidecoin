@@ -10,6 +10,9 @@
 #include <node/miner.h>
 #include <pow.h>
 #include <random.h>
+#include <script/sign.h>
+#include <script/signingprovider.h>
+#include <script/solver.h>
 #include <test/util/random.h>
 #include <test/util/script.h>
 #include <test/util/setup_common.h>
@@ -17,6 +20,8 @@
 #include <validation.h>
 #include <validationinterface.h>
 
+#include <algorithm>
+#include <array>
 #include <thread>
 
 using node::BlockAssembler;
@@ -45,6 +50,46 @@ struct ScopedConsensusMutation {
 } // namespace validation_block_tests
 
 BOOST_FIXTURE_TEST_SUITE(validation_block_tests, MinerTestingSetup)
+
+BOOST_FIXTURE_TEST_CASE(queued_pq_checks_complete_on_invalid_block, TestChain100Setup)
+{
+    BOOST_REQUIRE(m_node.chainman->GetCheckQueue().HasThreads());
+    const CScript output = GetScriptForRawPubKey(coinbaseKey.GetPubKey());
+    CreateAndProcessBlock({}, output); // Mature the second coinbase too.
+    FillableSigningProvider provider;
+    provider.AddKey(coinbaseKey);
+    auto spend = [&](const CTransactionRef& previous) {
+        CMutableTransaction tx;
+        tx.vin.emplace_back(COutPoint{previous->GetHash(), 0});
+        tx.vout.emplace_back(previous->vout[0].nValue - 1000, output);
+        std::map<COutPoint, Coin> coins;
+        coins[tx.vin[0].prevout].out = previous->vout[0];
+        std::map<int, bilingual_str> errors;
+        BOOST_REQUIRE(SignTransaction(tx, &provider, coins, SIGHASH_ALL, errors));
+        return tx;
+    };
+    const auto first = spend(m_coinbase_txns[0]);
+    const auto second = spend(m_coinbase_txns[1]);
+    const auto tip = WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip()->GetBlockHash());
+    for (bool missing_input : {false, true}) {
+        auto invalid = second;
+        if (missing_input) {
+            invalid.vin[0].prevout.hash = Txid::FromUint256(uint256::ONE);
+        } else {
+            BOOST_REQUIRE(!invalid.vin[0].scriptSig.empty());
+            invalid.vin[0].scriptSig[invalid.vin[0].scriptSig.size() / 2] ^= 1;
+        }
+        // The first transaction queues a valid PQ check. The second either
+        // fails a queued check or exits input validation with work outstanding.
+        const auto block = CreateAndProcessBlock({first, invalid}, output);
+        BOOST_CHECK(WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip()->GetBlockHash()) == tip);
+        const auto index = WITH_LOCK(cs_main, return m_node.chainman->m_blockman.LookupBlockIndex(block.GetHash()));
+        BOOST_REQUIRE(index);
+        BOOST_CHECK(WITH_LOCK(cs_main, return index->nStatus & BLOCK_FAILED_VALID));
+    }
+    const auto valid = CreateAndProcessBlock({first, second}, output);
+    BOOST_CHECK(WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip()->GetBlockHash()) == valid.GetHash());
+}
 
 struct TestSubscriber final : public CValidationInterface {
     uint256 m_expected_tip;
@@ -170,6 +215,90 @@ void MinerTestingSetup::BuildChain(const uint256& root, int height, const unsign
         blocks.push_back(GoodBlock(root));
         BuildChain(blocks.back()->GetHash(), height - 1, invalid_rate, branch_rate, max_size, blocks);
     }
+}
+
+BOOST_AUTO_TEST_CASE(unlinked_shared_ancestors_reorg)
+{
+    auto& chainman = *m_node.chainman;
+    auto& chainstate = chainman.ActiveChainstate();
+    auto& blockman = chainman.m_blockman;
+    const auto genesis = Params().GenesisBlock().GetHash();
+    auto active_hash = genesis;
+    for (int height{1}; height <= 3; ++height) {
+        const auto block = GoodBlock(active_hash);
+        BOOST_REQUIRE(chainman.ProcessNewBlock(block, true, true, nullptr));
+        active_hash = block->GetHash();
+    }
+
+    // Two better tips share ancestors on a fork with a pruned first block:
+    // genesis -> missing -> shared1 -> shared2 -> {tip1, tip2}.
+    const auto missing = GoodBlock(genesis);
+    const auto shared1 = GoodBlock(missing->GetHash());
+    const auto shared2 = GoodBlock(shared1->GetHash());
+    const auto tip1 = GoodBlock(shared2->GetHash());
+    const auto tip2 = GoodBlock(shared2->GetHash());
+    const std::array blocks{missing, shared1, shared2, tip1, tip2};
+    std::array<CBlockIndex*, 5> indexes{};
+    {
+        LOCK(cs_main);
+        for (size_t i{0}; i < blocks.size(); ++i) {
+            BlockValidationState state;
+            BOOST_REQUIRE(chainman.AcceptBlock(blocks[i], state, &indexes[i], true, nullptr, nullptr, true));
+        }
+        indexes[0]->nStatus &= ~(BLOCK_HAVE_DATA | BLOCK_HAVE_UNDO);
+        indexes[0]->nDataPos = indexes[0]->nUndoPos = 0;
+        blockman.m_have_pruned = true;
+    }
+
+    for (int repeat{0}; repeat < 3; ++repeat) {
+        {
+            LOCK(cs_main);
+            // Reconsider the same competing branches, as newly arriving tips
+            // or chain reconsideration can cause repeated traversal.
+            chainstate.TryAddBlockIndexCandidate(indexes[3]);
+            chainstate.TryAddBlockIndexCandidate(indexes[4]);
+        }
+        BlockValidationState state;
+        BOOST_REQUIRE(chainstate.ActivateBestChain(state));
+        LOCK(cs_main);
+        BOOST_CHECK(chainstate.m_chain.Tip()->GetBlockHash() == active_hash);
+        BOOST_REQUIRE_EQUAL(blockman.m_blocks_unlinked.size(), 4U);
+        for (size_t i{1}; i < indexes.size(); ++i) {
+            const auto [begin, end] = blockman.m_blocks_unlinked.equal_range(indexes[i]->pprev);
+            BOOST_CHECK_EQUAL(std::count_if(begin, end, [&](const auto& entry) { return entry.second == indexes[i]; }), 1);
+        }
+        chainman.CheckBlockIndex();
+    }
+
+    CBlockIndex* expected_tip;
+    {
+        LOCK(cs_main);
+        const auto sequence_before = chainman.nBlockSequenceId;
+        BlockValidationState state;
+        BOOST_REQUIRE(chainman.AcceptBlock(missing, state, nullptr, true, nullptr, nullptr, true));
+        BOOST_CHECK(blockman.m_blocks_unlinked.empty());
+        BOOST_CHECK_EQUAL(chainman.nBlockSequenceId - sequence_before, 5);
+        for (size_t i{0}; i < indexes.size(); ++i) {
+            BOOST_CHECK_EQUAL(indexes[i]->nSequenceId, sequence_before + i);
+            BOOST_CHECK_EQUAL(indexes[i]->m_chain_tx_count, indexes[i]->pprev->m_chain_tx_count + indexes[i]->nTx);
+        }
+        const auto& candidates = chainstate.setBlockIndexCandidates;
+        BOOST_CHECK(std::is_sorted(candidates.begin(), candidates.end(), candidates.value_comp()));
+        for (size_t i{3}; i < indexes.size(); ++i) {
+            BOOST_CHECK_EQUAL(std::count(candidates.begin(), candidates.end(), indexes[i]), 1);
+            BOOST_CHECK_EQUAL(candidates.count(indexes[i]), 1U);
+        }
+        expected_tip = *candidates.rbegin();
+        BOOST_CHECK(expected_tip == indexes[3] || expected_tip == indexes[4]);
+        chainman.CheckBlockIndex();
+    }
+    BlockValidationState state;
+    BOOST_REQUIRE(chainstate.ActivateBestChain(state));
+    BOOST_CHECK(WITH_LOCK(cs_main, return chainstate.m_chain.Tip()) == expected_tip);
+    auto* other_tip = expected_tip == indexes[3] ? indexes[4] : indexes[3];
+    BOOST_REQUIRE(chainstate.PreciousBlock(state, other_tip));
+    BOOST_CHECK(WITH_LOCK(cs_main, return chainstate.m_chain.Tip()) == other_tip);
+    chainman.CheckBlockIndex();
 }
 
 BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)

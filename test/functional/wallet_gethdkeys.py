@@ -17,6 +17,11 @@ class WalletGetHDKeyTest(BitcoinTestFramework):
         self.skip_if_no_wallet()
 
     def run_test(self):
+        help_text = self.nodes[0].help('gethdkeys')
+        assert "always returns an error" in help_text
+        assert 'listpqhdseeds' in help_text
+        assert 'listdescriptors' in help_text
+
         for wallet_name in (self.default_wallet_name, "basic"):
             if wallet_name != self.default_wallet_name:
                 self.nodes[0].createwallet(wallet_name)

@@ -12,7 +12,9 @@
 #include <rpc/blockchain.h>
 #include <rpc/client.h>
 #include <rpc/server.h>
+#include <rpc/server_util.h>
 #include <rpc/util.h>
+#include <script/descriptor.h>
 #include <script/script.h>
 #include <test/util/setup_common.h>
 #include <univalue.h>
@@ -21,6 +23,7 @@
 
 #include <array>
 #include <any>
+#include <tuple>
 
 #include <boost/test/unit_test.hpp>
 
@@ -90,6 +93,150 @@ UniValue RPCTestingSetup::CallRPC(std::string args)
 
 
 BOOST_FIXTURE_TEST_SUITE(rpc_tests, RPCTestingSetup)
+
+BOOST_AUTO_TEST_CASE(descriptor_range_boundaries)
+{
+    for (const auto& [input, low, high] : std::vector<std::tuple<std::string, int64_t, int64_t>>{
+             {"0", 0, 0}, {"999999", 0, 999999}, {"[7,8]", 7, 8},
+             {"[2147483647,2147483647]", INT32_MAX, INT32_MAX},
+             {"[2147483646,2147483647]", INT32_MAX - 1, INT32_MAX},
+             {"[2146483648,2147483647]", INT32_MAX - 999999, INT32_MAX}}) {
+        const auto range = ParseDescriptorRange(JSON(input));
+        BOOST_CHECK_EQUAL(range.first, low);
+        BOOST_CHECK_EQUAL(range.second, high);
+    }
+    for (const auto& [input, message] : std::vector<std::pair<std::string, std::string>>{
+             {"[]", "Range must be specified as end or as [begin,end]"},
+             {"[0,1,2]", "Range must be specified as end or as [begin,end]"},
+             {"[0,\"1\"]", "Range must be specified as end or as [begin,end]"},
+             {"[-1,0]", "Range should be greater or equal than 0"},
+             {"[2,1]", "Range specified as [begin,end] must not have begin after end"},
+             {"-1", "End of range is too high"},
+             {"[2147483647,2147483648]", "End of range is too high"},
+             {"[0,9223372036854775807]", "End of range is too high"},
+             {"1000000", "Range is too large"},
+             {"[2146483647,2147483647]", "Range is too large"}}) {
+        BOOST_CHECK_EXCEPTION(ParseDescriptorRange(JSON(input)), UniValue,
+                              HasJSON("{\"code\":-8,\"message\":\"" + message + "\"}"));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(descriptor_range_expansion)
+{
+    FlatSigningProvider provider;
+    std::string error;
+    auto descs = Parse("raw(51)", provider, error);
+    auto second = Parse("raw(52)", provider, error);
+    BOOST_REQUIRE_EQUAL(descs.size(), 1U);
+    BOOST_REQUIRE_EQUAL(second.size(), 1U);
+    descs.push_back(std::move(second.front()));
+    for (const bool expand_priv : {false, true}) {
+        const auto single = ExpandDescriptorRange(descs, {1, 1}, provider, provider, expand_priv);
+        BOOST_REQUIRE(single.has_value());
+        BOOST_CHECK(*single == std::vector<CScript>({CScript() << OP_TRUE, CScript() << OP_2}));
+        const auto pair = ExpandDescriptorRange(descs, {0, 1}, provider, provider, expand_priv);
+        BOOST_REQUIRE(pair.has_value());
+        BOOST_CHECK(*pair == std::vector<CScript>({CScript() << OP_TRUE, CScript() << OP_2, CScript() << OP_TRUE, CScript() << OP_2}));
+        // The public entry point still normalizes a fixed descriptor to index 0.
+        const auto fixed = EvalDescriptorStringOrObject(JSON(R"json({"desc":"raw(51)","range":[2147483647,2147483647]})json"), provider, expand_priv);
+        BOOST_CHECK(fixed == std::vector<CScript>({CScript() << OP_TRUE}));
+    }
+
+    // Bound the work even if the counter regresses and wraps: private expansion
+    // calls GetKey once per index, so an unexpected extra iteration throws.
+    struct BoundedProvider : SigningProvider {
+        CKey key;
+        mutable int remaining{0};
+        bool GetKey(const CKeyID& id, CKey& out_key) const override
+        {
+            if (remaining-- <= 0) throw std::runtime_error("Descriptor range expanded past its endpoint");
+            if (id != key.GetPubKey().GetID()) return false;
+            out_key = key;
+            return true;
+        }
+    } bounded;
+    bounded.key.MakeNewKey(pq::SchemeId::FALCON_512);
+    auto terminal_desc = Parse("pkh(" + HexStr(bounded.key.GetPubKey()) + ")", provider, error);
+    BOOST_REQUIRE_EQUAL(terminal_desc.size(), 1U);
+    const CScript expected = GetScriptForDestination(PKHash(bounded.key.GetPubKey()));
+    for (const int count : {1, 2}) {
+        bounded.remaining = count;
+        const auto scripts = ExpandDescriptorRange(terminal_desc, {int64_t{INT32_MAX} - count + 1, INT32_MAX}, bounded, provider, /*expand_priv=*/true);
+        BOOST_REQUIRE(scripts.has_value());
+        BOOST_CHECK(*scripts == std::vector<CScript>(count, expected));
+        BOOST_CHECK_EQUAL(bounded.remaining, 0);
+    }
+
+    const std::string pqhd_desc = "wpkh(pqhd(" + std::string(64, '0') + ")/10007h/6868h/7h/0h/0h/*h)";
+    auto ranged = Parse(pqhd_desc, provider, error);
+    BOOST_REQUIRE_EQUAL(ranged.size(), 1U);
+    BOOST_REQUIRE(ranged.front()->IsRange());
+    BOOST_CHECK(!ExpandDescriptorRange(ranged, {INT32_MAX, INT32_MAX}, provider, provider, false));
+    UniValue scan{UniValue::VOBJ};
+    scan.pushKV("desc", pqhd_desc);
+    scan.pushKV("range", JSON("[2147483647,2147483647]"));
+    BOOST_CHECK_EXCEPTION(EvalDescriptorStringOrObject(scan, provider), UniValue,
+                          HasJSON("{\"code\":-5,\"message\":\"PQHD expansion requires wallet seed access or cached public keys.\"}"));
+}
+
+BOOST_AUTO_TEST_CASE(descriptor_rpc_resolution)
+{
+    FlatSigningProvider provider;
+    std::string error;
+    const auto pqhd = Parse("wpkh(pqhd(" + std::string(64, '0') + ")/10007h/6868h/7h/0h/0h/*h)", provider, error);
+    BOOST_REQUIRE_EQUAL(pqhd.size(), 1U);
+    JSONRPCRequest request;
+    request.context = &m_node;
+    std::vector<CScript> scripts;
+    FlatSigningProvider out;
+    RPCDescriptorResolver resolver{request};
+    BOOST_CHECK_EXCEPTION(resolver.Expand(*pqhd[0], 0, provider, scripts, out), UniValue,
+        HasJSON(R"({"code":-5,"message":"PQHD expansion requires wallet seed access or cached public keys. Select the owning wallet explicitly with -rpcwallet."})"));
+    BOOST_CHECK(scripts.empty());
+    BOOST_CHECK(out.keys.empty());
+
+    // An explicit endpoint must not fall back to another wallet or to a seed
+    // supplied by a node-only provider. This fixture has no wallet loader.
+    BOOST_REQUIRE(m_node.wallet_loader == nullptr);
+    request.URI = "/wallet/selected";
+    BOOST_CHECK_EXCEPTION(resolver.Expand(*pqhd[0], 0, provider, scripts, out), UniValue,
+        HasJSON(R"({"code":-18,"message":"Wallet support is not available"})"));
+
+    // Self-contained scripts remain independent of the selected wallet.
+    const auto fixed = Parse("raw(51)", provider, error);
+    BOOST_REQUIRE_EQUAL(fixed.size(), 1U);
+    BOOST_REQUIRE(resolver.Expand(*fixed[0], 0, provider, scripts, out));
+    BOOST_CHECK(scripts == std::vector<CScript>{CScript{} << OP_TRUE});
+    resolver.Finish();
+
+    int interruptions{0};
+    RPCDescriptorResolver interrupted{request, [&] {
+        ++interruptions;
+        throw std::runtime_error("test abort");
+    }};
+    BOOST_CHECK_THROW(interrupted.Expand(*fixed[0], 0, provider, scripts, out), std::runtime_error);
+    BOOST_CHECK_EQUAL(interruptions, 1);
+
+    // The shared range path must invoke the resolver at every inclusive index,
+    // including INT32_MAX, and propagate interruption without a partial result.
+    std::vector<int32_t> indices;
+    const DescriptorExpandFn expand = [&](const Descriptor& desc, int32_t index, const SigningProvider&, std::vector<CScript>& result, FlatSigningProvider&) {
+        BOOST_CHECK_EQUAL(desc.ToString(), pqhd[0]->ToString());
+        indices.push_back(index);
+        result = {CScript{} << OP_TRUE};
+        return true;
+    };
+    auto expanded = ExpandDescriptorRange(pqhd, {INT32_MAX - 1, INT32_MAX}, provider, out, false, expand);
+    BOOST_REQUIRE(expanded.has_value());
+    BOOST_CHECK_EQUAL(expanded->size(), 2U);
+    BOOST_CHECK(indices == std::vector<int32_t>({INT32_MAX - 1, INT32_MAX}));
+    const DescriptorExpandFn abort = [&](const Descriptor&, int32_t index, const SigningProvider&, std::vector<CScript>& result, FlatSigningProvider&) {
+        if (index == INT32_MAX) throw std::runtime_error("test abort");
+        result = {CScript{} << OP_TRUE};
+        return true;
+    };
+    BOOST_CHECK_THROW(ExpandDescriptorRange(pqhd, {INT32_MAX - 1, INT32_MAX}, provider, out, false, abort), std::runtime_error);
+}
 
 BOOST_AUTO_TEST_CASE(rpc_namedparams)
 {

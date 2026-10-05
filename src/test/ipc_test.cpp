@@ -88,6 +88,33 @@ void IpcPipeTest()
     UniValue uni2{foo->passUniValue(uni1)};
     BOOST_CHECK_EQUAL(uni1.write(), uni2.write());
 
+    // Bypass the typed client serializer to send malformed JSON over the real
+    // pipe. The server must reject it and remain usable for the next request.
+    auto raw_json = [&](const std::string& json) {
+        std::promise<std::string> response;
+        auto future = response.get_future();
+        auto& loop = *foo->m_context.connection->m_loop;
+        loop.sync([&] {
+            auto request = foo->m_client.passUniValueRequest();
+            request.setArg(json);
+            loop.m_task_set->add(request.send().then([&](auto result) {
+                response.set_value(result.getResult().cStr());
+            }, [&](kj::Exception&& error) {
+                response.set_exception(std::make_exception_ptr(std::runtime_error(error.getDescription().cStr())));
+            }));
+        });
+        return future.get();
+    };
+    for (const std::string json : {"", "{\"key\":", "[1,", "{\"key\":1}garbage", "null false"}) {
+        BOOST_CHECK_EXCEPTION(raw_json(json), std::runtime_error, [](const auto& error) {
+            return std::string{error.what()}.find("invalid JSON received over IPC") != std::string::npos;
+        });
+        BOOST_CHECK_EQUAL(foo->add(1, 2), 3);
+    }
+    for (const std::string json : {"null", "{}", "[]", "true", "123", "\"text\""}) {
+        BOOST_CHECK_EQUAL(raw_json(json), json);
+    }
+
     CMutableTransaction mtx;
     mtx.version = 2;
     mtx.nLockTime = 3;

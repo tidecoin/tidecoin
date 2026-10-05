@@ -139,7 +139,15 @@ bool WriteSettings(const fs::path& path,
         return false;
     }
     file << out.write(/* prettyIndent= */ 4, /* indentLevel= */ 1) << std::endl;
+    if (file.fail()) {
+        errors.emplace_back(strprintf("Error: Unable to write settings file %s", fs::PathToString(path)));
+        return false;
+    }
     file.close();
+    if (file.fail()) {
+        errors.emplace_back(strprintf("Error: Unable to close settings file %s", fs::PathToString(path)));
+        return false;
+    }
     return true;
 }
 

@@ -1239,6 +1239,13 @@ BOOST_AUTO_TEST_CASE(muhash_tests)
         a.Finalize(out2);
 
         BOOST_CHECK_EQUAL(out, out2);
+
+        // Adapted from Bitcoin Core PR 36286: exercise a nontrivial denominator.
+        y /= x;
+        const MuHash3072& self_divisor = y;
+        y /= self_divisor;
+        y.Finalize(out);
+        BOOST_CHECK_EQUAL(out, out2);
     }
 
     MuHash3072 acc = FromInt(0);
@@ -1278,6 +1285,56 @@ BOOST_AUTO_TEST_CASE(muhash_tests)
     uint256 out4;
     overflowchk.Finalize(out4);
     BOOST_CHECK_EQUAL(HexStr(out4), "3a31e6903aff0de9f62f9a9f7f8b861de76ce2cda09822b90014319ae5dc2271");
+}
+
+BOOST_AUTO_TEST_CASE(muhash_self_division)
+{
+    const uint256 empty_hash{"dd5ad2a105c2d29495f577245c357409002329b9f4d6182c0af3dc2f462555c8"};
+    const unsigned char item_a[32] = {1};
+    const unsigned char item_b[32] = {2};
+    uint256 singleton_hash;
+    MuHash3072{item_a}.Finalize(singleton_hash);
+
+    auto check = [&](const MuHash3072& original) {
+        MuHash3072 self = original;
+        MuHash3072 separate = original;
+        const MuHash3072 divisor = original;
+        separate /= divisor;
+        const MuHash3072& alias = self;
+        self /= alias;
+        uint256 actual, expected;
+        self.Finalize(actual);
+        separate.Finalize(expected);
+        BOOST_CHECK_EQUAL(actual, expected);
+        BOOST_CHECK_EQUAL(actual, empty_hash);
+        self.Finalize(actual);
+        BOOST_CHECK_EQUAL(actual, empty_hash);
+        self.Insert(item_a);
+        self.Finalize(actual);
+        BOOST_CHECK_EQUAL(actual, singleton_hash);
+    };
+
+    check(MuHash3072{});
+    check(MuHash3072{item_a});
+    MuHash3072 removed{item_a};
+    removed.Insert(item_b);
+    removed.Remove(item_a);
+    check(removed);
+    MuHash3072 divided{item_a};
+    divided /= MuHash3072{item_b};
+    check(divided);
+    MuHash3072 balanced{item_a};
+    balanced.Remove(item_a); // Empty value with a nontrivial internal denominator.
+    check(balanced);
+
+    DataStream stream{};
+    stream << removed;
+    MuHash3072 reloaded;
+    stream >> reloaded;
+    check(reloaded);
+    uint256 unused;
+    removed.Finalize(unused); // Finalize normalizes the denominator to one.
+    check(removed);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -19,9 +19,9 @@ constexpr const char* PQHD_STREAM_INFO = "Tidecoin PQHD stream key v1";
 constexpr const char* PQHD_RNG_PREFIX = "Tidecoin PQHD rng v1";
 constexpr const char* PQHD_SEEDID_TAG = "Tidecoin PQHD seedid v1";
 
-std::array<uint8_t, 64> HmacSha512(std::span<const uint8_t> key, std::span<const uint8_t> msg)
+KeygenStreamKey64 HmacSha512(std::span<const uint8_t> key, std::span<const uint8_t> msg)
 {
-    std::array<uint8_t, 64> out{};
+    KeygenStreamKey64 out;
     CHMAC_SHA512(key.data(), key.size()).Write(msg.data(), msg.size()).Finalize(out.data());
     return out;
 }
@@ -38,7 +38,9 @@ std::array<uint8_t, 4> Ser32BE(uint32_t v)
 SeedID32 ComputeSeedID32(std::span<const uint8_t, 32> master_seed)
 {
     SeedID32 out{};
-    CSHA256()
+    CSHA256 hasher;
+    const ScopedMemoryCleanse cleanse_hasher{&hasher, sizeof(hasher)};
+    hasher
         .Write(reinterpret_cast<const uint8_t*>(PQHD_SEEDID_TAG), std::strlen(PQHD_SEEDID_TAG))
         .Write(master_seed.data(), master_seed.size())
         .Finalize(out.data());
@@ -83,6 +85,7 @@ std::optional<Node> DeriveChild(const Node& parent, uint32_t index_hardened)
     if ((index_hardened & 0x80000000U) == 0) return std::nullopt;
 
     std::array<uint8_t, 1 + 32 + 4> data{};
+    const ScopedMemoryCleanse cleanse_data{data.data(), data.size()};
     data[0] = 0x00;
     std::copy(parent.node_secret.begin(), parent.node_secret.end(), data.begin() + 1);
     const auto ser = Ser32BE(index_hardened);
@@ -103,14 +106,8 @@ std::optional<Node> DerivePath(const Node& master, std::span<const uint32_t> pat
     Node node = master;
     for (const uint32_t i : path_hardened) {
         auto child = DeriveChild(node, i);
-        if (!child) {
-            memory_cleanse(node.node_secret.data(), node.node_secret.size());
-            memory_cleanse(node.chain_code.data(), node.chain_code.size());
-            return std::nullopt;
-        }
-        node = *child;
-        memory_cleanse(child->node_secret.data(), child->node_secret.size());
-        memory_cleanse(child->chain_code.data(), child->chain_code.size());
+        if (!child) return std::nullopt;
+        node = std::move(*child);
     }
     return node;
 }

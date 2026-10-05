@@ -254,6 +254,9 @@ void SQLiteDatabase::Open()
     if (m_db == nullptr) {
         if (!m_mock) {
             TryCreateDirectories(m_dir_path);
+            if (!IsDirWritable(m_dir_path)) {
+                throw std::runtime_error(strprintf("SQLiteDatabase: Wallet directory is not writable: %s", fs::PathToString(m_dir_path)));
+            }
         }
         int ret = sqlite3_open_v2(m_file_path.c_str(), &m_db, flags, nullptr);
         if (ret != SQLITE_OK) {

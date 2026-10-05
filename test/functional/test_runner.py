@@ -114,8 +114,10 @@ BASE_SCRIPTS = [
     'mempool_persist.py',
     # vv Tests less than 60s vv
     'rpc_psbt.py',
+    'rpc_psbt_complete.py',
     'wallet_fundrawtransaction.py',
     'wallet_bumpfee.py',
+    'wallet_bumpfee_large_cluster.py',
     'wallet_v3_txs.py',
     'wallet_backup.py',
     'feature_segwit.py --v2transport',
@@ -159,7 +161,8 @@ BASE_SCRIPTS = [
     'feature_reindex.py',
     'feature_reindex_readonly.py',
     'wallet_labels.py',
-    'p2p_compactblocks.py',
+    'p2p_compactblocks.py --v1transport',
+    'p2p_compactblocks.py --v2transport',
     'p2p_compactblocks_blocksonly.py',
     'wallet_hd.py',
     'wallet_blank.py',
@@ -191,6 +194,8 @@ BASE_SCRIPTS = [
     'wallet_createwallet.py --usecli',
     'wallet_createwallet.py',
     'wallet_migration_fixtures.py',
+    'wallet_persistence.py',
+    'wallet_rpc_failures.py',
     'wallet_reindex.py',
     'wallet_reorgsrestore.py',
     'interface_http.py',
@@ -203,6 +208,7 @@ BASE_SCRIPTS = [
     'rpc_users.py',
     'rpc_whitelist.py',
     'feature_proxy.py',
+    'feature_torcontrol.py',
     'wallet_signrawtransactionwithwallet.py',
     'rpc_signrawtransactionwithkey.py',
     'rpc_rawtransaction.py',
@@ -228,8 +234,19 @@ BASE_SCRIPTS = [
     'rpc_net.py --v2transport',
     'wallet_keypool.py',
     'wallet_descriptor.py',
+    'wallet_descriptor_expansion.py',
     'wallet_pqhd_policy.py',
     'wallet_pqhd_lock_semantics.py',
+    'wallet_pqhd_encryption.py',
+    'wallet_pqhd_seed_restrictions.py',
+    'wallet_pqhd_consumption.py',
+    'wallet_pqhd_activation.py',
+    'wallet_pqhd_integrity.py',
+    'wallet_pqhd_import.py',
+    'wallet_pqhd_rpc.py',
+    'wallet_pqhd_psbt.py',
+    'wallet_pqhd_recovery.py',
+    'wallet_pqhd_recovery.py --use-filter',
     'wallet_pqhd_seed_lifecycle.py',
     'p2p_nobloomfilter_messages.py',
     TEST_FRAMEWORK_UNIT_TESTS,
@@ -356,6 +373,8 @@ BASE_SCRIPTS = [
     'p2p_i2p_sessions.py',
     'feature_presegwit_node_upgrade.py',
     'feature_settings.py',
+    'feature_chainstate_recovery.py',
+    'feature_unlinked_blocks.py',
     'rpc_getdescriptorinfo.py',
     'rpc_mempool_info.py',
     'rpc_help.py',
@@ -557,6 +576,10 @@ def main():
 
 def run_tests(*, test_list, build_dir, src_dir, tmpdir, jobs=1, enable_coverage=False, args=None, combined_logs_len=0, failfast=False, use_term_control, results_filepath=None):
     args = args or []
+
+    # Optional extensions such as pycapnp need the GIL on free-threaded Python.
+    # Set this before spawning cache builders or tests so their children inherit it.
+    os.environ["PYTHON_GIL"] = "1"
 
     # Warn if tidecoind is already running
     try:
@@ -779,7 +802,7 @@ class TestHandler:
                         status = "Passed"
                     elif proc.returncode == TEST_EXIT_SKIPPED:
                         status = "Skipped"
-                        skip_reason = re.search(r"Test Skipped: (.*)", stdout).group(1)
+                        skip_reason = re.search(r"Test Skipped: (.*)", stdout).group(1).strip()
                     else:
                         status = "Failed"
                     self.jobs.remove(job)

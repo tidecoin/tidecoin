@@ -40,7 +40,7 @@ bool ExternalSignerScriptPubKeyMan::SetupDescriptor(WalletBatch& batch, std::uni
     }
 
     // TopUp
-    TopUpWithDB(batch);
+    if (!TopUpWithDB(batch)) return false;
 
     m_storage.UnsetBlankWalletFlag(batch);
     return true;
@@ -57,11 +57,36 @@ bool ExternalSignerScriptPubKeyMan::SetupDescriptor(WalletBatch& batch, std::uni
     return signers[0];
 }
 
+bool ExternalSignerScriptPubKeyMan::MatchesSigner(const ExternalSigner& signer) const
+{
+    const auto response = signer.GetDescriptors(0);
+    if (!response.isObject()) return false;
+    bool found{false};
+    for (const char* branch : {"receive", "internal"}) {
+        const auto& values = response.find_value(branch);
+        if (!values.isArray()) return false;
+        for (const auto& value : values.getValues()) {
+            if (!value.isStr()) return false;
+            FlatSigningProvider keys;
+            std::string error;
+            auto descriptors = Parse(value.get_str(), keys, error, false);
+            if (descriptors.empty() || !keys.keys.empty()) return false;
+            for (const auto& descriptor : descriptors) {
+                if (descriptor->IsRange() || !descriptor->GetPQHDKeyPaths().empty()) return false;
+                found |= DescriptorID(*descriptor) == GetID();
+            }
+        }
+    }
+    return found;
+}
+
 util::Result<void> ExternalSignerScriptPubKeyMan::DisplayAddress(const CTxDestination& dest, const ExternalSigner &signer) const
 {
-    // TODO: avoid the need to infer a descriptor from inside a descriptor wallet
+    if (!MatchesSigner(signer)) return util::Error{_("External signer does not provide the enrolled public descriptor")};
+    // Display the fully resolved public script, never a seed identifier alone.
     const CScript& scriptPubKey = GetScriptForDestination(dest);
     auto provider = GetSolvingProvider(scriptPubKey);
+    if (!provider) return util::Error{_("Address solving data is unavailable")};
     auto descriptor = InferDescriptor(scriptPubKey, *provider);
 
     const UniValue& result = signer.DisplayAddress(descriptor->ToString());
@@ -86,13 +111,28 @@ std::optional<PSBTError> ExternalSignerScriptPubKeyMan::FillPSBT(PartiallySigned
         return DescriptorScriptPubKeyMan::FillPSBT(psbt, txdata, sighash_type, false, n_signed, finalize, include_pqhd_origins, script_verify_flags);
     }
 
-    // Already complete if every input is now signed
-    bool complete = true;
-    for (const auto& input : psbt.inputs) {
-        // TODO: for multisig wallets, we should only care if all _our_ inputs are signed
-        complete &= PSBTInputSigned(input);
+    const unsigned int effective_flags = script_verify_flags.value_or(STANDARD_SCRIPT_VERIFY_FLAGS);
+    if (n_signed) *n_signed = 0;
+    if (const auto error = DescriptorScriptPubKeyMan::FillPSBT(psbt, txdata, sighash_type, false, nullptr, false, include_pqhd_origins, effective_flags)) return error;
+
+    // Do not contact a signer for unrelated managers or already verified inputs.
+    bool needs_signer{false};
+    std::vector<bool> previously_verified(psbt.inputs.size());
+    for (size_t i = 0; i < psbt.inputs.size(); ++i) {
+        previously_verified[i] = PSBTInputSignedAndVerified(psbt, i, &txdata, effective_flags);
+        if (previously_verified[i]) continue;
+        const auto& input = psbt.inputs[i];
+        CScript script;
+        if (input.non_witness_utxo) {
+            const auto& prevout = psbt.tx->vin[i].prevout;
+            if (prevout.hash != input.non_witness_utxo->GetHash() || prevout.n >= input.non_witness_utxo->vout.size()) return PSBTError::MISSING_INPUTS;
+            script = input.non_witness_utxo->vout[prevout.n].scriptPubKey;
+        } else if (!input.witness_utxo.IsNull()) {
+            script = input.witness_utxo.scriptPubKey;
+        }
+        needs_signer |= static_cast<bool>(GetSolvingProvider(script));
     }
-    if (complete) return {};
+    if (!needs_signer) return {};
 
     auto signer{GetExternalSigner()};
     if (!signer) {
@@ -100,14 +140,22 @@ std::optional<PSBTError> ExternalSignerScriptPubKeyMan::FillPSBT(PartiallySigned
         return PSBTError::EXTERNAL_SIGNER_NOT_FOUND;
     }
 
+    if (!MatchesSigner(*signer)) {
+        LogWarning("External signer does not provide the enrolled public descriptor");
+        return PSBTError::EXTERNAL_SIGNER_FAILED;
+    }
     std::string failure_reason;
-    if(!signer->SignTransaction(psbt, failure_reason)) {
+    if (!signer->SignTransaction(psbt, failure_reason, effective_flags)) {
         LogWarning("Failed to sign: %s\n", failure_reason);
         return PSBTError::EXTERNAL_SIGNER_FAILED;
     }
     if (finalize) {
-        const unsigned int effective_flags = script_verify_flags.value_or(STANDARD_SCRIPT_VERIFY_FLAGS);
-        FinalizePSBT(psbt, effective_flags); // This won't work in a multisig setup
+        FinalizePSBT(psbt, effective_flags);
+    }
+    if (n_signed) {
+        for (size_t i = 0; i < psbt.inputs.size(); ++i) {
+            if (!previously_verified[i] && PSBTInputSignedAndVerified(psbt, i, &txdata, effective_flags)) ++*n_signed;
+        }
     }
     return {};
 }

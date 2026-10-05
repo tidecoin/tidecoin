@@ -59,7 +59,20 @@ public:
     }
     void operator()() override
     {
-        func(req.get(), path);
+        try {
+            func(req.get(), path);
+            return;
+        } catch (const std::exception&) {
+            LogWarning("Unexpected exception while processing HTTP request");
+        } catch (...) {
+            LogWarning("Unknown exception while processing HTTP request");
+        }
+        // Do not expose exception details or access a libevent request that a
+        // handler has already transferred back to the event thread.
+        if (!req->IsReplySent()) {
+            req->WriteHeader("Connection", "close");
+            req->WriteReply(HTTP_INTERNAL_SERVER_ERROR, "Internal server error");
+        }
     }
 
     std::unique_ptr<HTTPRequest> req;

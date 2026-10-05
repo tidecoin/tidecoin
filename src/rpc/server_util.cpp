@@ -6,6 +6,8 @@
 
 #include <chain.h>
 #include <common/args.h>
+#include <common/url.h>
+#include <interfaces/wallet.h>
 #include <net_processing.h>
 #include <node/context.h>
 #include <node/miner.h>
@@ -13,6 +15,7 @@
 #include <pow.h>
 #include <rpc/protocol.h>
 #include <rpc/request.h>
+#include <script/descriptor.h>
 #include <txmempool.h>
 #include <util/any.h>
 #include <validation.h>
@@ -147,4 +150,43 @@ void NextEmptyBlockIndex(CBlockIndex& tip, const Consensus::Params& consensusPar
     next_index.nBits = next_header.nBits;
     next_index.nNonce = next_header.nNonce;
     next_index.nHeight = tip.nHeight + 1;
+}
+
+RPCDescriptorResolver::RPCDescriptorResolver(const JSONRPCRequest& request, std::function<void()> interruption_point)
+    : m_request(request), m_interruption_point(std::move(interruption_point)) {}
+RPCDescriptorResolver::~RPCDescriptorResolver() = default;
+
+bool RPCDescriptorResolver::Expand(const Descriptor& descriptor, int32_t index, const SigningProvider& provider, std::vector<CScript>& scripts, FlatSigningProvider& out)
+{
+    if (m_interruption_point) m_interruption_point();
+    if (auto* node = util::AnyPtr<NodeContext>(m_request.context)) node->rpc_interruption_point();
+    if (descriptor.GetPQHDSeedIDs().empty()) return descriptor.Expand(index, provider, scripts, out);
+    if (!m_wallet_expansion) {
+        static const std::string wallet_prefix{"/wallet/"};
+        if (!m_request.URI.starts_with(wallet_prefix)) {
+            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "PQHD expansion requires wallet seed access or cached public keys. Select the owning wallet explicitly with -rpcwallet.");
+        }
+        auto& node = EnsureAnyNodeContext(m_request.context);
+        if (!node.wallet_loader) throw JSONRPCError(RPC_WALLET_NOT_FOUND, "Wallet support is not available");
+        m_wallet_expansion = node.wallet_loader->getDescriptorExpansion(UrlDecode(std::string_view{m_request.URI}.substr(wallet_prefix.size())));
+    }
+    m_wallet_expansion->expand(descriptor, index, scripts, out);
+    if (m_interruption_point) m_interruption_point();
+    return true;
+}
+
+DescriptorExpandFn RPCDescriptorResolver::GetExpander()
+{
+    return [this](const Descriptor& descriptor, int32_t index, const SigningProvider& provider, std::vector<CScript>& scripts, FlatSigningProvider& out) {
+        return Expand(descriptor, index, provider, scripts, out);
+    };
+}
+
+void RPCDescriptorResolver::Finish()
+{
+    if (m_interruption_point) m_interruption_point();
+    if (m_wallet_expansion) {
+        m_wallet_expansion->finish();
+        m_wallet_expansion.reset();
+    }
 }

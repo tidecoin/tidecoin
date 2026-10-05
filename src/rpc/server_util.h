@@ -5,9 +5,10 @@
 #ifndef BITCOIN_RPC_SERVER_UTIL_H
 #define BITCOIN_RPC_SERVER_UTIL_H
 
-#include <any>
-
 #include <consensus/params.h>
+#include <rpc/util.h>
+
+#include <any>
 
 class AddrMan;
 class ArgsManager;
@@ -23,6 +24,7 @@ struct NodeContext;
 } // namespace node
 namespace interfaces {
 class Mining;
+class WalletDescriptorExpansion;
 } // namespace interfaces
 
 node::NodeContext& EnsureAnyNodeContext(const std::any& context);
@@ -41,6 +43,23 @@ interfaces::Mining& EnsureMining(const node::NodeContext& node);
 PeerManager& EnsurePeerman(const node::NodeContext& node);
 AddrMan& EnsureAddrman(const node::NodeContext& node);
 AddrMan& EnsureAnyAddrman(const std::any& context);
+
+/** Public expansion for existing node RPCs. Wallet access is lazy and explicit;
+ * self-contained descriptors retain their ordinary wallet-independent behavior.
+ */
+class RPCDescriptorResolver
+{
+    const JSONRPCRequest& m_request;
+    std::function<void()> m_interruption_point;
+    std::unique_ptr<interfaces::WalletDescriptorExpansion> m_wallet_expansion;
+
+public:
+    explicit RPCDescriptorResolver(const JSONRPCRequest& request, std::function<void()> interruption_point = {});
+    ~RPCDescriptorResolver();
+    bool Expand(const Descriptor& descriptor, int32_t index, const SigningProvider& provider, std::vector<CScript>& scripts, FlatSigningProvider& out);
+    DescriptorExpandFn GetExpander();
+    void Finish();
+};
 
 /** Return an empty block index on top of the tip, with height, time and nBits set */
 void NextEmptyBlockIndex(CBlockIndex& tip, const Consensus::Params& consensusParams, CBlockIndex& next_index);

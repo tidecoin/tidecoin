@@ -17,6 +17,7 @@
 #include <serialize.h>
 #include <span.h>
 #include <streams.h>
+#include <test/util/net.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <test/util/validation.h>
@@ -39,6 +40,50 @@ using namespace util::hex_literals;
 using util::ToString;
 
 BOOST_FIXTURE_TEST_SUITE(net_tests, RegTestingSetup)
+
+BOOST_AUTO_TEST_CASE(discovery_bind_options)
+{
+    CConnman::Options options{};
+    BOOST_CHECK(!options.ShouldDiscover());
+    options.bind_on_any = true;
+    BOOST_CHECK(options.ShouldDiscover());
+    options.bind_on_any = false;
+
+    const auto specific = LookupNumeric("127.0.0.1:18444");
+    options.vBinds = {specific};
+    BOOST_CHECK(!options.ShouldDiscover());
+
+    for (const auto* wildcard : {"0.0.0.0:18445", "[::]:18445"}) {
+        BOOST_TEST_CONTEXT(wildcard) {
+            const auto service = LookupNumeric(wildcard);
+            options.onion_binds = {service};
+            BOOST_CHECK(!options.ShouldDiscover()); // Onion targets are not public listening intent.
+            options.vBinds.push_back(service);
+            BOOST_CHECK(options.ShouldDiscover()); // Not just the first bind.
+            options.vBinds = {specific};
+
+            for (const auto* permissions : {"download@", "noban@"}) {
+                NetWhitebindPermissions whitebind;
+                bilingual_str error;
+                BOOST_REQUIRE(NetWhitebindPermissions::TryParse(std::string{permissions} + wildcard, whitebind, error));
+                options.vWhiteBinds = {whitebind};
+                BOOST_CHECK(options.ShouldDiscover());
+                options.vWhiteBinds.front().m_service = specific;
+                BOOST_CHECK(!options.ShouldDiscover());
+                options.vWhiteBinds.push_back(whitebind);
+                BOOST_CHECK(options.ShouldDiscover()); // Not just the first whitebind.
+                options.vWhiteBinds.clear();
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(shutdown_with_pending_reconnection)
+{
+    auto& connman = static_cast<ConnmanTestMsg&>(*m_node.connman);
+    BOOST_CHECK(connman.StopWithPendingReconnection());
+    connman.StopNodes(); // Repeated shutdown must also be safe.
+}
 
 BOOST_AUTO_TEST_CASE(cnode_listen_port)
 {

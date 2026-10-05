@@ -23,6 +23,7 @@
 #include <functional>
 #include <initializer_list>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -31,6 +32,7 @@
 #include <variant>
 #include <vector>
 
+struct Descriptor;
 class JSONRPCRequest;
 enum ServiceFlags : uint64_t;
 enum class OutputType;
@@ -153,8 +155,15 @@ UniValue JSONRPCTransactionError(node::TransactionError terr, const std::string&
 //! Parse a JSON range specified as int64, or [int64, int64]
 std::pair<int64_t, int64_t> ParseDescriptorRange(const UniValue& value);
 
+using DescriptorExpandFn = std::function<bool(const Descriptor&, int32_t, const SigningProvider&, std::vector<CScript>&, FlatSigningProvider&)>;
+
+/** Expand parsed descriptors over an inclusive, validated range. Returns nullopt if expansion fails.
+ * Non-ranged descriptors must have their range normalized by the caller when appropriate.
+ */
+std::optional<std::vector<CScript>> ExpandDescriptorRange(const std::vector<std::unique_ptr<Descriptor>>& descs, std::pair<int64_t, int64_t> range, const SigningProvider& provider, FlatSigningProvider& out, bool expand_priv, const DescriptorExpandFn& expand = {});
+
 /** Evaluate a descriptor given as a string, or as a {"desc":...,"range":...} object, with default range of 1000. */
-std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, FlatSigningProvider& provider, const bool expand_priv = false);
+std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, FlatSigningProvider& provider, const bool expand_priv = false, const DescriptorExpandFn& expand = {});
 
 /**
  * Serializing JSON objects depends on the outer type. Only arrays and

@@ -247,6 +247,26 @@ BOOST_AUTO_TEST_CASE(streams_vector_reader)
     BOOST_CHECK_THROW(new_reader >> d, std::ios_base::failure);
 }
 
+BOOST_AUTO_TEST_CASE(span_reader_ignore_bounds)
+{
+    const std::vector<unsigned char> data{1, 2, 3};
+    SpanReader reader{data};
+    reader.ignore(0);
+    BOOST_CHECK_EQUAL(reader.size(), 3U);
+    reader.ignore(1);
+    BOOST_CHECK_EQUAL(reader.size(), 2U);
+    BOOST_CHECK_THROW(reader.ignore(3), std::ios_base::failure);
+    BOOST_CHECK_EQUAL(reader.size(), 2U);
+    uint8_t next;
+    reader >> next;
+    BOOST_CHECK_EQUAL(next, 2);
+    reader.ignore(1);
+    BOOST_CHECK(reader.empty());
+    reader.ignore(0);
+    BOOST_CHECK_THROW(reader.ignore(1), std::ios_base::failure);
+    BOOST_CHECK(reader.empty());
+}
+
 BOOST_AUTO_TEST_CASE(streams_vector_reader_rvalue)
 {
     std::vector<uint8_t> data{0x82, 0xa7, 0x31};

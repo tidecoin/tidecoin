@@ -233,6 +233,18 @@ CBlockIndex* BlockManager::AddToBlockIndex(const CBlockHeader& block, CBlockInde
     return pindexNew;
 }
 
+void BlockManager::AddUnlinkedBlock(CBlockIndex* block)
+{
+    AssertLockHeld(cs_main);
+    assert(block);
+    assert(block->nStatus & BLOCK_HAVE_DATA);
+    const auto [begin, end] = m_blocks_unlinked.equal_range(block->pprev);
+    for (auto it = begin; it != end; ++it) {
+        if (it->second == block) return;
+    }
+    m_blocks_unlinked.emplace(block->pprev, block);
+}
+
 void BlockManager::PruneOneBlockFile(const int fileNumber)
 {
     AssertLockHeld(cs_main);
@@ -453,7 +465,9 @@ bool BlockManager::LoadBlockIndex(const std::optional<uint256>& snapshot_blockha
                     pindex->m_chain_tx_count = pindex->pprev->m_chain_tx_count + pindex->nTx;
                 } else {
                     pindex->m_chain_tx_count = 0;
-                    m_blocks_unlinked.insert(std::make_pair(pindex->pprev, pindex));
+                    if (pindex->nStatus & BLOCK_HAVE_DATA) {
+                        AddUnlinkedBlock(pindex);
+                    }
                 }
             } else {
                 pindex->m_chain_tx_count = pindex->nTx;

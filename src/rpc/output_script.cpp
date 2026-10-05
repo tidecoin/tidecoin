@@ -9,6 +9,7 @@
 #include <rpc/protocol.h>
 #include <rpc/request.h>
 #include <rpc/server.h>
+#include <rpc/server_util.h>
 #include <rpc/util.h>
 #include <script/descriptor.h>
 #include <script/script.h>
@@ -221,14 +222,14 @@ static RPCHelpMan getdescriptorinfo()
     };
 }
 
-static UniValue DeriveAddresses(const Descriptor* desc, int64_t range_begin, int64_t range_end, FlatSigningProvider& key_provider)
+static UniValue DeriveAddresses(const Descriptor* desc, int64_t range_begin, int64_t range_end, FlatSigningProvider& key_provider, RPCDescriptorResolver& resolver)
 {
     UniValue addresses(UniValue::VARR);
 
     for (int64_t i = range_begin; i <= range_end; ++i) {
         FlatSigningProvider provider;
         std::vector<CScript> scripts;
-        if (!desc->Expand(i, key_provider, scripts, provider)) {
+        if (!resolver.Expand(*desc, i, key_provider, scripts, provider)) {
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Cannot derive script without private keys");
         }
 
@@ -262,6 +263,9 @@ static RPCHelpMan deriveaddresses()
     return RPCHelpMan{
         "deriveaddresses",
         "Derives one or more addresses corresponding to an output descriptor.\n"
+        "Does not allocate receiving addresses or extend wallet monitoring.\n"
+        "For a registered wallet-local PQHD descriptor, select its wallet with -rpcwallet.\n"
+        "Cached indices work while locked; fresh derivation requires an unlocked wallet with its seed.\n"
          "Examples of output descriptors are:\n"
          "    pkh(<pubkey>)                                     P2PKH outputs for the given pubkey\n"
          "    wpkh(<pubkey>)                                    Native segwit P2PKH outputs for the given pubkey\n"
@@ -323,17 +327,20 @@ static RPCHelpMan deriveaddresses()
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "Range must be specified for a ranged descriptor");
             }
 
-            UniValue addresses = DeriveAddresses(desc.get(), range_begin, range_end, key_provider);
+            RPCDescriptorResolver resolver{request};
+            UniValue addresses = DeriveAddresses(desc.get(), range_begin, range_end, key_provider, resolver);
 
             if (descs.size() == 1) {
+                resolver.Finish();
                 return addresses;
             }
 
             UniValue ret(UniValue::VARR);
             ret.push_back(addresses);
             for (size_t i = 1; i < descs.size(); ++i) {
-                ret.push_back(DeriveAddresses(descs.at(i).get(), range_begin, range_end, key_provider));
+                ret.push_back(DeriveAddresses(descs.at(i).get(), range_begin, range_end, key_provider, resolver));
             }
+            resolver.Finish();
             return ret;
         },
     };

@@ -109,25 +109,22 @@ struct CompareTxIterByAncestorCount {
 };
 
 
-struct CTxMemPoolModifiedEntry_Indices final : boost::multi_index::indexed_by<
-    boost::multi_index::ordered_unique<
-        modifiedentry_iter,
-        CompareCTxMemPoolIter
-    >,
-    // sorted by modified ancestor fee rate
-    boost::multi_index::ordered_non_unique<
-        // Reuse same tag from CTxMemPool's similar index
-        boost::multi_index::tag<ancestor_score>,
-        boost::multi_index::identity<CTxMemPoolModifiedEntry>,
-        CompareTxMemPoolEntryByAncestorFee
-    >
->
-{};
-
-typedef boost::multi_index_container<
+using indexed_modified_transaction_set = boost::multi_index_container<
     CTxMemPoolModifiedEntry,
-    CTxMemPoolModifiedEntry_Indices
-> indexed_modified_transaction_set;
+    boost::multi_index::indexed_by<
+        boost::multi_index::ordered_unique<
+            modifiedentry_iter,
+            CompareCTxMemPoolIter
+        >,
+        // sorted by modified ancestor fee rate
+        boost::multi_index::ordered_non_unique<
+            // Reuse same tag from CTxMemPool's similar index
+            boost::multi_index::tag<ancestor_score>,
+            boost::multi_index::identity<CTxMemPoolModifiedEntry>,
+            CompareTxMemPoolEntryByAncestorFee
+        >
+    >
+>;
 
 typedef indexed_modified_transaction_set::nth_index<0>::type::iterator modtxiter;
 typedef indexed_modified_transaction_set::index<ancestor_score>::type::iterator modtxscoreiter;
@@ -238,6 +235,9 @@ void ApplyArgsManOptions(const ArgsManager& gArgs, BlockAssembler::Options& opti
 /* Compute the block's merkle root, insert or replace the coinbase transaction and the merkle root into the block */
 void AddMerkleRootAndCoinbase(CBlock& block, CTransactionRef coinbase, uint32_t version, uint32_t timestamp, uint32_t nonce);
 
+/** Interrupt a template wait. Access interrupt_wait only under m_tip_block_mutex. */
+void InterruptWait(KernelNotifications& kernel_notifications, bool& interrupt_wait);
+
 /**
  * Return a new block template when fees rise to a certain threshold or after a
  * new tip; return nullopt if timeout is reached.
@@ -247,7 +247,8 @@ std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainma
                                                       CTxMemPool* mempool,
                                                       const std::unique_ptr<CBlockTemplate>& block_template,
                                                       const BlockWaitOptions& options,
-                                                      const BlockAssembler::Options& assemble_options);
+                                                      const BlockAssembler::Options& assemble_options,
+                                                      bool& interrupt_wait);
 
 /* Locks cs_main and returns the block hash and block height of the active chain if it exists; otherwise, returns nullopt.*/
 std::optional<BlockRef> GetTip(ChainstateManager& chainman);

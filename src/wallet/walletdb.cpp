@@ -113,13 +113,8 @@ bool WalletBatch::WriteKey(const CPubKey& vchPubKey, const CPrivKey& vchPrivKey,
         return false;
     }
 
-    // hash pubkey/privkey to accelerate wallet load
-    std::vector<unsigned char> vchKey;
-    vchKey.reserve(vchPubKey.size() + vchPrivKey.size());
-    vchKey.insert(vchKey.end(), vchPubKey.begin(), vchPubKey.end());
-    vchKey.insert(vchKey.end(), vchPrivKey.begin(), vchPrivKey.end());
-
-    return WriteIC(std::make_pair(DBKeys::KEY, vchPubKey), std::make_pair(vchPrivKey, Hash(vchKey)), false);
+    // Hash the ranges directly to avoid an ordinary-memory copy of private key bytes.
+    return WriteIC(std::make_pair(DBKeys::KEY, vchPubKey), std::make_pair(vchPrivKey, Hash(vchPubKey, vchPrivKey)), false);
 }
 
 bool WalletBatch::WriteCryptedKey(const CPubKey& vchPubKey,
@@ -246,21 +241,21 @@ bool WalletBatch::EraseActiveScriptPubKeyMan(uint8_t type, bool internal)
 
 bool WalletBatch::WriteDescriptorKey(const uint256& desc_id, const CPubKey& pubkey, const CPrivKey& privkey)
 {
-    // hash pubkey/privkey to accelerate wallet load
-    std::vector<unsigned char> key;
-    key.reserve(pubkey.size() + privkey.size());
-    key.insert(key.end(), pubkey.begin(), pubkey.end());
-    key.insert(key.end(), privkey.begin(), privkey.end());
-
-    return WriteIC(std::make_pair(DBKeys::WALLETDESCRIPTORKEY, std::make_pair(desc_id, pubkey)), std::make_pair(privkey, Hash(key)), false);
+    // Hash the ranges directly to avoid an ordinary-memory copy of private key bytes.
+    return WriteIC(std::make_pair(DBKeys::WALLETDESCRIPTORKEY, std::make_pair(desc_id, pubkey)), std::make_pair(privkey, Hash(pubkey, privkey)), false);
 }
 
 bool WalletBatch::WriteCryptedDescriptorKey(const uint256& desc_id, const CPubKey& pubkey, const std::vector<unsigned char>& secret)
 {
-    if (!WriteIC(std::make_pair(DBKeys::WALLETDESCRIPTORCKEY, std::make_pair(desc_id, pubkey)), secret, false)) {
+    const bool own_txn{!HasActiveTxn()};
+    if (own_txn && !TxnBegin()) return false;
+    const auto key{std::make_pair(desc_id, pubkey)};
+    if (!WriteIC(std::make_pair(DBKeys::WALLETDESCRIPTORCKEY, key), secret, false) ||
+        !EraseIC(std::make_pair(DBKeys::WALLETDESCRIPTORKEY, key)) ||
+        (own_txn && !TxnCommit())) {
+        if (own_txn) TxnAbort();
         return false;
     }
-    EraseIC(std::make_pair(DBKeys::WALLETDESCRIPTORKEY, std::make_pair(desc_id, pubkey)));
     return true;
 }
 
@@ -328,13 +323,8 @@ bool LoadKey(CWallet* pwallet, DataStream& ssKey, DataStream& ssValue, std::stri
 
         if (!hash.IsNull())
         {
-            // hash pubkey/privkey to accelerate wallet load
-            std::vector<unsigned char> vchKey;
-            vchKey.reserve(vchPubKey.size() + pkey.size());
-            vchKey.insert(vchKey.end(), vchPubKey.begin(), vchPubKey.end());
-            vchKey.insert(vchKey.end(), pkey.begin(), pkey.end());
-
-            if (Hash(vchKey) != hash)
+            // Hash the ranges directly to avoid an ordinary-memory copy of private key bytes.
+            if (Hash(vchPubKey, pkey) != hash)
             {
                 strErr = "Error reading wallet database: CPubKey/CPrivKey corrupt";
                 return false;
@@ -746,13 +736,8 @@ static DBErrors LoadDescriptorWalletRecords(CWallet* pwallet, DatabaseBatch& bat
             value >> pkey;
             value >> hash;
 
-            // hash pubkey/privkey to accelerate wallet load
-            std::vector<unsigned char> to_hash;
-            to_hash.reserve(pubkey.size() + pkey.size());
-            to_hash.insert(to_hash.end(), pubkey.begin(), pubkey.end());
-            to_hash.insert(to_hash.end(), pkey.begin(), pkey.end());
-
-            if (Hash(to_hash) != hash)
+            // Hash the ranges directly to avoid an ordinary-memory copy of private key bytes.
+            if (Hash(pubkey, pkey) != hash)
             {
                 strErr = "Error reading wallet database: descriptor unencrypted key CPubKey/CPrivKey corrupt";
                 return DBErrors::CORRUPT;
@@ -1001,6 +986,10 @@ static DBErrors LoadPQHDWalletRecords(CWallet* pwallet, DatabaseBatch& batch) EX
             }
             PQHDSeed seed;
             value >> seed;
+            if (pwallet->IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) {
+                err = "Error reading wallet database: private PQHD seed in a wallet with private seeds disabled";
+                return DBErrors::CORRUPT;
+            }
             if (seed.seed.size() != 32) {
                 err = strprintf("Error reading wallet database: invalid PQHD seed length=%u for seed_id=%s",
                                 seed.seed.size(), seed_id.ToString());
@@ -1038,8 +1027,12 @@ static DBErrors LoadPQHDWalletRecords(CWallet* pwallet, DatabaseBatch& batch) EX
             }
             PQHDCryptedSeed seed;
             value >> seed;
-            if (seed.crypted_seed.empty()) {
-                err = strprintf("Error reading wallet database: empty PQHD crypted seed for seed_id=%s", seed_id.ToString());
+            if (pwallet->IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) {
+                err = "Error reading wallet database: encrypted PQHD seed in a wallet with private seeds disabled";
+                return DBErrors::CORRUPT;
+            }
+            if (seed.crypted_seed.size() != 48) {
+                err = strprintf("Error reading wallet database: invalid PQHD ciphertext length for seed_id=%s", seed_id.ToString());
                 return DBErrors::CORRUPT;
             }
             if (!WITH_LOCK(pwallet->cs_wallet, return pwallet->LoadPQHDCryptedSeed(seed_id, std::move(seed)))) {
@@ -1133,6 +1126,8 @@ DBErrors WalletBatch::LoadWallet(CWallet* pwallet)
     // upgrading, we don't want to make it worse.
     if (result != DBErrors::LOAD_OK)
         return result;
+
+    if (!pwallet->ValidatePQHDCaches()) return DBErrors::CORRUPT;
 
     if (!has_last_client || last_client != CLIENT_VERSION) // Update
         m_batch->Write(DBKeys::VERSION, CLIENT_VERSION);

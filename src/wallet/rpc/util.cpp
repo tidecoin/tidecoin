@@ -5,12 +5,16 @@
 #include <wallet/rpc/util.h>
 
 #include <common/url.h>
+#include <interfaces/wallet.h>
 #include <pq/pq_scheme.h>
 #include <rpc/util.h>
+#include <script/descriptor.h>
 #include <util/any.h>
 #include <util/strencodings.h>
+#include <util/time.h>
 #include <util/translation.h>
 #include <wallet/context.h>
+#include <wallet/scriptpubkeyman.h>
 #include <wallet/wallet.h>
 
 #include <algorithm>
@@ -87,6 +91,102 @@ std::shared_ptr<CWallet> GetWalletForJSONRPCRequest(const JSONRPCRequest& reques
     }
     throw JSONRPCError(RPC_WALLET_NOT_SPECIFIED,
         "Multiple wallets are loaded. Please select which wallet to use by requesting the RPC through the /wallet/<walletname> URI path.");
+}
+
+namespace {
+class WalletDescriptorExpansionImpl final : public interfaces::WalletDescriptorExpansion
+{
+    std::shared_ptr<CWallet> m_wallet;
+    WalletDescriptorExpansionReserver m_reservation;
+
+    void CheckInterrupted() const
+    {
+        if (m_wallet->IsDescriptorExpansionAborted() || m_wallet->chain().shutdownRequested()) {
+            throw JSONRPCError(RPC_MISC_ERROR, "Descriptor expansion interrupted; no partial result returned");
+        }
+    }
+
+public:
+    explicit WalletDescriptorExpansionImpl(std::shared_ptr<CWallet> wallet)
+        : m_wallet(std::move(wallet)), m_reservation(*m_wallet)
+    {
+        if (!m_reservation.reserve()) throw JSONRPCError(RPC_WALLET_ERROR, "Descriptor expansion already in progress for this wallet");
+    }
+
+    void expand(const Descriptor& descriptor, int32_t index, std::vector<CScript>& scripts, FlatSigningProvider& out) override
+    {
+        CheckInterrupted();
+        FlatSigningProvider public_data;
+        std::vector<CScript> expanded;
+        {
+            LOCK(m_wallet->cs_wallet);
+            CheckInterrupted();
+            // Match canonical public descriptors, never arbitrary paths referring
+            // to a wallet seed. Recheck registration while holding the wallet lock.
+            const DescriptorScriptPubKeyMan* manager{nullptr};
+            const auto public_descriptor = descriptor.ToString();
+            for (auto* spkm : m_wallet->GetAllScriptPubKeyMans()) {
+                const auto* candidate = dynamic_cast<DescriptorScriptPubKeyMan*>(spkm);
+                if (!candidate) continue;
+                LOCK(candidate->cs_desc_man);
+                if (candidate->GetPublicDescriptor()->ToString() == public_descriptor) {
+                    manager = candidate;
+                    break;
+                }
+            }
+            if (!manager) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "PQHD descriptor is not registered in this wallet. Use a public descriptor from listdescriptors.");
+            if (!manager->IsCacheUsable()) {
+                throw JSONRPCError(RPC_WALLET_ERROR, "PQHD cache does not match wallet seed; wallet may be corrupted");
+            }
+            bool cached;
+            {
+                LOCK(manager->cs_desc_man);
+                cached = manager->ExpandPublicFromCache(index, expanded, public_data);
+            }
+            if (!cached) {
+                for (const auto& seed_id : descriptor.GetPQHDSeedIDs()) {
+                    if (!m_wallet->HavePQHDSeed(seed_id)) throw JSONRPCError(RPC_WALLET_ERROR, strprintf("Index %d is not cached and its PQHD seed is not present in this wallet", index));
+                }
+                if (m_wallet->IsLocked() || (m_wallet->IsCrypted() && m_wallet->nRelockTime > 0 && m_wallet->nRelockTime <= GetTime())) {
+                    throw JSONRPCError(RPC_WALLET_UNLOCK_NEEDED, strprintf("Index %d is not cached. Unlock this wallet to derive it", index));
+                }
+                struct SeedProvider final : SigningProvider {
+                    const CWallet& wallet;
+                    explicit SeedProvider(const CWallet& w) : wallet(w) {}
+                    std::optional<pqhd::SecureSeed32> GetPQHDSeed(const uint256& id) const override { return wallet.GetPQHDSeed(id); }
+                } provider{*m_wallet};
+                // Discard any partial cache expansion before fresh derivation.
+                expanded.clear();
+                public_data = FlatSigningProvider{};
+                if (!descriptor.Expand(index, provider, expanded, public_data)) {
+                    throw JSONRPCError(RPC_WALLET_ERROR, strprintf("Public descriptor derivation failed at index %d", index));
+                }
+            }
+        }
+        CheckInterrupted();
+        CHECK_NONFATAL(public_data.keys.empty());
+        scripts = std::move(expanded);
+        out.Merge(std::move(public_data));
+    }
+
+    void finish() override
+    {
+        CheckInterrupted();
+        if (!m_reservation.complete()) throw JSONRPCError(RPC_MISC_ERROR, "Descriptor expansion interrupted; no partial result returned");
+    }
+};
+} // namespace
+
+std::unique_ptr<interfaces::WalletDescriptorExpansion> MakeWalletDescriptorExpansion(WalletContext& context, const std::string& wallet_name)
+{
+    auto wallet = GetWallet(context, wallet_name);
+    if (!wallet) throw JSONRPCError(RPC_WALLET_NOT_FOUND, "Requested wallet does not exist or is not loaded");
+    return MakeWalletDescriptorExpansion(std::move(wallet));
+}
+
+std::unique_ptr<interfaces::WalletDescriptorExpansion> MakeWalletDescriptorExpansion(std::shared_ptr<CWallet> wallet)
+{
+    return std::make_unique<WalletDescriptorExpansionImpl>(std::move(wallet));
 }
 
 void EnsureWalletIsUnlocked(const CWallet& wallet)

@@ -15,6 +15,7 @@
 
 #include <consensus/amount.h>
 #include <cstddef>
+#include <optional>
 #include <policy/policy.h>
 #include <script/script.h>
 #include <uint256.h>
@@ -39,9 +40,12 @@ struct BlockCreateOptions {
     bool use_mempool{true};
     /**
      * The default reserved weight for the fixed-size block header,
-     * transaction count and coinbase transaction.
+     * transaction count and coinbase transaction. Must be at least
+     * MINIMUM_BLOCK_RESERVED_WEIGHT and no more than the maximum block weight.
+     * An explicit value overrides -blockreservedweight. IPC clients always
+     * supply a value; an omitted wire field is zero and is rejected.
      */
-    size_t block_reserved_weight{DEFAULT_BLOCK_RESERVED_WEIGHT};
+    std::optional<size_t> block_reserved_weight{};
     /**
      * The maximum additional sigops which the pool will add in coinbase
      * transaction outputs.

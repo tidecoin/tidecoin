@@ -40,6 +40,7 @@ addnode connect to a CJDNS address
 - Test passing unknown -onlynet
 """
 
+from contextlib import ExitStack
 import os
 import socket
 import tempfile
@@ -70,6 +71,14 @@ class ProxyTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 7
         self.setup_clean_chain = True
+        self.proxies = []
+
+    def shutdown(self):
+        # Close proxies even if setup, the test, or node shutdown fails.
+        with ExitStack() as cleanup:
+            for proxy in self.proxies:
+                cleanup.callback(proxy.stop)
+            return super().shutdown()
 
     def setup_nodes(self):
         self.have_ipv6 = test_ipv6_local()
@@ -105,14 +114,18 @@ class ProxyTest(BitcoinTestFramework):
             self.log.warning("Testing without local unix domain sockets support")
 
         self.serv1 = Socks5Server(self.conf1)
+        self.proxies.append(self.serv1)
         self.serv1.start()
         self.serv2 = Socks5Server(self.conf2)
+        self.proxies.append(self.serv2)
         self.serv2.start()
         if self.have_ipv6:
             self.serv3 = Socks5Server(self.conf3)
+            self.proxies.append(self.serv3)
             self.serv3.start()
         if self.have_unix_sockets:
             self.serv4 = Socks5Server(self.conf4)
+            self.proxies.append(self.serv4)
             self.serv4.start()
 
         # We will not try to connect to this.

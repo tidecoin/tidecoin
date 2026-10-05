@@ -159,7 +159,7 @@ class DeploymentInfo(object):
 
     def detectQtPath(self, frameworkDirectory: str):
         parentDir = os.path.dirname(frameworkDirectory)
-        if os.path.exists(os.path.join(parentDir, "share", "qt", "translations")):
+        if os.path.exists(os.path.join(parentDir, "share", "qt", "plugins")):
             self.qtPath = parentDir
         else:
             self.qtPath = os.getenv("QTDIR", None)
@@ -494,12 +494,12 @@ with open(os.path.join(applicationBundle.resourcesPath, "qt.conf"), "wb") as f:
 # ------------------------------------------------
 
 if platform.system() == "Darwin":
-    subprocess.check_call(f"codesign --deep --force --sign - {target}", shell=True)
+    subprocess.check_call(["codesign", "--deep", "--force", "--sign", "-", target])
 
 # ------------------------------------------------
 
 if config.zip is not None:
-    shutil.make_archive('{}'.format(appname), format='zip', root_dir='dist', base_dir=bundle_name)
+    subprocess.check_call(["zip", "-ry", os.path.abspath(appname + ".zip"), bundle_name], cwd="dist")
 
 # ------------------------------------------------
 

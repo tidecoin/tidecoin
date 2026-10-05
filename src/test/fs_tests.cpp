@@ -10,9 +10,35 @@
 
 #include <fstream>
 #include <ios>
+#include <limits>
 #include <string>
+#include <utility>
+
+#ifndef WIN32
+#include <sys/resource.h>
+#endif
 
 BOOST_FIXTURE_TEST_SUITE(fs_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(file_descriptor_limit)
+{
+#ifdef WIN32
+    BOOST_CHECK_EQUAL(RaiseFileDescriptorLimit(0), 2048);
+#else
+    struct rlimit before;
+    BOOST_REQUIRE_EQUAL(getrlimit(RLIMIT_NOFILE, &before), 0);
+    const int limit{RaiseFileDescriptorLimit(0)};
+    if (before.rlim_cur == RLIM_INFINITY || std::cmp_greater_equal(before.rlim_cur, std::numeric_limits<int>::max())) {
+        BOOST_CHECK_EQUAL(limit, std::numeric_limits<int>::max());
+    } else {
+        BOOST_CHECK_EQUAL(limit, before.rlim_cur);
+    }
+    struct rlimit after;
+    BOOST_REQUIRE_EQUAL(getrlimit(RLIMIT_NOFILE, &after), 0);
+    BOOST_CHECK_EQUAL(after.rlim_cur, before.rlim_cur);
+    BOOST_CHECK_EQUAL(after.rlim_max, before.rlim_max);
+#endif
+}
 
 BOOST_AUTO_TEST_CASE(fsbridge_pathtostring)
 {

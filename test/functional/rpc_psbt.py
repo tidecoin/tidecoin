@@ -248,8 +248,9 @@ class PSBTTest(BitcoinTestFramework):
         def_wallet.sendtoaddress(addr, 5)
         self.generate(self.nodes[0], 6)
 
-        # Retrieve the descriptors so we can do all of the tests with descriptorprocesspsbt as well
-        descs = wallet.listdescriptors(True)["descriptors"]
+        # descriptorprocesspsbt signs only with supplied private keys. PQHD
+        # listdescriptors(true) still contains seed identifiers, not seed bytes.
+        descs = [descsum_create(f"wpkh({wallet.dumpprivkey(addr)})")]
 
         # Make a PSBT
         psbt = wallet.walletcreatefundedpsbt([], [{def_wallet.getnewaddress(): 1}])["psbt"]
@@ -269,24 +270,12 @@ class PSBTTest(BitcoinTestFramework):
 
         # Repeat with descriptorprocesspsbt
         # Mismatching sighash type fails, including when no type is specified
-        descriptor_signing_available = True
         for sighash in ["ALL", "NONE", "SINGLE", "NONE|ANYONECANPAY", "SINGLE|ANYONECANPAY", None]:
-            try:
-                assert_raises_rpc_error(-22, "Specified sighash value does not match value stored in PSBT", self.nodes[0].descriptorprocesspsbt, psbt, descs, sighash)
-            except AssertionError:
-                try:
-                    self.nodes[0].descriptorprocesspsbt(psbt, descs, sighash)
-                except JSONRPCException as e:
-                    if e.error["code"] == -5 and "Cannot derive script without private keys" in e.error["message"]:
-                        descriptor_signing_available = False
-                        break
-                    raise
-                raise
+            assert_raises_rpc_error(-22, "Specified sighash value does not match value stored in PSBT", self.nodes[0].descriptorprocesspsbt, psbt, descs, sighash)
 
-        # Matching sighash type succeeds
-        if descriptor_signing_available:
-            proc = self.nodes[0].descriptorprocesspsbt(psbt, descs, "ALL|ANYONECANPAY")
-            assert_equal(proc["complete"], True)
+        # Matching sighash type succeeds without an unsupported-derivation skip.
+        proc = self.nodes[0].descriptorprocesspsbt(psbt, descs, "ALL|ANYONECANPAY")
+        assert_equal(proc["complete"], True)
 
         wallet.unloadwallet()
 
@@ -298,7 +287,7 @@ class PSBTTest(BitcoinTestFramework):
 
         outputs = [{wallet.getnewaddress(address_type="bech32"): 1}]
         outputs.append({wallet.getnewaddress(address_type="bech32"): 1})
-        descs = wallet.listdescriptors(True)["descriptors"]
+        descs = [descsum_create(f"wpkh({wallet.dumpprivkey(address)})") for output in outputs for address in output]
         def_wallet.send(outputs)
         self.generate(self.nodes[0], 6)
         utxos = wallet.listunspent()
@@ -311,12 +300,8 @@ class PSBTTest(BitcoinTestFramework):
 
         psbts_to_check = [wallet_psbt]
         # Separately process the PSBT with descriptors.
-        try:
-            desc_psbt = self.nodes[0].descriptorprocesspsbt(psbt=psbt, descriptors=descs, sighashtype="ALL|ANYONECANPAY", finalize=False)["psbt"]
-            psbts_to_check.append(desc_psbt)
-        except JSONRPCException as e:
-            if e.error["code"] != -5 or "Cannot derive script without private keys" not in e.error["message"]:
-                raise
+        desc_psbt = self.nodes[0].descriptorprocesspsbt(psbt=psbt, descriptors=descs, sighashtype="ALL|ANYONECANPAY", finalize=False)["psbt"]
+        psbts_to_check.append(desc_psbt)
 
         for psbt in psbts_to_check:
             # Check that the PSBT has a sighash field on all inputs
@@ -340,15 +325,7 @@ class PSBTTest(BitcoinTestFramework):
         self.log.info("Test DEFAULT sighash string is rejected")
         default_psbt = wallet.walletcreatefundedpsbt([], [{def_wallet.getnewaddress(): 0.5}])["psbt"]
         assert_raises_rpc_error(-8, "'DEFAULT' is not a valid sighash parameter.", wallet.walletprocesspsbt, default_psbt, True, "DEFAULT")
-        try:
-            assert_raises_rpc_error(-8, "'DEFAULT' is not a valid sighash parameter.", self.nodes[0].descriptorprocesspsbt, default_psbt, descs, "DEFAULT")
-        except AssertionError:
-            # Descriptor signing may be unavailable without private descriptor derivation support.
-            try:
-                self.nodes[0].descriptorprocesspsbt(default_psbt, descs, "DEFAULT")
-            except JSONRPCException as e:
-                if e.error["code"] != -5 or "Cannot derive script without private keys" not in e.error["message"]:
-                    raise
+        assert_raises_rpc_error(-8, "'DEFAULT' is not a valid sighash parameter.", self.nodes[0].descriptorprocesspsbt, default_psbt, descs, "DEFAULT")
 
         self.nodes[0].sendrawtransaction(fin_hex)
         self.generate(self.nodes[0], 1)
@@ -1269,7 +1246,7 @@ class PSBTTest(BitcoinTestFramework):
         psbt1 = PSBT(g=PSBTMap({PSBT_GLOBAL_UNSIGNED_TX: tx.serialize()}), i=[PSBTMap()], o=[PSBTMap()]).to_base64()
         tx.vout[0].nValue += 1  # slightly modify tx
         psbt2 = PSBT(g=PSBTMap({PSBT_GLOBAL_UNSIGNED_TX: tx.serialize()}), i=[PSBTMap()], o=[PSBTMap()]).to_base64()
-        assert_raises_rpc_error(-8, "PSBTs not compatible (different transactions)", self.nodes[0].combinepsbt, [psbt1, psbt2])
+        assert_raises_rpc_error(-8, "PSBTs not compatible (different transactions or conflicting PQHD origins)", self.nodes[0].combinepsbt, [psbt1, psbt2])
         assert_equal(self.nodes[0].combinepsbt([psbt1, psbt1]), psbt1)
 
         self.log.info("Test that PSBT inputs are being checked via script execution")

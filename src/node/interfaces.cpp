@@ -824,7 +824,10 @@ public:
         });
         if (!action) return false;
         // Now dump value to disk if requested
-        return *action != interfaces::SettingsAction::WRITE || args().WriteSettingsFile();
+        if (*action != interfaces::SettingsAction::WRITE) return true;
+        // Preserve the in-memory update, but report that it cannot be persisted.
+        // Wallet callers translate this into their existing startup-setting warning.
+        return args().GetSettingsPath() && args().WriteSettingsFile();
     }
     bool overwriteRwSetting(const std::string& name, common::SettingsValue value, interfaces::SettingsAction action) override
     {
@@ -917,11 +920,18 @@ public:
 
     std::unique_ptr<BlockTemplate> waitNext(BlockWaitOptions options) override
     {
-        auto new_template = WaitAndCreateNewBlock(chainman(), notifications(), m_node.mempool.get(), m_block_template, options, m_assemble_options);
+        auto new_template = WaitAndCreateNewBlock(chainman(), notifications(), m_node.mempool.get(), m_block_template, options, m_assemble_options, m_interrupt_wait);
         if (new_template) return std::make_unique<BlockTemplateImpl>(m_assemble_options, std::move(new_template), m_node);
         return nullptr;
     }
 
+    void interruptWait() override
+    {
+        InterruptWait(notifications(), m_interrupt_wait);
+    }
+
+    // Protected by notifications().m_tip_block_mutex.
+    bool m_interrupt_wait{false};
     const BlockAssembler::Options m_assemble_options;
 
     const std::unique_ptr<CBlockTemplate> m_block_template;
@@ -986,5 +996,16 @@ public:
 namespace interfaces {
 std::unique_ptr<Node> MakeNode(node::NodeContext& context) { return std::make_unique<node::NodeImpl>(context); }
 std::unique_ptr<Chain> MakeChain(node::NodeContext& context) { return std::make_unique<node::ChainImpl>(context); }
-std::unique_ptr<Mining> MakeMining(node::NodeContext& context) { return std::make_unique<node::MinerImpl>(context); }
+std::unique_ptr<Mining> MakeMining(node::NodeContext& context, bool wait_loaded)
+{
+    if (wait_loaded) {
+        auto& interrupt{*Assert(context.shutdown_signal)};
+        WAIT_LOCK(context.mining_mutex, lock);
+        context.mining_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(context.mining_mutex) {
+            return context.mining_ready || context.mining_stopping || interrupt;
+        });
+        if (context.mining_stopping || interrupt) return nullptr;
+    }
+    return std::make_unique<node::MinerImpl>(context);
+}
 } // namespace interfaces

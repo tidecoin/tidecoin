@@ -9,7 +9,9 @@ between a node running the coinstatsindex and a node without
 the index.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
+from threading import Barrier
 
 from test_framework.blocktools import (
     COINBASE_MATURITY,
@@ -32,6 +34,7 @@ from test_framework.util import (
     assert_not_equal,
     assert_equal,
     assert_raises_rpc_error,
+    get_rpc_proxy,
 )
 from test_framework.wallet import (
     MiniWallet,
@@ -54,6 +57,7 @@ class CoinStatsIndexTest(BitcoinTestFramework):
         self._test_use_index_option()
         self._test_reorg_index()
         self._test_index_rejects_hash_serialized()
+        self._test_stats_during_tip_changes()
         self._test_init_index_after_reorg()
 
     def _subsidy(self, height):
@@ -333,6 +337,52 @@ class CoinStatsIndexTest(BitcoinTestFramework):
 
         for use_index in {True, False, None}:
             assert_raises_rpc_error(-8, msg, self.nodes[1].gettxoutsetinfo, hash_type='hash_serialized_3', hash_or_height=111, use_index=use_index)
+
+    def _test_stats_during_tip_changes(self):
+        self.log.info("Test statistics snapshots during concurrent tip changes and flushes")
+        node = self.nodes[1]
+        # Extend beyond competing branches left by the preceding reorg tests,
+        # so invalidating this tip can only select its immediate parent.
+        self.generate(node, 3)
+        tip = node.getbestblockhash()
+        modes = [('none', True), ('muhash', True), ('none', False),
+                 ('muhash', False), ('hash_serialized_3', False)]
+
+        def stats(rpc, mode):
+            result = rpc.gettxoutsetinfo(mode[0], None, mode[1])
+            # This is an estimate of current disk usage, not part of the snapshot.
+            result.pop('disk_size', None)
+            return result
+
+        expected = {}
+        for invalidate in [False, True]:
+            if invalidate:
+                node.invalidateblock(tip)
+            for mode in modes:
+                result = stats(node, mode)
+                expected[mode, result['bestblock']] = result
+        node.reconsiderblock(tip)
+
+        # Each thread owns its HTTP connection. The barrier overlaps calls with
+        # tip changes; the exact server-side interleaving remains stress coverage.
+        rpc = get_rpc_proxy(node.url, node.index, timeout=self.rpc_timeout)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            for _ in range(20):
+                start = Barrier(2, timeout=self.rpc_timeout)
+
+                def query():
+                    start.wait()
+                    return [(mode, stats(rpc, mode)) for mode in modes]
+
+                future = executor.submit(query)
+                start.wait()
+                node.invalidateblock(tip)
+                node.gettxoutsetinfo('none', None, False)
+                node.reconsiderblock(tip)
+                node.gettxoutsetinfo('none', None, False)
+                for mode, result in future.result(timeout=self.rpc_timeout):
+                    assert_equal(result, expected[mode, result['bestblock']])
+        assert_equal(node.getbestblockhash(), tip)
 
     def _test_init_index_after_reorg(self):
         self.log.info("Test a reorg while the index is deactivated")

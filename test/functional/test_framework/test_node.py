@@ -90,7 +90,7 @@ class TestNode():
     To make things easier for the test writer, any unrecognised messages will
     be dispatched to the RPC connection."""
 
-    def __init__(self, i, datadir_path, *, chain, rpchost, timewait, timeout_factor, binaries, coverage_dir, cwd, extra_conf=None, extra_args=None, use_cli=False, start_perf=False, use_valgrind=False, version=None, v2transport=False, uses_wallet=False, ipcbind=False):
+    def __init__(self, i, datadir_path, *, chain, rpchost, timewait, timeout_factor, binaries, coverage_dir, cwd, extra_conf=None, extra_args=None, use_cli=False, start_perf=False, version=None, v2transport=False, uses_wallet=False, ipcbind=False):
         """
         Kwargs:
             start_perf (bool): If True, begin profiling the node with `perf` as soon as
@@ -144,15 +144,6 @@ class TestNode():
                 self.ipc_tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="test-ipc-"))
                 self.ipc_socket_path = self.ipc_tmp_dir / "node.sock"
                 self.args.append(f"-ipcbind=unix:{self.ipc_socket_path}")
-
-        # Use valgrind when requested.
-        if use_valgrind and version is None:
-            default_suppressions_file = Path(__file__).parents[3] / "contrib" / "valgrind.supp"
-            suppressions_file = os.getenv("VALGRIND_SUPPRESSIONS_FILE",
-                                          default_suppressions_file)
-            self.args = ["valgrind", "--suppressions={}".format(suppressions_file),
-                         "--gen-suppressions=all", "--exit-on-first-error=yes",
-                         "--error-exitcode=1", "--quiet"] + self.args
 
         # Keep default runtime args strict for framework-managed binaries.
         if version is None:
@@ -887,6 +878,11 @@ class TestNode():
         del self.p2ps[:]
 
         self.wait_until(lambda: self.num_test_p2p_connections() == 0)
+
+    def is_connected_to(self, other):
+        assert isinstance(other, TestNode)
+        subversion = other.getnetworkinfo()["subversion"]
+        return any(peer["subver"] == subversion for peer in self.getpeerinfo())
 
     def bumpmocktime(self, seconds):
         """Fast forward using setmocktime to self.mocktime + seconds. Requires setmocktime to have

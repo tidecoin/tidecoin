@@ -12,6 +12,7 @@
 #include <wallet/coincontrol.h>
 #include <wallet/spend.h>
 #include <test/util/test_controls.h>
+#include <test/util/txmempool.h>
 #include <wallet/test/util.h>
 #include <wallet/test/wallet_test_fixture.h>
 
@@ -19,6 +20,44 @@
 
 namespace wallet {
 BOOST_FIXTURE_TEST_SUITE(spend_tests, WalletTestingSetup)
+
+BOOST_AUTO_TEST_CASE(long_chain_error_uses_remaining_amount)
+{
+    LOCK2(cs_main, m_wallet.cs_wallet);
+    CMutableTransaction tx;
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+    tx.vout.emplace_back(6 * COIN, CScript{} << OP_TRUE);
+    TestMemPoolEntryHelper entry;
+    unsigned int ancestors, descendants;
+    m_wallet.chain().getPackageLimits(ancestors, descendants);
+    for (unsigned int i = 0; i < ancestors; ++i) {
+        AddToMempool(*m_node.mempool, entry.FromTx(tx));
+        if (i + 1 < ancestors) tx.vin[0].prevout.hash = tx.GetHash();
+    }
+    CoinsResult coins;
+    coins.Add(OutputType::BECH32, COutput{COutPoint{Txid::FromUint256(uint256::ZERO), 0}, CTxOut{4 * COIN, CScript{} << OP_TRUE}, 6, 100, true, true, 0, true, CAmount{0}});
+    coins.Add(OutputType::BECH32, COutput{COutPoint{tx.GetHash(), 0}, tx.vout[0], 0, 100, true, true, 0, true, CAmount{0}});
+    CoinSelectionParams params{m_rng};
+    params.m_subtract_fee_outputs = true;
+    const auto result = AutomaticCoinSelection(m_wallet, coins, 7 * COIN, params);
+    BOOST_REQUIRE(!result);
+    // Four confirmed coins plus six excluded coins can cover seven. Treating
+    // the remaining amount as a boolean incorrectly reports generic failure.
+    BOOST_CHECK_EQUAL(util::ErrorString(result).original, "Unconfirmed UTXOs are available, but spending them creates a chain of transactions that will be rejected by the mempool");
+
+    // With APS enabled, the discarded positive group overlaps its mixed group.
+    // Give the confirmed output another script so it remains independently usable.
+    coins.coins.at(OutputType::BECH32).front().txout.scriptPubKey = CScript{} << OP_TRUE << OP_DROP << OP_TRUE;
+    params.m_avoid_partial_spends = true;
+    const auto affordable = AutomaticCoinSelection(m_wallet, coins, 3 * COIN, params);
+    BOOST_REQUIRE(affordable);
+    BOOST_CHECK_EQUAL(affordable->GetSelectedValue(), 4 * COIN);
+    const auto too_long = AutomaticCoinSelection(m_wallet, coins, 7 * COIN, params);
+    BOOST_REQUIRE(!too_long);
+    BOOST_CHECK_EQUAL(util::ErrorString(too_long).original, util::ErrorString(result).original);
+    const auto insufficient = AutomaticCoinSelection(m_wallet, coins, 11 * COIN, params);
+    BOOST_CHECK(!insufficient);
+}
 
 BOOST_FIXTURE_TEST_CASE(SubtractFee, TestChain100Setup)
 {

@@ -19,6 +19,7 @@
 #include <util/translation.h>
 
 #include <chrono>
+#include <limits>
 #include <memory>
 
 using common::AmountErrMsg;
@@ -49,6 +50,10 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainP
         constexpr bool is_32bit{sizeof(void*) == 4};
         if (is_32bit && *mb > MAX_32BIT_MEMPOOL_MB) {
             return util::Error{Untranslated(strprintf("-maxmempool is set to %i but can't be over %i MB on 32-bit systems", *mb, MAX_32BIT_MEMPOOL_MB))};
+        }
+        constexpr int64_t max_mempool_mb{std::numeric_limits<int64_t>::max() / 1'000'000};
+        if (*mb < 0 || *mb > max_mempool_mb) {
+            return util::Error{Untranslated(strprintf("-maxmempool must be between 0 and %d MB", max_mempool_mb))};
         }
         mempool_opts.max_size_bytes = *mb * 1'000'000;
     }

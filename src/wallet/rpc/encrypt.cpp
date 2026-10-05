@@ -39,11 +39,12 @@ RPCHelpMan walletpassphrase()
     CWallet* const pwallet = wallet.get();
 
     int64_t nSleepTime;
-    int64_t relock_time;
     // Prevent concurrent calls to walletpassphrase with the same wallet.
     LOCK(pwallet->m_unlock_mutex);
     {
-        LOCK(pwallet->cs_wallet);
+        // Keep the previous lock state and timeout stable until either the new
+        // relock callback is installed or the failed unlock has been undone.
+        LOCK2(pwallet->m_relock_mutex, pwallet->cs_wallet);
 
         if (!pwallet->IsCrypted()) {
             throw JSONRPCError(RPC_WALLET_WRONG_ENC_STATE, "Error: running with an unencrypted wallet, but walletpassphrase was called.");
@@ -70,44 +71,50 @@ RPCHelpMan walletpassphrase()
             throw JSONRPCError(RPC_INVALID_PARAMETER, "passphrase cannot be empty");
         }
 
-        if (!pwallet->Unlock(strWalletPass)) {
-            // Check if the passphrase has a null character (see #27067 for details)
-            if (strWalletPass.find('\0') == std::string::npos) {
-                throw JSONRPCError(RPC_WALLET_PASSPHRASE_INCORRECT, "Error: The wallet passphrase entered was incorrect.");
-            } else {
-                throw JSONRPCError(RPC_WALLET_PASSPHRASE_INCORRECT, "Error: The wallet passphrase entered is incorrect. "
-                                                                    "It contains a null character (ie - a zero byte). "
-                                                                    "If the passphrase was set with a version of this software prior to 25.0, "
-                                                                    "please try again with only the characters up to — but not including — "
-                                                                    "the first null character. If this is successful, please set a new "
-                                                                    "passphrase to avoid this issue in the future.");
+        const bool was_locked{pwallet->IsLocked()};
+        try {
+            if (!pwallet->Unlock(strWalletPass)) {
+                // Check if the passphrase has a null character (see #27067 for details)
+                if (strWalletPass.find('\0') == std::string::npos) {
+                    throw JSONRPCError(RPC_WALLET_PASSPHRASE_INCORRECT, "Error: The wallet passphrase entered was incorrect.");
+                } else {
+                    throw JSONRPCError(RPC_WALLET_PASSPHRASE_INCORRECT, "Error: The wallet passphrase entered is incorrect. "
+                                                                        "It contains a null character (ie - a zero byte). "
+                                                                        "If the passphrase was set with a version of this software prior to 25.0, "
+                                                                        "please try again with only the characters up to — but not including — "
+                                                                        "the first null character. If this is successful, please set a new "
+                                                                        "passphrase to avoid this issue in the future.");
+                }
             }
+
+            if (!pwallet->TopUpKeyPool()) {
+                throw JSONRPCError(RPC_WALLET_ERROR, "Error: Unable to top up keypool.");
+            }
+
+            WalletContext& context = EnsureWalletContext(request.context);
+            const int64_t relock_time{GetTime() + nSleepTime};
+            // Keep a weak pointer so the scheduled callback does not prevent unload.
+            std::weak_ptr<CWallet> weak_wallet = wallet;
+            context.scheduler->scheduleFromNow([weak_wallet, relock_time] {
+                if (auto shared_wallet = weak_wallet.lock()) {
+                    LOCK2(shared_wallet->m_relock_mutex, shared_wallet->cs_wallet);
+                    // Skip if this is not the most recent relock callback.
+                    if (shared_wallet->nRelockTime != relock_time) return;
+                    shared_wallet->Lock();
+                    shared_wallet->nRelockTime = 0;
+                }
+            }, std::chrono::seconds(nSleepTime));
+            // Publish only after scheduling succeeds. On failure, an already
+            // unlocked wallet retains its previous deadline and callback.
+            pwallet->nRelockTime = relock_time;
+        } catch (...) {
+            if (was_locked) {
+                if (!pwallet->IsLocked()) pwallet->Lock();
+                pwallet->nRelockTime = 0;
+            }
+            throw;
         }
-
-        pwallet->TopUpKeyPool();
-
-        pwallet->nRelockTime = GetTime() + nSleepTime;
-        relock_time = pwallet->nRelockTime;
     }
-
-    // Get wallet scheduler to queue up the relock callback in the future.
-    // Scheduled events don't get destructed until they are executed,
-    // and they are executed in series in a single scheduler thread so
-    // no cs_wallet lock is needed.
-    WalletContext& context = EnsureWalletContext(request.context);
-    // Keep a weak pointer to the wallet so that it is possible to unload the
-    // wallet before the following callback is called. If a valid shared pointer
-    // is acquired in the callback then the wallet is still loaded.
-    std::weak_ptr<CWallet> weak_wallet = wallet;
-    context.scheduler->scheduleFromNow([weak_wallet, relock_time] {
-        if (auto shared_wallet = weak_wallet.lock()) {
-            LOCK2(shared_wallet->m_relock_mutex, shared_wallet->cs_wallet);
-            // Skip if this is not the most recent relock callback.
-            if (shared_wallet->nRelockTime != relock_time) return;
-            shared_wallet->Lock();
-            shared_wallet->nRelockTime = 0;
-        }
-    }, std::chrono::seconds(nSleepTime));
 
     return UniValue::VNULL;
 },
@@ -198,6 +205,9 @@ RPCHelpMan walletlock()
 {
     std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
     if (!pwallet) return UniValue::VNULL;
+
+    // Cancel public expansion before waiting for a derivation holding cs_wallet.
+    pwallet->AbortDescriptorExpansion();
 
     if (!pwallet->IsCrypted()) {
         throw JSONRPCError(RPC_WALLET_WRONG_ENC_STATE, "Error: running with an unencrypted wallet, but walletlock was called.");

@@ -263,6 +263,46 @@ class CompactBlocksTest(BitcoinTestFramework):
         test_node.send_and_ping(msg_sendcmpct(announce=False, version=2))
         check_announcement_of_new_block(node, test_node, lambda p: "cmpctblock" not in p.last_message and "headers" in p.last_message)
 
+    def test_invalid_sendcmpct_announce(self):
+        # Adapted from Bitcoin Core PR 35550: only 0 and 1 are valid.
+        # Validate the announce byte even when the version is unsupported.
+        node = self.nodes[0]
+        for announce, version in [(2, 2), (127, 2), (128, 2), (255, 2), (2, 1), (2, 3)]:
+            bad_peer = node.add_p2p_connection(TestP2PConn())
+            with node.assert_debug_log(["invalid sendcmpct announce field"]):
+                bad_peer.send_await_disconnect(msg_sendcmpct(announce=announce, version=version))
+
+    def test_truncated_sendcmpct(self):
+        class TruncatedSendCmpct(msg_sendcmpct):
+            def __init__(self, payload):
+                self.payload = payload
+
+            def serialize(self):
+                return self.payload
+
+            def __repr__(self):
+                return f"TruncatedSendCmpct(payload={self.payload.hex()})"
+
+        node = self.nodes[0]
+        peer = node.add_p2p_connection(TestP2PConn())
+        peer_id = node.getpeerinfo()[-1]["id"]
+        for high_bandwidth in [False, True]:
+            peer.send_and_ping(msg_sendcmpct(announce=high_bandwidth, version=2))
+            # Try every truncated length with the opposite announce value. A
+            # partial parse must neither change negotiation nor disconnect us.
+            payload = msg_sendcmpct(announce=not high_bandwidth, version=2).serialize()
+            for length in range(len(payload)):
+                with node.assert_debug_log([f"ProcessMessages(sendcmpct, {length} bytes): Exception", "end of data"]):
+                    peer.send_and_ping(TruncatedSendCmpct(payload[:length]))
+                info = next(p for p in node.getpeerinfo() if p["id"] == peer_id)
+                assert_equal(info["bip152_hb_from"], high_bandwidth)
+        # A complete message still works after all truncated messages.
+        peer.send_and_ping(msg_sendcmpct(announce=False, version=2))
+        info = next(p for p in node.getpeerinfo() if p["id"] == peer_id)
+        assert_equal(info["bip152_hb_from"], False)
+        peer.peer_disconnect()
+        peer.wait_for_disconnect()
+
     # This test actually causes bitcoind to (reasonably!) disconnect us, so do this last.
     def test_invalid_cmpctblock_message(self):
         self.generate(self.nodes[0], COINBASE_MATURITY + 1)
@@ -1018,6 +1058,12 @@ class CompactBlocksTest(BitcoinTestFramework):
 
         # The previous test will lead to a disconnection. Reconnect before continuing.
         self.segwit_node = self.nodes[0].add_p2p_connection(TestP2PConn())
+
+        self.log.info("Testing truncated sendcmpct messages...")
+        self.test_truncated_sendcmpct()
+
+        self.log.info("Testing invalid announce field in sendcmpct messages...")
+        self.test_invalid_sendcmpct_announce()
 
         self.log.info("Testing invalid index in cmpctblock message...")
         self.test_invalid_cmpctblock_message()

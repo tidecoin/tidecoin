@@ -34,6 +34,7 @@ class CreateTxWalletTest(BitcoinTestFramework):
         self.test_anti_fee_sniping()
         self.test_tx_size_too_large()
         self.test_create_too_long_mempool_chain()
+        self.test_discarded_group_accounting()
         self.test_version3()
 
     def test_anti_fee_sniping(self):
@@ -108,6 +109,28 @@ class CreateTxWalletTest(BitcoinTestFramework):
                                 test_wallet.send, outputs=[{test_wallet.getnewaddress(): 0.3}], options=options)
 
         test_wallet.unloadwallet()
+
+    def test_discarded_group_accounting(self):
+        self.log.info('APS can spend confirmed funds despite an ineligible unconfirmed group')
+        node = self.nodes[0]
+        source = node.get_wallet_rpc(self.default_wallet_name)
+        node.createwallet('discarded', avoid_reuse=True)
+        wallet = node.get_wallet_rpc('discarded')
+        source.sendtoaddress(wallet.getnewaddress(), 0.3)
+        self.generate(node, 1)
+        for _ in range(25):
+            txid = wallet.sendall([wallet.getnewaddress()])['txid']
+        assert_equal(node.getmempoolentry(txid)['ancestorcount'], 25)
+        # Confirm only the independent funding transaction, leaving the chain
+        # ineligible for another spend under the ancestor limit.
+        funding = source.sendtoaddress(wallet.getnewaddress(), 0.7)
+        self.generateblock(node, output=source.getnewaddress(), transactions=[funding])
+        payment = wallet.sendtoaddress(source.getnewaddress(), 0.65)
+        tx = wallet.gettransaction(payment, verbose=True)['decoded']
+        assert_equal(len(tx['vin']), 1)
+        assert_equal(tx['vin'][0]['txid'], funding)
+        assert_raises_rpc_error(-6, 'Insufficient funds', wallet.sendtoaddress, source.getnewaddress(), 2)
+        wallet.unloadwallet()
 
     def test_version3(self):
         self.log.info('Check wallet does not create transactions with version=3 yet')

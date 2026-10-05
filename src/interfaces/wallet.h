@@ -31,6 +31,8 @@
 
 class CFeeRate;
 class CKey;
+struct Descriptor;
+struct FlatSigningProvider;
 enum class FeeReason;
 enum class OutputType;
 struct PartiallySignedTransaction;
@@ -318,12 +320,25 @@ public:
     virtual wallet::CWallet* wallet() { return nullptr; }
 };
 
+//! Temporary public descriptor expansion. Implementations retain no seed between
+//! indices and make no changes to wallet monitoring or address allocation.
+class WalletDescriptorExpansion
+{
+public:
+    virtual ~WalletDescriptorExpansion() = default;
+    virtual void expand(const Descriptor& descriptor, int32_t index, std::vector<CScript>& scripts, FlatSigningProvider& out) = 0;
+    virtual void finish() = 0;
+};
+
 //! Wallet chain client that in addition to having chain client methods for
 //! starting up, shutting down, and registering RPCs, also has additional
 //! methods (called by the GUI) to load and create wallets.
 class WalletLoader : public ChainClient
 {
 public:
+    //! Resolve public PQHD descriptors using only this explicitly named wallet.
+    virtual std::unique_ptr<WalletDescriptorExpansion> getDescriptorExpansion(const std::string& wallet_name) = 0;
+
     //! Create new wallet.
     virtual util::Result<std::unique_ptr<Wallet>> createWallet(const std::string& name, const SecureString& passphrase, uint64_t wallet_creation_flags, std::vector<bilingual_str>& warnings) = 0;
 

@@ -26,7 +26,6 @@ namespace pqhd {
 using SeedID32 = std::array<uint8_t, 32>;
 using NodeSecret = std::array<uint8_t, 32>;
 using ChainCode = std::array<uint8_t, 32>;
-using KeygenStreamBlock64 = std::array<uint8_t, 64>;
 
 /** RAII wrapper for 32-byte master seed material. */
 class SecureSeed32
@@ -96,6 +95,10 @@ public:
     uint8_t* data() noexcept { return m_bytes.data(); }
     const uint8_t* data() const noexcept { return m_bytes.data(); }
     size_t size() const noexcept { return m_bytes.size(); }
+    auto begin() noexcept { return m_bytes.begin(); }
+    auto end() noexcept { return m_bytes.end(); }
+    auto begin() const noexcept { return m_bytes.begin(); }
+    auto end() const noexcept { return m_bytes.end(); }
 
     std::span<uint8_t, 64> MutableSpan() noexcept { return std::span<uint8_t, 64>(m_bytes); }
     std::span<const uint8_t, 64> Span() const noexcept { return std::span<const uint8_t, 64>(m_bytes); }
@@ -104,14 +107,43 @@ private:
     std::array<uint8_t, 64> m_bytes{};
 };
 
+using KeygenStreamBlock64 = KeygenStreamKey64;
+
 struct LeafMaterialV1 {
     pq::SchemeId scheme_id;
     KeygenStreamKey64 stream_key;
 };
 
 struct Node {
-    NodeSecret node_secret;
-    ChainCode chain_code;
+    NodeSecret node_secret{};
+    ChainCode chain_code{};
+
+    Node() = default;
+    Node(const Node&) = default;
+    ~Node() { Clear(); }
+    Node& operator=(const Node& other) noexcept
+    {
+        if (this != &other) {
+            Clear();
+            node_secret = other.node_secret;
+            chain_code = other.chain_code;
+        }
+        return *this;
+    }
+    Node(Node&& other) noexcept : node_secret(other.node_secret), chain_code(other.chain_code) { other.Clear(); }
+    Node& operator=(Node&& other) noexcept
+    {
+        if (this != &other) {
+            *this = other;
+            other.Clear();
+        }
+        return *this;
+    }
+    void Clear() noexcept
+    {
+        memory_cleanse(node_secret.data(), node_secret.size());
+        memory_cleanse(chain_code.data(), chain_code.size());
+    }
 };
 
 /** Compute SeedID32 = SHA256("Tidecoin PQHD seedid v1" || master_seed). */

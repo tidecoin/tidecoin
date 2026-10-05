@@ -294,9 +294,12 @@ public:
 
     /**
      * All pairs A->B, where A (or one of its ancestors) misses transactions, but B has transactions.
-     * Pruned nodes may have entries where B is missing data.
+     * B must have block data available, and each pair occurs at most once.
      */
     std::multimap<CBlockIndex*, CBlockIndex*> m_blocks_unlinked;
+
+    //! Queue a block with available data for linking when its missing ancestors arrive.
+    void AddUnlinkedBlock(CBlockIndex* block) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     std::unique_ptr<BlockTreeDB> m_block_tree_db GUARDED_BY(::cs_main);
 

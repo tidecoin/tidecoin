@@ -80,6 +80,7 @@
 #include <cassert>
 #include <condition_variable>
 #include <exception>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -556,8 +557,9 @@ std::shared_ptr<CWallet> RestoreWallet(WalletContext& context, const fs::path& b
 
     const fs::path wallet_path = fsbridge::AbsPathJoin(GetWalletDir(), fs::u8path(wallet_name));
     auto wallet_file = wallet_path / "wallet.dat";
-    const bool wallet_path_existed = fs::exists(wallet_path);
     bool wallet_path_created = false;
+    bool wallet_file_owned = false;
+    bool restored = false;
     std::shared_ptr<CWallet> wallet;
 
     try {
@@ -567,29 +569,49 @@ std::shared_ptr<CWallet> RestoreWallet(WalletContext& context, const fs::path& b
             return nullptr;
         }
 
-        if (fs::exists(wallet_path) || !TryCreateDirectories(wallet_path)) {
-            error = Untranslated(strprintf("Failed to create database path '%s'. Database already exists.", fs::PathToString(wallet_path)));
-            status = DatabaseStatus::FAILED_ALREADY_EXISTS;
-            return nullptr;
+        if (fs::exists(wallet_path)) {
+            if (!fs::is_directory(wallet_path) || fs::symlink_status(wallet_file).type() != fs::file_type::not_found) {
+                error = Untranslated(strprintf("Failed to create database path '%s'. Database already exists.", fs::PathToString(wallet_path)));
+                status = DatabaseStatus::FAILED_ALREADY_EXISTS;
+                return nullptr;
+            }
+        } else {
+            wallet_path_created = TryCreateDirectories(wallet_path);
+            if (!wallet_path_created) {
+                error = Untranslated(strprintf("Failed to create database path '%s'.", fs::PathToString(wallet_path)));
+                status = DatabaseStatus::FAILED_BAD_PATH;
+                return nullptr;
+            }
         }
-        wallet_path_created = true;
 
-        fs::copy_file(backup_file, wallet_file, fs::copy_options::none);
+        // copy_file can leave a partial destination on an I/O error. The destination
+        // was absent above; retain it only if another creator won the file-exists race.
+        wallet_file_owned = true;
+        try {
+            restored = fs::copy_file(backup_file, wallet_file, fs::copy_options::none);
+        } catch (const fs::filesystem_error& e) {
+            wallet_file_owned = e.code() != std::errc::file_exists;
+            throw;
+        }
+        if (!restored) throw std::runtime_error("Failed to copy wallet backup");
 
         if (load_after_restore) {
             wallet = LoadWallet(context, wallet_name, load_on_start, options, status, error, warnings);
+            restored = wallet != nullptr;
         }
     } catch (const std::exception& e) {
         assert(!wallet);
+        restored = false;
+        status = DatabaseStatus::FAILED_LOAD;
         if (!error.empty()) error += Untranslated("\n");
         error += Untranslated(strprintf("Unexpected exception: %s", e.what()));
     }
 
-    // Remove created wallet file/dir only when loading fails
-    if (load_after_restore && !wallet) {
+    // Remove created wallet files/directories after a copy or load failure.
+    if (!restored) {
         std::error_code ec;
-        fs::remove(wallet_file, ec);
-        if (wallet_path_created && !wallet_path_existed) {
+        if (wallet_file_owned) fs::remove(wallet_file, ec);
+        if (wallet_path_created) {
             if (fs::is_empty(wallet_path, ec)) {
                 fs::remove(wallet_path, ec);
             }
@@ -617,27 +639,20 @@ const CWalletTx* CWallet::GetWalletTx(const Txid& hash) const
  * derivation parameters (should take at least 100ms) and encrypt the master key. */
 static bool EncryptMasterKey(const SecureString& wallet_passphrase, const CKeyingMaterial& plain_master_key, CMasterKey& master_key)
 {
-    constexpr MillisecondsDouble target{100};
-    auto start{SteadyClock::now()};
+    CMasterKey updated{master_key};
     CCrypter crypter;
-
-    crypter.SetKeyFromPassphrase(wallet_passphrase, master_key.vchSalt, master_key.nDeriveIterations, master_key.nDerivationMethod);
-    master_key.nDeriveIterations = static_cast<unsigned int>(master_key.nDeriveIterations * target / (SteadyClock::now() - start));
-
-    start = SteadyClock::now();
-    crypter.SetKeyFromPassphrase(wallet_passphrase, master_key.vchSalt, master_key.nDeriveIterations, master_key.nDerivationMethod);
-    master_key.nDeriveIterations = (master_key.nDeriveIterations + static_cast<unsigned int>(master_key.nDeriveIterations * target / (SteadyClock::now() - start))) / 2;
-
-    if (master_key.nDeriveIterations < CMasterKey::DEFAULT_DERIVE_ITERATIONS) {
-        master_key.nDeriveIterations = CMasterKey::DEFAULT_DERIVE_ITERATIONS;
+    for (unsigned int sample = 0; sample < 2; ++sample) {
+        const auto start{SteadyClock::now()};
+        if (!crypter.SetKeyFromPassphrase(wallet_passphrase, updated.vchSalt, updated.nDeriveIterations, updated.nDerivationMethod)) return false;
+        const auto elapsed{std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now() - start)};
+        const auto estimate{CalibrateDeriveIterations(updated.nDeriveIterations, elapsed)};
+        if (!estimate) return false;
+        updated.nDeriveIterations = (uint64_t{updated.nDeriveIterations} * sample + *estimate) / (sample + 1);
     }
-
-    if (!crypter.SetKeyFromPassphrase(wallet_passphrase, master_key.vchSalt, master_key.nDeriveIterations, master_key.nDerivationMethod)) {
-        return false;
-    }
-    if (!crypter.Encrypt(plain_master_key, master_key.vchCryptedKey)) {
-        return false;
-    }
+    updated.nDeriveIterations = std::max(updated.nDeriveIterations, CMasterKey::DEFAULT_DERIVE_ITERATIONS);
+    if (!crypter.SetKeyFromPassphrase(wallet_passphrase, updated.vchSalt, updated.nDeriveIterations, updated.nDerivationMethod) ||
+        !crypter.Encrypt(plain_master_key, updated.vchCryptedKey)) return false;
+    master_key = std::move(updated);
 
     return true;
 }
@@ -651,8 +666,26 @@ static bool DecryptMasterKey(const SecureString& wallet_passphrase, const CMaste
     if (!crypter.Decrypt(master_key.vchCryptedKey, plain_master_key)) {
         return false;
     }
-
+    // Valid CBC padding alone does not authenticate the passphrase. In
+    // particular, reject wrong-length candidates even for an empty wallet.
+    if (plain_master_key.size() != WALLET_CRYPTO_KEY_SIZE) {
+        CleanseAndClearVector(plain_master_key);
+        return false;
+    }
     return true;
+}
+
+static std::optional<pqhd::SecureSeed32> DecryptPQHDSeed(const CKeyingMaterial& master_key,
+                                                      const uint256& seed_id,
+                                                      std::span<const unsigned char> ciphertext)
+{
+    CKeyingMaterial plaintext;
+    if (!DecryptSecret(master_key, ciphertext, seed_id, plaintext)) return std::nullopt;
+    pqhd::SecureSeed32 seed;
+    const bool valid_size{seed.Set(plaintext)};
+    CleanseAndClearVector(plaintext);
+    if (!valid_size || pqhd::ComputeSeedID32AsUint256(seed.Span()) != seed_id) return std::nullopt;
+    return seed;
 }
 
 bool CWallet::Unlock(const SecureString& strWalletPassphrase)
@@ -676,31 +709,22 @@ bool CWallet::Unlock(const SecureString& strWalletPassphrase)
 
 bool CWallet::ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase, const SecureString& strNewWalletPassphrase)
 {
-    bool fWasLocked = IsLocked();
-
-    {
-        LOCK2(m_relock_mutex, cs_wallet);
-        Lock();
-
-        CKeyingMaterial plain_master_key;
-        for (auto& [master_key_id, master_key] : mapMasterKeys)
-        {
-            if (!DecryptMasterKey(strOldWalletPassphrase, master_key, plain_master_key)) {
-                return false;
-            }
-            if (Unlock(plain_master_key))
-            {
-                if (!EncryptMasterKey(strNewWalletPassphrase, plain_master_key, master_key)) {
-                    return false;
-                }
-                WalletLogPrintf("Wallet passphrase changed to an nDeriveIterations of %i\n", master_key.nDeriveIterations);
-
-                WalletBatch(GetDatabase()).WriteMasterKey(master_key_id, master_key);
-                if (fWasLocked)
-                    Lock();
-                return true;
-            }
-        }
+    LOCK2(m_relock_mutex, cs_wallet);
+    const bool was_locked{IsLocked()};
+    CKeyingMaterial plain_master_key;
+    for (auto& [master_key_id, master_key] : mapMasterKeys) {
+        if (!DecryptMasterKey(strOldWalletPassphrase, master_key, plain_master_key)) continue;
+        if (!Unlock(plain_master_key)) continue;
+        // Restore the lock before any fallible calibration or persistence work.
+        if (was_locked) Lock();
+        CMasterKey updated{master_key};
+        if (!EncryptMasterKey(strNewWalletPassphrase, plain_master_key, updated)) return false;
+        if (!RunWithinTxn(GetDatabase(), "wallet passphrase change", [&](WalletBatch& batch) {
+                return batch.WriteMasterKey(master_key_id, updated);
+            })) return false;
+        master_key = std::move(updated);
+        WalletLogPrintf("Wallet passphrase changed to an nDeriveIterations of %u\n", master_key.nDeriveIterations);
+        return true;
     }
 
     return false;
@@ -867,66 +891,36 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
 
     {
         LOCK2(m_relock_mutex, cs_wallet);
-        mapMasterKeys[++nMasterKeyMaxID] = master_key;
-        WalletBatch* encrypted_batch = new WalletBatch(GetDatabase());
-        if (!encrypted_batch->TxnBegin()) {
-            delete encrypted_batch;
-            encrypted_batch = nullptr;
-            return false;
-        }
-        encrypted_batch->WriteMasterKey(nMasterKeyMaxID, master_key);
-
-        for (const auto& spk_man_pair : m_spk_managers) {
-            auto spk_man = spk_man_pair.second.get();
-            if (!spk_man->Encrypt(plain_master_key, encrypted_batch)) {
-                encrypted_batch->TxnAbort();
-                delete encrypted_batch;
-                encrypted_batch = nullptr;
-                // We now probably have half of our keys encrypted in memory, and half not...
-                // die and let the user reload the unencrypted wallet.
-                assert(false);
-            }
-        }
-
-        // Encrypt any plaintext PQHD seeds so a locked wallet cannot derive new
-        // addresses from unencrypted seed material.
-        for (auto& [seed_id, seed_state] : m_pqhd_seeds) {
-            if (seed_state.encrypted) continue;
-            CKeyingMaterial plaintext_seed{seed_state.seed.begin(), seed_state.seed.end()};
-            std::vector<unsigned char> crypted_seed;
-            if (!EncryptSecret(plain_master_key, plaintext_seed, seed_id, crypted_seed)) {
-                CleanseAndClearVector(plaintext_seed);
-                encrypted_batch->TxnAbort();
-                delete encrypted_batch;
-                encrypted_batch = nullptr;
-                assert(false);
-            }
-            CleanseAndClearVector(plaintext_seed);
-            PQHDCryptedSeed crypted_record;
-            crypted_record.nCreateTime = seed_state.create_time;
-            crypted_record.crypted_seed = crypted_seed;
-            if (!encrypted_batch->WriteCryptedPQHDSeed(seed_id, crypted_record) ||
-                !encrypted_batch->ErasePQHDSeed(seed_id)) {
-                encrypted_batch->TxnAbort();
-                delete encrypted_batch;
-                encrypted_batch = nullptr;
-                assert(false);
-            }
-            CleanseAndClearVector(seed_state.seed);
-            seed_state.crypted_seed = std::move(crypted_seed);
-            seed_state.encrypted = true;
-        }
-
-        if (!encrypted_batch->TxnCommit()) {
-            delete encrypted_batch;
-            encrypted_batch = nullptr;
-            // We now have keys encrypted in memory, but not on disk...
-            // die to avoid confusion and let the user reload the unencrypted wallet.
-            assert(false);
-        }
-
-        delete encrypted_batch;
-        encrypted_batch = nullptr;
+        if (IsCrypted() || nMasterKeyMaxID == std::numeric_limits<unsigned int>::max()) return false;
+        const unsigned int new_master_key_id{nMasterKeyMaxID + 1};
+        if (!RunWithinTxn(GetDatabase(), "wallet encryption", [&](WalletBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
+                if (!batch.WriteMasterKey(new_master_key_id, master_key)) return false;
+                for (const auto& [id, spk_man] : m_spk_managers) {
+                    if (!spk_man->Encrypt(plain_master_key, &batch)) return false;
+                }
+                // Publish encrypted PQHD seeds only after all key and seed writes commit.
+                for (const auto& [seed_id, seed_state] : m_pqhd_seeds) {
+                    if (seed_state.encrypted) continue;
+                    CKeyingMaterial plaintext_seed{seed_state.seed.begin(), seed_state.seed.end()};
+                    PQHDCryptedSeed record;
+                    record.nCreateTime = seed_state.create_time;
+                    if (!EncryptSecret(plain_master_key, plaintext_seed, seed_id, record.crypted_seed)) return false;
+                    if (!batch.WriteCryptedPQHDSeed(seed_id, record) || !batch.ErasePQHDSeed(seed_id)) return false;
+                    batch.RegisterTxnListener({
+                        .on_commit = [this, seed_id, encrypted = std::move(record.crypted_seed)]() mutable {
+                            LOCK(cs_wallet);
+                            auto& state = m_pqhd_seeds.at(seed_id);
+                            CleanseAndClearVector(state.seed);
+                            state.crypted_seed = std::move(encrypted);
+                            state.encrypted = true;
+                        },
+                        .on_abort = {},
+                    });
+                }
+                return true;
+            })) return false;
+        nMasterKeyMaxID = new_master_key_id;
+        mapMasterKeys[new_master_key_id] = std::move(master_key);
 
         Lock();
         if (!Unlock(strWalletPassphrase)) {
@@ -1469,8 +1463,13 @@ void CWallet::RecursiveUpdateTxState(WalletBatch* batch, const Txid& tx_hash, co
 
 bool CWallet::SyncTransaction(const CTransactionRef& ptx, const SyncTxState& state, bool update_tx, bool rescanning_old_block)
 {
-    if (!AddToWalletIfInvolvingMe(ptx, state, update_tx, rescanning_old_block))
-        return false; // Not one of ours
+    try {
+        if (!AddToWalletIfInvolvingMe(ptx, state, update_tx, rescanning_old_block))
+            return false; // Not one of ours
+    } catch (...) {
+        RequireWalletRecovery();
+        throw;
+    }
 
     // If a transaction changes 'conflicted' state, that changes the balance
     // available of the outputs it spends. So force those to be
@@ -1871,6 +1870,8 @@ bool CWallet::LoadWalletFlags(uint64_t flags)
 bool CWallet::LoadPQHDSeed(const uint256& seed_id, PQHDSeed&& seed)
 {
     AssertLockHeld(cs_wallet);
+    if (IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) return false;
+    if (seed.nVersion != PQHDSeed::CURRENT_VERSION) return false;
     if (m_pqhd_seeds.contains(seed_id)) return false;
 
     PQHDSeedState state;
@@ -1878,7 +1879,7 @@ bool CWallet::LoadPQHDSeed(const uint256& seed_id, PQHDSeed&& seed)
     state.encrypted = false;
     state.seed = std::move(seed.seed);
     m_pqhd_seeds.emplace(seed_id, std::move(state));
-    m_has_pqhd_seeds.store(true, std::memory_order_relaxed);
+    m_pqhd_seed_ids.Insert(seed_id);
     MaybeUpdateBirthTime(seed.nCreateTime);
     return true;
 }
@@ -1886,6 +1887,8 @@ bool CWallet::LoadPQHDSeed(const uint256& seed_id, PQHDSeed&& seed)
 bool CWallet::LoadPQHDCryptedSeed(const uint256& seed_id, PQHDCryptedSeed&& seed)
 {
     AssertLockHeld(cs_wallet);
+    if (IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) return false;
+    if (seed.nVersion != PQHDCryptedSeed::CURRENT_VERSION || seed.crypted_seed.size() != 48) return false;
     if (m_pqhd_seeds.contains(seed_id)) return false;
 
     PQHDSeedState state;
@@ -1893,7 +1896,7 @@ bool CWallet::LoadPQHDCryptedSeed(const uint256& seed_id, PQHDCryptedSeed&& seed
     state.encrypted = true;
     state.crypted_seed = std::move(seed.crypted_seed);
     m_pqhd_seeds.emplace(seed_id, std::move(state));
-    m_has_pqhd_seeds.store(true, std::memory_order_relaxed);
+    m_pqhd_seed_ids.Insert(seed_id);
     MaybeUpdateBirthTime(seed.nCreateTime);
     return true;
 }
@@ -1901,20 +1904,20 @@ bool CWallet::LoadPQHDCryptedSeed(const uint256& seed_id, PQHDCryptedSeed&& seed
 void CWallet::LoadPQHDPolicy(PQHDPolicy&& policy)
 {
     AssertLockHeld(cs_wallet);
-    const int target_height = GetTargetHeightForOutputs();
-    const Consensus::Params& params = Params().GetConsensus();
+    if (policy.nVersion != PQHDPolicy::CURRENT_VERSION) throw std::runtime_error("Unsupported PQHD policy version");
     const uint8_t falcon512 = static_cast<uint8_t>(pq::SchemeId::FALCON_512);
 
-    const auto clamp_scheme = [&](uint8_t scheme) -> uint8_t {
+    const auto normalize_scheme = [&](uint8_t scheme) -> uint8_t {
         if (scheme == 0) return falcon512;
-        const auto* info = pq::SchemeFromPrefix(scheme);
-        if (info == nullptr) return falcon512;
-        if (!pq::IsSchemeAllowedAtHeight(info->id, params, target_height)) return falcon512;
+        if (pq::SchemeFromPrefix(scheme) == nullptr) throw std::runtime_error("Unknown PQHD policy scheme");
         return scheme;
     };
 
-    policy.default_receive_scheme = clamp_scheme(policy.default_receive_scheme);
-    policy.default_change_scheme = clamp_scheme(policy.default_change_scheme == 0 ? policy.default_receive_scheme : policy.default_change_scheme);
+    // A stored preference survives preactivation loading and reorgs. Eligibility
+    // is checked when creating descriptors and issuing addresses, not by
+    // silently replacing the user's preference while reading the database.
+    policy.default_receive_scheme = normalize_scheme(policy.default_receive_scheme);
+    policy.default_change_scheme = normalize_scheme(policy.default_change_scheme == 0 ? policy.default_receive_scheme : policy.default_change_scheme);
 
     if (policy.default_change_seed_id.IsNull()) policy.default_change_seed_id = policy.default_seed_id;
 
@@ -1923,8 +1926,7 @@ void CWallet::LoadPQHDPolicy(PQHDPolicy&& policy)
 
 bool CWallet::HavePQHDSeed(const uint256& seed_id) const
 {
-    AssertLockHeld(cs_wallet);
-    return m_pqhd_seeds.contains(seed_id);
+    return m_pqhd_seed_ids.Contains(seed_id);
 }
 
 size_t CWallet::GetPQHDSeedCount() const
@@ -1943,6 +1945,9 @@ util::Result<void> CWallet::SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
                                           std::optional<uint8_t> change_scheme) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
 {
     AssertLockHeld(cs_wallet);
+    if (IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) {
+        return util::Error{Untranslated("Private PQHD seeds are disabled for this wallet")};
+    }
     if (!IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS)) {
         return util::Error{Untranslated("PQHD policy requires descriptor wallet")};
     }
@@ -2046,6 +2051,9 @@ std::vector<CWallet::PQHDSeedInfo> CWallet::ListPQHDSeeds() const
 util::Result<CWallet::ImportPQHDSeedResult> CWallet::ImportPQHDSeed(const std::array<unsigned char, 32>& master_seed)
 {
     AssertLockHeld(cs_wallet);
+    if (IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) {
+        return util::Error{Untranslated("Private PQHD seeds are disabled for this wallet")};
+    }
     if (!IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS)) {
         return util::Error{Untranslated("PQHD seed import requires descriptor wallet")};
     }
@@ -2138,6 +2146,9 @@ util::Result<CWallet::ImportPQHDSeedResult> CWallet::ImportPQHDSeed(const std::a
 util::Result<void> CWallet::SetPQHDSeedDefaults(const uint256& receive_seed_id, const uint256& change_seed_id) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
 {
     AssertLockHeld(cs_wallet);
+    if (IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) {
+        return util::Error{Untranslated("Private PQHD seeds are disabled for this wallet")};
+    }
     if (!IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS)) {
         return util::Error{Untranslated("PQHD seed defaults require descriptor wallet")};
     }
@@ -2233,7 +2244,7 @@ util::Result<void> CWallet::RemovePQHDSeed(const uint256& seed_id)
     }
     CleanseAndClearVector(it->second.seed);
     m_pqhd_seeds.erase(it);
-    m_has_pqhd_seeds.store(!m_pqhd_seeds.empty(), std::memory_order_relaxed);
+    m_pqhd_seed_ids.Erase(seed_id);
     return util::Result<void>();
 }
 
@@ -2278,9 +2289,11 @@ void CWallet::MaybeUpdateBirthTime(int64_t time)
  *
  * @return Earliest timestamp that could be successfully scanned from. Timestamp
  * returned will be higher than startTime if relevant blocks could not be read.
+ * Returns nullopt if interrupted by the user or shutdown.
  */
-int64_t CWallet::RescanFromTime(int64_t startTime, const WalletRescanReserver& reserver, bool update)
+std::optional<int64_t> CWallet::RescanFromTime(int64_t startTime, const WalletRescanReserver& reserver, bool update)
 {
+    if (IsAbortingRescan() || chain().shutdownRequested()) return std::nullopt;
     // Find starting block. May be null if nCreateTime is greater than the
     // highest blockchain timestamp, in which case there is nothing that needs
     // to be scanned.
@@ -2290,8 +2303,8 @@ int64_t CWallet::RescanFromTime(int64_t startTime, const WalletRescanReserver& r
     WalletLogPrintf("%s: Rescanning last %i blocks\n", __func__, start ? WITH_LOCK(cs_wallet, return GetLastBlockHeight()) - start_height + 1 : 0);
 
     if (start) {
-        // TODO: this should take into account failure by ScanResult::USER_ABORT
         ScanResult result = ScanForWalletTransactions(start_block, start_height, /*max_height=*/{}, reserver, /*fUpdate=*/update, /*save_progress=*/false);
+        if (result.status == ScanResult::USER_ABORT) return std::nullopt;
         if (result.status == ScanResult::FAILURE) {
             int64_t time_max;
             CHECK_NONFATAL(chain().findBlock(result.last_failed_block, FoundBlock().maxTime(time_max)));
@@ -2331,6 +2344,34 @@ CWallet::ScanResult CWallet::ScanForWalletTransactions(const uint256& start_bloc
 
     assert(reserver.isReserved());
 
+    if (IsAbortingRescan() || chain().shutdownRequested()) {
+        ScanResult aborted;
+        aborted.status = ScanResult::USER_ABORT;
+        return aborted;
+    }
+
+    // A historical scan can start behind the saved checkpoint (for example
+    // after importing descriptors). Rewind before observing any transactions,
+    // so a consumption-write failure cannot leave restart skipping this scan.
+    // Use the preceding block: AttachChain need not scan when checkpoint == tip.
+    // save_progress controls forward progress, not this safety rewind.
+    {
+        LOCK(cs_wallet);
+        WalletBatch batch(GetDatabase());
+        CBlockLocator saved;
+        if (!m_attaching_chain && batch.ReadBestBlock(saved)) {
+            const auto saved_height{chain().findLocatorFork(saved)};
+            if (saved_height && *saved_height >= start_height && *saved_height > 0) {
+                CBlockLocator rewind;
+                chain().findAncestorByHeight(start_block, std::max(start_height - 1, 0), FoundBlock().locator(rewind));
+                if (!rewind.IsNull() && !batch.WriteBestBlock(rewind)) {
+                    RequireWalletRecovery();
+                    throw std::runtime_error("Cannot persist wallet rescan checkpoint");
+                }
+            }
+        }
+    }
+
     uint256 block_hash = start_block;
     ScanResult result;
 
@@ -2340,7 +2381,6 @@ CWallet::ScanResult CWallet::ScanForWalletTransactions(const uint256& start_bloc
     WalletLogPrintf("Rescan started from block %s... (%s)\n", start_block.ToString(),
                     fast_rescan_filter ? "fast variant using block filters" : "slow variant inspecting all blocks");
 
-    fAbortRescan = false;
     ShowProgress(strprintf("[%s] %s", DisplayName(), _("Rescanning…")), 0); // show rescan progress in GUI as dialog or on splashscreen, if rescan required on startup (e.g. due to corruption)
     uint256 tip_hash = WITH_LOCK(cs_wallet, return GetLastBlockHash());
     uint256 end_hash = tip_hash;
@@ -2414,7 +2454,7 @@ CWallet::ScanResult CWallet::ScanForWalletTransactions(const uint256& start_bloc
                 result.last_scanned_block = block_hash;
                 result.last_scanned_height = block_height;
 
-                if (!loc.IsNull()) {
+                if (!loc.IsNull() && result.status == ScanResult::SUCCESS && !IsWalletRecoveryRequired()) {
                     WalletLogPrintf("Saving scan progress %d.\n", block_height);
                     WalletBatch batch(GetDatabase());
                     batch.WriteBestBlock(loc);
@@ -2462,10 +2502,10 @@ CWallet::ScanResult CWallet::ScanForWalletTransactions(const uint256& start_bloc
         WITH_LOCK(cs_wallet, chain().requestMempoolTransactions(*this));
     }
     ShowProgress(strprintf("[%s] %s", DisplayName(), _("Rescanning…")), 100); // hide progress dialog in GUI
-    if (block_height && fAbortRescan) {
+    if (fAbortRescan) {
         WalletLogPrintf("Rescan aborted at block %d. Progress=%f\n", block_height, progress_current);
         result.status = ScanResult::USER_ABORT;
-    } else if (block_height && chain().shutdownRequested()) {
+    } else if (chain().shutdownRequested()) {
         WalletLogPrintf("Rescan interrupted by shutdown request at block %d. Progress=%f\n", block_height, progress_current);
         result.status = ScanResult::USER_ABORT;
     } else {
@@ -2646,8 +2686,12 @@ bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint,
     return false;
 }
 
-std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbtx, bool& complete, std::optional<int> sighash_type, bool sign, size_t * n_signed, bool finalize, bool include_pqhd_origins) const
+std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, bool& complete, std::optional<int> sighash_type, bool sign, size_t * n_signed, bool finalize, bool include_pqhd_origins) const
 {
+    // Publish only a successful update; metadata/signing errors leave the caller intact.
+    auto psbtx = psbt;
+    complete = false;
+    size_t signed_count{0};
     if (n_signed) {
         *n_signed = 0;
     }
@@ -2684,6 +2728,14 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbtx, bo
         script_verify_flags |= SCRIPT_VERIFY_SHA512;
     }
 
+    // Prepare all enrolled input/output solving data before any external device
+    // sees the request. Manager iteration order must not omit change metadata.
+    if (sign && IsWalletFlagSet(WALLET_FLAG_EXTERNAL_SIGNER)) {
+        for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
+            if (const auto error = spk_man->FillPSBT(psbtx, txdata, sighash_type, false, nullptr, false, include_pqhd_origins, script_verify_flags)) return error;
+        }
+    }
+
     // Fill in information from ScriptPubKeyMans
     for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
         int n_signed_this_spkm = 0;
@@ -2693,7 +2745,7 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbtx, bo
         }
 
         if (n_signed) {
-            (*n_signed) += n_signed_this_spkm;
+            signed_count += n_signed_this_spkm;
         }
     }
 
@@ -2705,6 +2757,8 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbtx, bo
         complete &= PSBTInputSignedAndVerified(psbtx, i, &txdata, script_verify_flags);
     }
 
+    psbt = std::move(psbtx);
+    if (n_signed) *n_signed = signed_count;
     return {};
 }
 
@@ -2843,13 +2897,15 @@ DBErrors CWallet::LoadWallet()
     }
 
     if (nLoadWalletRet == DBErrors::LOAD_OK && IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS) && m_pqhd_policy) {
+        // Reconciliation rolls back to the state loaded from existing records,
+        // including their birth times. A fatal load discards the wallet object.
         WalletBatch batch(GetDatabase());
         if (!batch.TxnBegin()) {
             WalletLogPrintf("Error: failed to start db txn for PQHD policy reconciliation on load\n");
             return DBErrors::CORRUPT;
         }
         const uint64_t wallet_flags_before = m_wallet_flags;
-        auto sync_result = SyncActiveScriptPubKeyMansWithPQHDPolicy(batch, /*create_missing_descriptors=*/true);
+        auto sync_result = SyncActiveScriptPubKeyMansWithPQHDPolicy(batch, /*create_missing_descriptors=*/true, /*preserve_active=*/true);
         if (!sync_result) {
             m_wallet_flags = wallet_flags_before;
             (void)batch.TxnAbort();
@@ -2907,8 +2963,16 @@ util::Result<void> CWallet::RemoveTxs(WalletBatch& batch, std::vector<Txid>& txs
         for (const auto& it : erased_txs) {
             const Txid hash{it->first};
             wtxOrdered.erase(it->second.m_it_wtxOrdered);
-            for (const auto& txin : it->second.tx->vin)
-                mapTxSpends.erase(txin.prevout);
+            for (const auto& txin : it->second.tx->vin) {
+                const auto [begin, end] = mapTxSpends.equal_range(txin.prevout);
+                for (auto spend = begin; spend != end;) {
+                    if (spend->second == hash) {
+                        spend = mapTxSpends.erase(spend);
+                    } else {
+                        ++spend;
+                    }
+                }
+            }
             for (unsigned int i = 0; i < it->second.tx->vout.size(); ++i) {
                 m_txos.erase(COutPoint(hash, i));
             }
@@ -2924,37 +2988,24 @@ util::Result<void> CWallet::RemoveTxs(WalletBatch& batch, std::vector<Txid>& txs
 
 bool CWallet::SetAddressBookWithDB(WalletBatch& batch, const CTxDestination& address, const std::string& strName, const std::optional<AddressPurpose>& new_purpose)
 {
-    bool fUpdated = false;
-    bool is_mine;
-    std::optional<AddressPurpose> purpose;
-    {
-        LOCK(cs_wallet);
-        std::map<CTxDestination, CAddressBookData>::iterator mi = m_address_book.find(address);
-        fUpdated = mi != m_address_book.end() && !mi->second.IsChange();
-
-        CAddressBookData& record = mi != m_address_book.end() ? mi->second : m_address_book[address];
-        record.SetLabel(strName);
-        is_mine = IsMine(address);
-        if (new_purpose) { /* update purpose only if requested */
-            record.purpose = new_purpose;
-        }
-        purpose = record.purpose;
-    }
-
-    const std::string& encoded_dest = EncodeDestination(address);
-    if (new_purpose && !batch.WritePurpose(encoded_dest, PurposeToString(*new_purpose))) {
-        WalletLogPrintf("Error: fail to write address book 'purpose' entry\n");
-        return false;
-    }
-    if (!batch.WriteName(encoded_dest, strName)) {
-        WalletLogPrintf("Error: fail to write address book 'name' entry\n");
-        return false;
-    }
-
-    // In very old wallets, address purpose may not be recorded so we derive it from IsMine
-    NotifyAddressBookChanged(address, strName, is_mine,
-                             purpose.value_or(is_mine ? AddressPurpose::RECEIVE : AddressPurpose::SEND),
-                             (fUpdated ? CT_UPDATED : CT_NEW));
+    LOCK(cs_wallet);
+    auto it = m_address_book.find(address);
+    const bool updated = it != m_address_book.end() && !it->second.IsChange();
+    CAddressBookData record = it != m_address_book.end() ? it->second : CAddressBookData{};
+    record.SetLabel(strName);
+    if (new_purpose) record.purpose = new_purpose;
+    const auto encoded = EncodeDestination(address);
+    if ((new_purpose && !batch.WritePurpose(encoded, PurposeToString(*new_purpose))) ||
+        !batch.WriteName(encoded, strName)) return false;
+    auto publish = [this, address, record, strName, updated]() EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
+        m_address_book[address] = record;
+        const bool is_mine = IsMine(address);
+        NotifyAddressBookChanged(address, strName, is_mine,
+                                 record.purpose.value_or(is_mine ? AddressPurpose::RECEIVE : AddressPurpose::SEND),
+                                 updated ? CT_UPDATED : CT_NEW);
+    };
+    if (batch.HasActiveTxn()) batch.RegisterTxnListener({.on_commit = publish, .on_abort = {}});
+    else publish();
     return true;
 }
 
@@ -3036,10 +3087,18 @@ unsigned int CWallet::GetKeyPoolSize() const
 bool CWallet::TopUpKeyPool(unsigned int kpSize)
 {
     LOCK(cs_wallet);
-    bool res = true;
-    for (auto spk_man : GetActiveScriptPubKeyMans()) {
-        res &= spk_man->TopUp(kpSize);
+    const auto managers = GetActiveScriptPubKeyMans();
+    if (IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS)) {
+        return RunWithinTxn(GetDatabase(), "wallet keypool refill", [&](WalletBatch& batch) {
+            for (auto* manager : managers) {
+                auto* descriptor = dynamic_cast<DescriptorScriptPubKeyMan*>(manager);
+                if (!descriptor || !descriptor->TopUpWithDB(batch, kpSize)) return false;
+            }
+            return true;
+        });
     }
+    bool res = true;
+    for (auto* manager : managers) res &= manager->TopUp(kpSize);
     return res;
 }
 
@@ -3454,7 +3513,17 @@ std::shared_ptr<CWallet> CWallet::Create(WalletContext& context, const std::stri
     // should be possible to use std::allocate_shared.
     std::shared_ptr<CWallet> walletInstance(new CWallet(chain, name, std::move(database)), FlushAndDeleteWallet);
     walletInstance->m_keypool_size = std::max(args.GetIntArg("-keypool", DEFAULT_KEYPOOL_SIZE), int64_t{1});
+    if (walletInstance->m_keypool_size > std::numeric_limits<int32_t>::max()) {
+        error = Untranslated("Keypool size exceeds wallet descriptor index limit");
+        return nullptr;
+    }
     walletInstance->m_notify_tx_changed_script = args.GetArg("-walletnotify", "");
+
+    // Reconciliation needs the current issuance height, but must not advance
+    // the persisted best-block marker used to determine the rescan start.
+    if (chain) {
+        walletInstance->m_target_height_for_outputs.store(chain->getHeight().value_or(-1) + 1, std::memory_order_relaxed);
+    }
 
     // Load wallet
     bool rescan_required = false;
@@ -3510,6 +3579,13 @@ std::shared_ptr<CWallet> CWallet::Create(WalletContext& context, const std::stri
                      !walletInstance->IsWalletFlagSet(WALLET_FLAG_BLANK_WALLET);
     if (fFirstRun)
     {
+        // An existing legacy database can contain no keys or scripts, for
+        // example after interrupted creation. Loading it must not enter the
+        // descriptor-only new-wallet path or silently generate replacement keys.
+        if (!(wallet_creation_flags & WALLET_FLAG_DESCRIPTORS)) {
+            error = strprintf(_("Error loading %s: Wallet is empty and does not have the blank wallet flag set."), walletFile);
+            return nullptr;
+        }
         LOCK(walletInstance->cs_wallet);
 
         // Init with passed flags.
@@ -3737,6 +3813,7 @@ bool CWallet::AttachChain(const std::shared_ptr<CWallet>& walletInstance, interf
     // allow setting the chain if it hasn't been set already but prevent changing it
     assert(!walletInstance->m_chain || walletInstance->m_chain == &chain);
     walletInstance->m_chain = &chain;
+    walletInstance->m_attaching_chain = true;
 
     // Unless allowed, ensure wallet files are not reused across chains:
     if (!gArgs.GetBoolArg("-walletcrosschain", DEFAULT_WALLETCROSSCHAIN)) {
@@ -3758,10 +3835,14 @@ bool CWallet::AttachChain(const std::shared_ptr<CWallet>& walletInstance, interf
     // be pending on the validation-side until lock release. Blocks that are connected while the
     // rescan is ongoing will not be processed in the rescan but with the block connected notifications,
     // so the wallet will only be completeley synced after the notifications delivery.
-    walletInstance->m_chain_notifications_handler = walletInstance->chain().handleNotifications(walletInstance);
+    // Keep registration local until attachment succeeds. An exception during
+    // replay must release the shared wallet reference and database connection,
+    // just like an ordinary failure return does.
+    auto notifications_handler{walletInstance->chain().handleNotifications(walletInstance)};
 
     // If rescan_required = true, rescan_height remains equal to 0
     int rescan_height = 0;
+    bool have_replay_checkpoint{false};
     if (!rescan_required)
     {
         WalletBatch batch(walletInstance->GetDatabase());
@@ -3769,6 +3850,7 @@ bool CWallet::AttachChain(const std::shared_ptr<CWallet>& walletInstance, interf
         if (batch.ReadBestBlock(locator)) {
             if (const std::optional<int> fork_height = chain.findLocatorFork(locator)) {
                 rescan_height = *fork_height;
+                have_replay_checkpoint = !locator.IsNull();
             }
         }
     }
@@ -3785,7 +3867,10 @@ bool CWallet::AttachChain(const std::shared_ptr<CWallet>& walletInstance, interf
         // No need to read and scan block if block was created before
         // our wallet birthday (as adjusted for block time variability)
         std::optional<int64_t> time_first_key = walletInstance->m_birth_time.load();
-        if (time_first_key) {
+        // A stored checkpoint may have been rewound by an explicit historical
+        // scan. The caller's requested history takes precedence over birthdays;
+        // otherwise a failed old observation could be skipped again on reload.
+        if (time_first_key && !have_replay_checkpoint) {
             FoundBlock found = FoundBlock().height(rescan_height);
             chain.findFirstBlockWithTimeAndHeight(*time_first_key - TIMESTAMP_WINDOW, rescan_height, found);
             if (!found.found) {
@@ -3848,6 +3933,9 @@ bool CWallet::AttachChain(const std::shared_ptr<CWallet>& walletInstance, interf
         }
     }
 
+    walletInstance->m_attaching_chain = false;
+    walletInstance->WriteBestBlock();
+    walletInstance->m_chain_notifications_handler = std::move(notifications_handler);
     return true;
 }
 
@@ -3927,6 +4015,7 @@ bool CWallet::IsLocked() const
 
 bool CWallet::Lock()
 {
+    AbortDescriptorExpansion();
     if (!IsCrypted())
         return false;
 
@@ -3942,14 +4031,71 @@ bool CWallet::Lock()
     return true;
 }
 
+bool CWallet::ValidatePQHDCaches(const CKeyingMaterial* candidate_key)
+{
+    AssertLockHeld(cs_wallet);
+    struct SeedProvider final : SigningProvider {
+        std::map<uint256, pqhd::SecureSeed32> seeds;
+        std::optional<pqhd::SecureSeed32> GetPQHDSeed(const uint256& id) const override {
+            const auto it = seeds.find(id);
+            if (it == seeds.end()) return std::nullopt;
+            std::optional<pqhd::SecureSeed32> copy{std::in_place};
+            if (!copy->Set(it->second.Span())) return std::nullopt;
+            return copy;
+        }
+    } provider;
+    for (const auto& [id, state] : m_pqhd_seeds) {
+        auto seed = state.encrypted && candidate_key ? DecryptPQHDSeed(*candidate_key, id, state.crypted_seed) : GetPQHDSeed(id);
+        if (seed) provider.seeds.emplace(id, std::move(*seed));
+    }
+    DescriptorScriptPubKeyMan::VerifiedPQHDKeys verified;
+    std::vector<DescriptorScriptPubKeyMan*> managers;
+    for (const auto& [_, manager] : m_spk_managers) {
+        auto* desc = dynamic_cast<DescriptorScriptPubKeyMan*>(manager.get());
+        if (!desc) continue;
+        LOCK(desc->cs_desc_man);
+        if (!desc->IsCacheUsable()) return false;
+        if (desc->IsCacheVerified()) continue;
+        bool available = true;
+        for (const auto& id : desc->m_wallet_descriptor.descriptor->GetPQHDSeedIDs()) {
+            if (!provider.seeds.contains(id)) available = false;
+        }
+        if (!available) continue; // Locked or seedless: trust structurally valid persisted public data.
+        if (!desc->VerifyCache(provider, verified)) {
+            desc->m_cache_state = DescriptorScriptPubKeyMan::CacheState::INVALID;
+            desc->m_map_signing_providers.clear();
+            WalletLogPrintf("PQHD cache does not match wallet seed; refusing use without rewriting records\n");
+            return false;
+        }
+        managers.push_back(desc);
+    }
+    for (auto* manager : managers) {
+        LOCK(manager->cs_desc_man);
+        manager->m_cache_state = DescriptorScriptPubKeyMan::CacheState::VERIFIED;
+    }
+    return true;
+}
+
 bool CWallet::Unlock(const CKeyingMaterial& vMasterKeyIn)
 {
+    if (vMasterKeyIn.size() != WALLET_CRYPTO_KEY_SIZE) return false;
     {
         LOCK(cs_wallet);
+        // PQHD seeds are stored separately from descriptor private keys. Check
+        // every seed before publishing the candidate key or changing a
+        // passphrase; an empty descriptor key map is not authentication.
+        for (const auto& [seed_id, state] : m_pqhd_seeds) {
+            if (!state.encrypted || !DecryptPQHDSeed(vMasterKeyIn, seed_id, state.crypted_seed)) {
+                return false;
+            }
+        }
         for (const auto& spk_man_pair : m_spk_managers) {
             if (!spk_man_pair.second->CheckDecryptionKey(vMasterKeyIn)) {
                 return false;
             }
+        }
+        if (!ValidatePQHDCaches(&vMasterKeyIn)) {
+            throw std::runtime_error("PQHD cache does not match wallet seed; wallet may be corrupted");
         }
         vMasterKey = vMasterKeyIn;
     }
@@ -4069,7 +4215,9 @@ util::Result<DescriptorScriptPubKeyMan*> CWallet::CreatePQHDDescriptorForPathWit
             if (existing_desc) return existing_desc;
             return util::Error{Untranslated("Conflicting script pubkey manager id while creating PQHD descriptor")};
         }
-        spk_manager->SetupDescriptor(batch, std::move(w_desc));
+        if (!spk_manager->SetupDescriptor(batch, std::move(w_desc))) {
+            return util::Error{Untranslated("Could not set up PQHD descriptor keypool")};
+        }
         auto* created = spk_manager.get();
         AddScriptPubKeyManWithDb(batch, id, std::move(spk_manager));
         if (batch.HasActiveTxn()) {
@@ -4087,7 +4235,7 @@ util::Result<DescriptorScriptPubKeyMan*> CWallet::CreatePQHDDescriptorForPathWit
 }
 
 util::Result<void> CWallet::SyncActiveScriptPubKeyMansWithPQHDPolicy(WalletBatch& batch,
-                                                                      bool create_missing_descriptors)
+                                                                      bool create_missing_descriptors, bool preserve_active)
 {
     AssertLockHeld(cs_wallet);
 
@@ -4116,20 +4264,30 @@ util::Result<void> CWallet::SyncActiveScriptPubKeyMansWithPQHDPolicy(WalletBatch
     if (receive_scheme_info == nullptr || change_scheme_info == nullptr) {
         return util::Error{Untranslated("PQHD default scheme id is unknown")};
     }
-    if (!pq::IsSchemeAllowedAtHeight(receive_scheme_info->id, consensus, target_height) ||
-        !pq::IsSchemeAllowedAtHeight(change_scheme_info->id, consensus, target_height)) {
-        return util::Error{Untranslated("PQHD default scheme is not allowed at current height")};
-    }
-
     for (bool internal : {false, true}) {
         const uint8_t scheme_prefix = internal ? change_scheme : receive_scheme;
         const uint256 seed_id = internal ? change_seed_id : receive_seed_id;
         for (OutputType type : OUTPUT_TYPES) {
-            if (type == OutputType::BECH32PQ && target_height < consensus.nAuxpowStartHeight) {
-                continue;
+            // Reload preserves explicit active imports. Only missing bindings
+            // are filled from policy; explicit policy changes replace bindings.
+            if (preserve_active) {
+                if (auto* active = GetScriptPubKeyMan(type, internal)) {
+                    const auto* manager = dynamic_cast<DescriptorScriptPubKeyMan*>(active);
+                    if (!manager) return util::Error{Untranslated("Invalid active descriptor manager")};
+                    LOCK(manager->cs_desc_man);
+                    const auto descriptor = manager->GetPublicDescriptor();
+                    if (!descriptor->IsSingleType() || descriptor->GetOutputType() != type) {
+                        return util::Error{Untranslated("Active descriptor does not match its output type")};
+                    }
+                    continue;
+                }
             }
-
             DescriptorScriptPubKeyMan* desired = FindPQHDDescriptorForPath(type, internal, seed_id, scheme_prefix);
+            // Keep existing policy bindings even below activation. Do not
+            // generate a missing ineligible descriptor; issuance remains gated.
+            const auto* scheme = internal ? change_scheme_info : receive_scheme_info;
+            if (!desired && (!pq::IsSchemeAllowedAtHeight(scheme->id, consensus, target_height) ||
+                             (type == OutputType::BECH32PQ && target_height < consensus.nAuxpowStartHeight))) continue;
             if (desired == nullptr && create_missing_descriptors) {
                 auto create_result = CreatePQHDDescriptorForPathWithDb(batch, type, internal, seed_id, scheme_prefix, target_height);
                 if (!create_result) {
@@ -4172,17 +4330,14 @@ ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool intern
     const int target_height = GetTargetHeightForOutputs();
 
     if (!scheme_override) {
-        // For descriptor wallets with PQHD policy, default address/change generation
-        // should track current policy (scheme + seed), not stale active SPKM bindings.
-        if (IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS) && m_pqhd_policy) {
-            const uint8_t policy_scheme = internal ? m_pqhd_policy->default_change_scheme : m_pqhd_policy->default_receive_scheme;
-            if (policy_scheme != 0) {
-                scheme_override = policy_scheme;
-            }
+        // Respect explicit active imports. If this output type has no binding
+        // (for example, it just became eligible after activation), use policy
+        // defaults to find or create its descriptor as before.
+        if (auto* active = GetScriptPubKeyMan(type, internal)) return active;
+        if (m_pqhd_policy) {
+            scheme_override = internal ? m_pqhd_policy->default_change_scheme : m_pqhd_policy->default_receive_scheme;
         }
-        if (!scheme_override) {
-            return GetScriptPubKeyMan(type, internal);
-        }
+        if (!scheme_override) return nullptr;
     }
 
     if (!IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS)) {
@@ -4488,7 +4643,7 @@ bool CWallet::HasEncryptionKeys() const
 
 bool CWallet::HasPQHDSeeds() const
 {
-    return m_has_pqhd_seeds.load(std::memory_order_relaxed);
+    return !m_pqhd_seed_ids.Empty();
 }
 
 std::optional<pqhd::SecureSeed32> CWallet::GetPQHDSeed(const uint256& seed_id) const
@@ -4510,19 +4665,7 @@ std::optional<pqhd::SecureSeed32> CWallet::GetPQHDSeed(const uint256& seed_id) c
 
     if (IsLocked()) return std::nullopt;
 
-    CKeyingMaterial plaintext;
-    if (!DecryptSecret(vMasterKey, state.crypted_seed, seed_id, plaintext)) {
-        return std::nullopt;
-    }
-    std::optional<pqhd::SecureSeed32> out;
-    out.emplace();
-    const bool ok = out->Set(std::span<const uint8_t>(plaintext.data(), plaintext.size()));
-    CleanseAndClearVector(plaintext);
-    if (!ok) return std::nullopt;
-    // Integrity check: decrypted seed material must match the seed_id used as
-    // the wallet record key and encryption IV.
-    if (pqhd::ComputeSeedID32AsUint256(out->Span()) != seed_id) return std::nullopt;
-    return out;
+    return DecryptPQHDSeed(vMasterKey, seed_id, state.crypted_seed);
 }
 
 bool CWallet::HaveCryptedKeys() const
@@ -4556,7 +4699,9 @@ DescriptorScriptPubKeyMan& CWallet::LoadDescriptorScriptPubKeyMan(uint256 id, Wa
 void CWallet::SetupOwnDescriptorScriptPubKeyMans(WalletBatch& batch)
 {
     AssertLockHeld(cs_wallet);
-    assert(!IsWalletFlagSet(WALLET_FLAG_EXTERNAL_SIGNER));
+    if (IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) {
+        throw std::runtime_error("Private PQHD seeds are disabled for this wallet");
+    }
 
     // Create a PQHD seed and default policy for descriptor wallets.
     pqhd::SecureSeed32 master_seed;
@@ -4625,7 +4770,9 @@ void CWallet::SetupOwnDescriptorScriptPubKeyMans(WalletBatch& batch)
                     throw std::runtime_error(std::string(__func__) + ": Could not encrypt new descriptors");
                 }
             }
-            spk_manager->SetupDescriptor(batch, std::move(w_desc));
+            if (!spk_manager->SetupDescriptor(batch, std::move(w_desc))) {
+                throw std::runtime_error(std::string(__func__) + ": Could not set up PQHD descriptor keypool");
+            }
             uint256 id = spk_manager->GetID();
             AddScriptPubKeyManWithDb(batch, id, std::move(spk_manager));
             AddActiveScriptPubKeyManWithDb(batch, id, t, internal);
@@ -4667,14 +4814,20 @@ void CWallet::SetupDescriptorScriptPubKeyMans()
                 if (descs.empty()) {
                     throw std::runtime_error(std::string(__func__) + ": Invalid descriptor \"" + desc_str + "\" (" + desc_error + ")");
                 }
+                if (!keys.keys.empty()) throw std::runtime_error("External signer must return public descriptors only");
                 for (auto& desc : descs) {
+                    if (desc->IsRange() || !desc->GetPQHDKeyPaths().empty()) {
+                        throw std::runtime_error("External signer must provision fixed public descriptors; PQHD seed identifiers cannot derive public keys");
+                    }
                     const auto out_type = desc->GetOutputType();
                     if (!out_type) continue;
                     if (!imported_output_types.emplace(*out_type).second) {
                         throw std::runtime_error(std::string(__func__) + ": duplicate active descriptor output type from external signer");
                     }
                     auto spk_manager = std::unique_ptr<ExternalSignerScriptPubKeyMan>(new ExternalSignerScriptPubKeyMan(*this, m_keypool_size));
-                    spk_manager->SetupDescriptor(batch, std::move(desc));
+                    if (!spk_manager->SetupDescriptor(batch, std::move(desc))) {
+                        throw std::runtime_error(std::string(__func__) + ": Could not set up external signer descriptor keypool");
+                    }
                     uint256 id = spk_manager->GetID();
                     AddScriptPubKeyManWithDb(batch, id, std::move(spk_manager));
                     AddActiveScriptPubKeyManWithDb(batch, id, *out_type, internal);
@@ -4690,8 +4843,9 @@ void CWallet::SetupDescriptorScriptPubKeyMans()
     }
 }
 
-void CWallet::AddActiveScriptPubKeyMan(uint256 id, OutputType type, bool internal)
+void CWallet::AddActiveScriptPubKeyMan(uint256 id, OutputType type, bool internal, WalletBatch* transaction)
 {
+    if (transaction) return AddActiveScriptPubKeyManWithDb(*transaction, id, type, internal);
     WalletBatch batch(GetDatabase());
     return AddActiveScriptPubKeyManWithDb(batch, id, type, internal);
 }
@@ -4733,21 +4887,26 @@ void CWallet::LoadActiveScriptPubKeyMan(uint256 id, OutputType type, bool intern
     NotifyCanGetAddressesChanged();
 }
 
-void CWallet::DeactivateScriptPubKeyMan(uint256 id, OutputType type, bool internal)
+void CWallet::DeactivateScriptPubKeyMan(uint256 id, OutputType type, bool internal, WalletBatch* transaction)
 {
+    if (!transaction) {
+        if (!RunWithinTxn(GetDatabase(), "deactivate descriptor", [&](WalletBatch& batch) {
+                DeactivateScriptPubKeyMan(id, type, internal, &batch);
+                return true;
+            })) throw std::runtime_error("Cannot commit descriptor deactivation");
+        return;
+    }
     auto spk_man = GetScriptPubKeyMan(type, internal);
     if (spk_man != nullptr && spk_man->GetID() == id) {
-        WalletLogPrintf("Deactivate spkMan: id = %s, type = %s, internal = %s\n", id.ToString(), FormatOutputType(type), internal ? "true" : "false");
-        WalletBatch batch(GetDatabase());
-        if (!batch.EraseActiveScriptPubKeyMan(static_cast<uint8_t>(type), internal)) {
-            throw std::runtime_error(std::string(__func__) + ": erasing active ScriptPubKeyMan id failed");
+        if (!transaction->EraseActiveScriptPubKeyMan(static_cast<uint8_t>(type), internal)) {
+            throw std::runtime_error("Cannot persist descriptor deactivation");
         }
-
-        auto& spk_mans = internal ? m_internal_spk_managers : m_external_spk_managers;
-        spk_mans.erase(type);
+        transaction->RegisterTxnListener({.on_commit = [this, type, internal]() {
+            auto& managers = internal ? m_internal_spk_managers : m_external_spk_managers;
+            managers.erase(type);
+            NotifyCanGetAddressesChanged();
+        }, .on_abort = {}});
     }
-
-    NotifyCanGetAddressesChanged();
 }
 
 DescriptorScriptPubKeyMan* CWallet::GetDescriptorScriptPubKeyMan(const WalletDescriptor& desc) const
@@ -4784,64 +4943,64 @@ std::optional<bool> CWallet::IsInternalScriptPubKeyMan(ScriptPubKeyMan* spk_man)
     return GetScriptPubKeyMan(*type, /* internal= */ true) == desc_spk_man;
 }
 
-util::Result<std::reference_wrapper<DescriptorScriptPubKeyMan>> CWallet::AddWalletDescriptor(WalletDescriptor& desc, const FlatSigningProvider& signing_provider, const std::string& label, bool internal)
+util::Result<std::reference_wrapper<DescriptorScriptPubKeyMan>> CWallet::AddWalletDescriptor(WalletDescriptor& desc, const FlatSigningProvider& signing_provider, const std::string& label, bool internal, WalletBatch* transaction)
 {
     AssertLockHeld(cs_wallet);
-
-    if (!IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS)) {
-        return util::Error{_("Cannot add WalletDescriptor to a non-descriptor wallet")};
+    if (!transaction) {
+        std::optional<util::Result<std::reference_wrapper<DescriptorScriptPubKeyMan>>> result;
+        if (!RunWithinTxn(GetDatabase(), "import descriptor", [&](WalletBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
+                result.emplace(AddWalletDescriptor(desc, signing_provider, label, internal, &batch));
+                return result->has_value();
+            })) {
+            if (result && !result->has_value()) return util::Error{util::ErrorString(*result)};
+            return util::Error{_("Could not commit descriptor import")};
+        }
+        return std::move(*result);
     }
-
-    auto spk_man = GetDescriptorScriptPubKeyMan(desc);
+    WalletBatch& batch = *transaction;
+    assert(batch.HasActiveTxn());
+    if (!IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS) || !desc.HasValidRange()) {
+        return util::Error{_("Invalid descriptor wallet or range")};
+    }
+    if (!signing_provider.keys.empty() && IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) {
+        return util::Error{_("Private keys are disabled for this wallet")};
+    }
+    if (!signing_provider.keys.empty() && IsLocked()) {
+        return util::Error{_("Unlock the wallet before importing private keys")};
+    }
+    auto* spk_man = GetDescriptorScriptPubKeyMan(desc);
     if (spk_man) {
-        WalletLogPrintf("Update existing descriptor: %s\n", desc.descriptor->ToString());
-        if (auto spkm_res = spk_man->UpdateWalletDescriptor(desc); !spkm_res) {
-            return util::Error{util::ErrorString(spkm_res)};
-        }
+        if (auto result = spk_man->UpdateWalletDescriptor(desc, &batch); !result) return util::Error{util::ErrorString(result)};
     } else {
-        auto new_spk_man = std::unique_ptr<DescriptorScriptPubKeyMan>(new DescriptorScriptPubKeyMan(*this, desc, m_keypool_size));
-        spk_man = new_spk_man.get();
-
-        // Save the descriptor to memory
-        uint256 id = new_spk_man->GetID();
-        AddScriptPubKeyMan(id, std::move(new_spk_man));
-    }
-
-    // Add the private keys to the descriptor
-    for (const auto& entry : signing_provider.keys) {
-        const CKey& key = entry.second;
-        spk_man->AddDescriptorKey(key, key.GetPubKey());
-    }
-
-    // Top up key pool, the manager will generate new scriptPubKeys internally
-    if (!spk_man->TopUp()) {
-        return util::Error{_("Could not top up scriptPubKeys")};
-    }
-
-    // Apply the label if necessary
-    // Note: we disable labels for ranged descriptors
-    if (!desc.descriptor->IsRange()) {
-        auto script_pub_keys = spk_man->GetScriptPubKeys();
-        if (script_pub_keys.empty()) {
-            return util::Error{_("Could not generate scriptPubKeys (cache is empty)")};
+        std::unique_ptr<DescriptorScriptPubKeyMan> created;
+        if (IsWalletFlagSet(WALLET_FLAG_EXTERNAL_SIGNER)) {
+            created = std::make_unique<ExternalSignerScriptPubKeyMan>(*this, desc, m_keypool_size);
+        } else {
+            created = std::make_unique<DescriptorScriptPubKeyMan>(*this, desc, m_keypool_size);
         }
-
-        if (!internal) {
-            for (const auto& script : script_pub_keys) {
-                CTxDestination dest;
-                if (ExtractDestination(script, dest)) {
-                    SetAddressBook(dest, label, AddressPurpose::RECEIVE);
-                }
+        spk_man = created.get();
+        const auto id = spk_man->GetID();
+        AddScriptPubKeyManWithDb(batch, id, std::move(created));
+        batch.RegisterTxnListener({.on_commit = {}, .on_abort = [this, id]() EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) { RemoveScriptPubKeyMan(id); }});
+    }
+    {
+        LOCK(spk_man->cs_desc_man);
+        spk_man->RegisterMutationRollback(batch);
+        for (const auto& [key_id, key] : signing_provider.keys) {
+            if (!spk_man->AddDescriptorKeyWithDB(batch, key, key.GetPubKey())) return util::Error{_("Could not store descriptor key")};
+        }
+    }
+    if (!spk_man->IsCacheVerified() && !ValidatePQHDCaches()) return util::Error{_("Descriptor cache does not match seed")};
+    if (!spk_man->TopUpWithDB(batch, /*size=*/0, /*expand_range=*/false)) return util::Error{_("Cannot expand descriptor over the requested range; required seeds or cached public keys are unavailable")};
+    if (!desc.descriptor->IsRange() && !internal) {
+        for (const auto& script : spk_man->GetScriptPubKeys()) {
+            CTxDestination dest;
+            if (ExtractDestination(script, dest) && !SetAddressBookWithDB(batch, dest, label, AddressPurpose::RECEIVE)) {
+                return util::Error{_("Could not store descriptor label")};
             }
         }
     }
-
-    // Save the descriptor to DB
-    spk_man->WriteDescriptor();
-
-    // Break balance caches so that outputs that are now IsMine in already known txs will be included in the balance
-    MarkDirty();
-
+    batch.RegisterTxnListener({.on_commit = [this] { MarkDirty(); }, .on_abort = {}});
     return std::reference_wrapper(*spk_man);
 }
 
@@ -5180,7 +5339,7 @@ bool DoMigration(CWallet& wallet, WalletContext& context, bilingual_str& error, 
 
             DatabaseStatus status;
             std::vector<bilingual_str> warnings;
-            std::string wallet_name = wallet.GetName() + "_watchonly";
+            std::string wallet_name = (wallet.GetName().empty() ? "default_wallet" : wallet.GetName()) + "_watchonly";
             std::unique_ptr<WalletDatabase> database = MakeWalletDatabase(wallet_name, options, status, error);
             if (!database) {
                 error = strprintf(_("Wallet file creation failed: %s"), error);
@@ -5219,7 +5378,7 @@ bool DoMigration(CWallet& wallet, WalletContext& context, bilingual_str& error, 
 
             DatabaseStatus status;
             std::vector<bilingual_str> warnings;
-            std::string wallet_name = wallet.GetName() + "_solvables";
+            std::string wallet_name = (wallet.GetName().empty() ? "default_wallet" : wallet.GetName()) + "_solvables";
             std::unique_ptr<WalletDatabase> database = MakeWalletDatabase(wallet_name, options, status, error);
             if (!database) {
                 error = strprintf(_("Wallet file creation failed: %s"), error);
@@ -5375,6 +5534,12 @@ util::Result<MigrationResult> MigrateLegacyToDescriptor(std::shared_ptr<CWallet>
     //             user does not expect an empty spendable wallet after
     //             migrating only watch-only scripts.
     bool empty_local_wallet = false;
+    std::set<fs::path> preexisting_wallet_dirs;
+    const std::string migration_prefix{wallet_name.empty() ? "default_wallet" : wallet_name};
+    for (const auto& name : {wallet_name, migration_prefix + "_watchonly", migration_prefix + "_solvables"}) {
+        const auto path{fsbridge::AbsPathJoin(GetWalletDir(), fs::PathFromString(name))};
+        if (fs::is_directory(path)) preexisting_wallet_dirs.insert(fs::weakly_canonical(path));
+    }
 
     {
         LOCK(local_wallet->cs_wallet);
@@ -5406,7 +5571,7 @@ util::Result<MigrationResult> MigrateLegacyToDescriptor(std::shared_ptr<CWallet>
             // This wallet has no records. We can safely remove it.
             std::vector<fs::path> paths_to_remove = local_wallet->GetDatabase().Files();
             local_wallet.reset();
-            for (const auto& path_to_remove : paths_to_remove) fs::remove_all(path_to_remove);
+            for (const auto& path_to_remove : paths_to_remove) fs::remove(path_to_remove);
         }
 
         // Migration successful, load all the migrated wallets.
@@ -5469,7 +5634,7 @@ util::Result<MigrationResult> MigrateLegacyToDescriptor(std::shared_ptr<CWallet>
             fs::remove(path, ec);
         }
         for (const fs::path& dir : wallet_dirs) {
-            if (fs::is_empty(dir, ec)) {
+            if (!preexisting_wallet_dirs.contains(fs::weakly_canonical(dir)) && fs::is_empty(dir, ec)) {
                 fs::remove(dir, ec);
             }
         }
@@ -5517,9 +5682,21 @@ std::optional<CKey> CWallet::GetKey(const CKeyID& keyid) const
     return std::nullopt;
 }
 
+void CWallet::RequireWalletRecovery()
+{
+    if (!m_recovery_required.exchange(true)) {
+        WalletLogPrintf("Wallet update failed; preserving scan checkpoint and disabling address issuance until reload and recovery\n");
+    }
+}
+
 void CWallet::WriteBestBlock() const
 {
     AssertLockHeld(cs_wallet);
+
+    // The observed tip can be ahead of an unsuccessful wallet update. Preserve
+    // the last durable checkpoint so reload replays the missing history. This
+    // must also apply to backup/unload and to failed or interrupted attachment.
+    if (IsWalletRecoveryRequired() || m_attaching_chain || IsScanning()) return;
 
     if (!m_last_block_processed.IsNull()) {
         CBlockLocator loc;

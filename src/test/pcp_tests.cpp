@@ -3,10 +3,12 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <common/pcp.h>
+#include <logging.h>
 #include <netbase.h>
 #include <test/util/logging.h>
 #include <test/util/setup_common.h>
 #include <util/time.h>
+#include <util/strencodings.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -697,5 +699,100 @@ BOOST_AUTO_TEST_CASE(pcp_protocol_error)
     BOOST_CHECK_EQUAL(*err, MappingError::PROTOCOL_ERROR);
 }
 
-BOOST_AUTO_TEST_SUITE_END()
+// Keep all authorization checks together: warning state lasts for the process.
+BOOST_AUTO_TEST_CASE(authorization_logging)
+{
+    struct LogState {
+        const BCLog::CategoryMask categories{LogInstance().GetCategoryMask()};
+        const std::unordered_map<BCLog::LogFlags, BCLog::Level> levels{LogInstance().CategoryLevels()};
+        ~LogState()
+        {
+            LogInstance().SetCategoryLogLevel(levels);
+            LogInstance().DisableCategory(BCLog::ALL);
+            LogInstance().EnableCategory(BCLog::LogFlags{categories});
+        }
+    } log_state;
+    LogInstance().EnableCategory(BCLog::NET);
+    BOOST_REQUIRE(LogInstance().SetCategoryLogLevel("net", "debug"));
 
+    const auto request = [&](bool pcp, bool external, uint8_t code, const std::string& expected_level) {
+        std::vector<TestOp> script;
+        std::string message;
+        if (pcp) {
+            auto packet = ParseHex("02010000 000003e8 00000000000000000000ffffc0a80006"
+                                   "112233445566778899aabbcc 06000000 04d204d2"
+                                   "00000000000000000000ffff00000000");
+            script.emplace_back(0ms, TestOp::SEND, packet, 0);
+            packet[1] = 0x81;
+            packet[3] = code;
+            std::fill(packet.begin() + 8, packet.begin() + 24, 0);
+            std::copy_n(ParseHex("01020304").begin(), 4, packet.end() - 4);
+            script.emplace_back(2ms, TestOp::RECV, packet, 0);
+            message = "pcp: Mapping failed with result ";
+        } else {
+            script.emplace_back(0ms, TestOp::SEND, ParseHex("0000"), 0);
+            auto packet = ParseHex("00800000 00000000 01020304");
+            packet[3] = external ? code : 0;
+            script.emplace_back(2ms, TestOp::RECV, packet, 0);
+            if (!external) {
+                script.emplace_back(0ms, TestOp::SEND, ParseHex("00020000 04d204d2 000003e8"), 0);
+                packet = ParseHex("00820000 00000000 04d204d2 000003e8");
+                packet[3] = code;
+                script.emplace_back(2ms, TestOp::RECV, packet, 0);
+            }
+            message = external ? "natpmp: Getting external address failed with result " : "natpmp: Port mapping failed with result ";
+        }
+        CreateSock = [this, &script](int domain, int type, int protocol) {
+            BOOST_CHECK(domain == AF_INET && type == SOCK_DGRAM && protocol == IPPROTO_UDP);
+            return std::make_unique<PCPTestSock>(default_local_ipv4, default_gateway_ipv4, script);
+        };
+        std::vector<std::string> messages;
+        DebugLogHelper capture(message, [&](const std::string* line) {
+            if (line) messages.push_back(*line);
+            return false; // Collect every matching line, including unexpected repeats.
+        });
+        const auto result = pcp ? PCPRequestPortMap(TEST_NONCE, default_gateway_ipv4, bind_any_ipv4, 1234, 1000, g_interrupt, 3, 200ms)
+                                : NATPMPRequestPortMap(default_gateway_ipv4, 1234, 1000, g_interrupt, 3, 200ms);
+        if (code == 0) {
+            const auto* mapping = std::get_if<MappingResult>(&result);
+            BOOST_REQUIRE(mapping);
+            BOOST_CHECK_EQUAL(mapping->external.ToStringAddrPort(), "1.2.3.4:1234");
+            BOOST_CHECK_EQUAL(mapping->lifetime, 1000);
+        } else {
+            const auto* error = std::get_if<MappingError>(&result);
+            BOOST_REQUIRE(error);
+            BOOST_CHECK_EQUAL(*error, code == (pcp ? 8 : 4) && !external ? MappingError::NO_RESOURCES : MappingError::PROTOCOL_ERROR);
+        }
+        if (expected_level.empty()) {
+            BOOST_CHECK(messages.empty());
+        } else {
+            BOOST_REQUIRE_EQUAL(messages.size(), 1);
+            BOOST_CHECK(messages.front().find(expected_level) != std::string::npos);
+            if (code == 2) BOOST_CHECK(messages.front().find("NOT_AUTHORIZED (code 2)") != std::string::npos);
+        }
+    };
+
+    // Other errors neither consume the first authorization warning nor get suppressed.
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        request(true, false, 8, "[net:warning]");
+        request(false, false, 4, "[net:warning]");
+        request(false, true, 3, "[net:warning]");
+    }
+    request(true, false, 2, "[net:warning]");
+    request(true, false, 2, "[net]");
+    request(false, true, 2, "[net:warning]"); // NAT-PMP has independent state.
+    request(false, false, 2, "[net]"); // Both NAT-PMP stages share it.
+    request(false, true, 2, "[net]");
+    request(true, false, 0, "");
+    request(false, false, 0, "");
+    request(true, false, 2, "[net]"); // Success does not reset process-wide state.
+
+    LogInstance().DisableCategory(BCLog::NET);
+    request(true, false, 2, "");
+    request(false, false, 2, "");
+    request(false, true, 2, "");
+    request(true, false, 8, "[net:warning]");
+    request(false, false, 4, "[net:warning]");
+}
+
+BOOST_AUTO_TEST_SUITE_END()

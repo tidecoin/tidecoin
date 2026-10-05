@@ -1,0 +1,94 @@
+ZeroMQ 4.3.5: include <new> where std::nothrow is used.
+
+Adapted to the pinned source, following libzmq PR 4911 by MarcoFalke,
+commit 2e8a6ccb414ca79636392604893c79c3b0d00dc4. Original source licenses apply.
+
+--- a/src/norm_engine.cpp
++++ b/src/norm_engine.cpp
+@@ -1,5 +1,6 @@
+ 
+ #include "precompiled.hpp"
++#include <new>
+ 
+ #include "platform.hpp"
+ 
+--- a/src/polling_util.hpp
++++ b/src/polling_util.hpp
+@@ -4,6 +4,7 @@
+ #define __ZMQ_SOCKET_POLLING_UTIL_HPP_INCLUDED__
+ 
+ #include <stdlib.h>
++#include <new>
+ #include <vector>
+ 
+ #if defined ZMQ_HAVE_WINDOWS
+--- a/src/proxy.cpp
++++ b/src/proxy.cpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: MPL-2.0 */
+ 
+ #include "precompiled.hpp"
++#include <new>
+ 
+ #include <stddef.h>
+ #include "poller.hpp"
+--- a/src/reaper.cpp
++++ b/src/reaper.cpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: MPL-2.0 */
+ 
+ #include "precompiled.hpp"
++#include <new>
+ #include "macros.hpp"
+ #include "reaper.hpp"
+ #include "socket_base.hpp"
+--- a/src/session_base.cpp
++++ b/src/session_base.cpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: MPL-2.0 */
+ 
+ #include "precompiled.hpp"
++#include <new>
+ #include "macros.hpp"
+ #include "session_base.hpp"
+ #include "i_engine.hpp"
+--- a/src/socket_poller.cpp
++++ b/src/socket_poller.cpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: MPL-2.0 */
+ 
+ #include "precompiled.hpp"
++#include <new>
+ #include "socket_poller.hpp"
+ #include "err.hpp"
+ #include "polling_util.hpp"
+--- a/src/stream_connecter_base.cpp
++++ b/src/stream_connecter_base.cpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: MPL-2.0 */
+ 
+ #include "precompiled.hpp"
++#include <new>
+ #include "stream_connecter_base.hpp"
+ #include "session_base.hpp"
+ #include "address.hpp"
+--- a/src/stream_listener_base.cpp
++++ b/src/stream_listener_base.cpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: MPL-2.0 */
+ 
+ #include "precompiled.hpp"
++#include <new>
+ #include "stream_listener_base.hpp"
+ #include "session_base.hpp"
+ #include "socket_base.hpp"
+--- a/src/ws_engine.cpp
++++ b/src/ws_engine.cpp
+@@ -1,6 +1,7 @@
+ /* SPDX-License-Identifier: MPL-2.0 */
+ 
+ #include "precompiled.hpp"
++#include <new>
+ 
+ #ifdef ZMQ_USE_NSS
+ #include <secoid.h>

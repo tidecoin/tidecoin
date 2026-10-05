@@ -59,6 +59,16 @@ class CompactFiltersTest(BitcoinTestFramework):
         # Nodes 0 & 1 share the same first 999 blocks in the chain.
         self.generate(self.nodes[0], 999)
 
+        self.log.info("Check empty cfcheckpt responses below the first interval.")
+        self.nodes[0].syncwithvalidationinterfacequeue()
+        for height in (0, 999):
+            request = msg_getcfcheckpt(filter_type=FILTER_TYPE_BASIC, stop_hash=int(self.nodes[0].getblockhash(height), 16))
+            peer_0.send_and_ping(request)
+            response = peer_0.last_message["cfcheckpt"]
+            assert_equal(response.filter_type, request.filter_type)
+            assert_equal(response.stop_hash, request.stop_hash)
+            assert_equal(response.headers, [])
+
         # Stale blocks by disconnecting nodes 0 & 1, mining, then reconnecting
         self.disconnect_nodes(0, 1)
 

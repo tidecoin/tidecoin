@@ -19,6 +19,8 @@
 #include <stdexcept>
 #include <string>
 
+namespace leveldb { class Env; }
+
 static const size_t DBWRAPPER_PREALLOC_KEY_SIZE = 64;
 static const size_t DBWRAPPER_PREALLOC_VALUE_SIZE = 1024;
 static const size_t DBWRAPPER_MAX_FILE_SIZE = 32 << 20; // 32 MiB
@@ -27,6 +29,9 @@ static const size_t DBWRAPPER_MAX_FILE_SIZE = 32 << 20; // 32 MiB
 struct DBOptions {
     //! Compact database on startup.
     bool force_compact = false;
+    //! Optional caller-owned environment, which must outlive the database.
+    //! Used for storage fault tests; incompatible with memory_only.
+    leveldb::Env* env{nullptr};
 };
 
 //! Application-specific storage settings.

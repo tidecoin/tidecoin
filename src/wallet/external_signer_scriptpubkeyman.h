@@ -10,6 +10,7 @@
 #include <memory>
 #include <util/result.h>
 
+class ExternalSigner;
 struct bilingual_str;
 
 namespace wallet {
@@ -26,9 +27,12 @@ class ExternalSignerScriptPubKeyMan : public DescriptorScriptPubKeyMan
   /** Provide a descriptor at setup time
   * Returns false if already setup or setup fails, true if setup is successful
   */
-  bool SetupDescriptor(WalletBatch& batch, std::unique_ptr<Descriptor>desc);
+  [[nodiscard]] bool SetupDescriptor(WalletBatch& batch, std::unique_ptr<Descriptor>desc);
 
   static util::Result<ExternalSigner> GetExternalSigner();
+
+  /** Match enrolled public descriptors; the signer label is not proof of key ownership. */
+  bool MatchesSigner(const ExternalSigner& signer) const;
 
   /**
   * Display address on the device and verify that the returned value matches.

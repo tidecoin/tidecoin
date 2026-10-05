@@ -6,6 +6,7 @@
 #include <chainparams.h>
 #include <consensus/validation.h>
 #include <core_io.h>
+#include <interfaces/wallet.h>
 #include <key_io.h>
 #include <node/types.h>
 #include <policy/policy.h>
@@ -517,9 +518,13 @@ static std::vector<RPCArg> FundTxDoc(bool solving_data = true)
                     }
                 },
                 {
-                    "descriptors", RPCArg::Type::ARR, RPCArg::Default{UniValue::VARR}, "Descriptors that provide solving data for this transaction.",
+                    "descriptors", RPCArg::Type::ARR, RPCArg::Default{UniValue::VARR}, "Descriptors that provide public solving data. PQHD descriptors must be registered in this wallet; structurally valid cached public keys work while locked, including after reload. Fresh PQHD derivation requires an unlocked wallet with the seed.",
                     {
-                        {"descriptor", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "A descriptor"},
+                        {"descriptor", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "A checksummed descriptor, expanded at index zero"},
+                        {"", RPCArg::Type::OBJ, RPCArg::Optional::OMITTED, "Descriptor with a bounded range", {
+                            {"desc", RPCArg::Type::STR, RPCArg::Optional::NO, "A checksummed descriptor"},
+                            {"range", RPCArg::Type::RANGE, RPCArg::Default{0}, "Inclusive end or [begin,end]"},
+                        }},
                     }
                 },
             }
@@ -528,8 +533,9 @@ static std::vector<RPCArg> FundTxDoc(bool solving_data = true)
     return args;
 }
 
-CreatedTransactionResult FundTransaction(CWallet& wallet, const CMutableTransaction& tx, const std::vector<CRecipient>& recipients, const UniValue& options, CCoinControl& coinControl, bool override_min_fee)
+CreatedTransactionResult FundTransaction(const std::shared_ptr<CWallet>& pwallet, const CMutableTransaction& tx, const std::vector<CRecipient>& recipients, const UniValue& options, CCoinControl& coinControl, bool override_min_fee)
 {
+    CWallet& wallet = *pwallet;
     // We want to make sure tx.vout is not used now that we are passing outputs as a vector of recipients.
     // This sets us up to remove tx completely in a future PR in favor of passing the inputs directly.
     CHECK_NONFATAL(tx.vout.empty());
@@ -691,20 +697,33 @@ CreatedTransactionResult FundTransaction(CWallet& wallet, const CMutableTransact
         }
 
         if (solving_data.exists("descriptors")) {
-            for (const UniValue& desc_univ : solving_data["descriptors"].get_array().getValues()) {
-                const std::string& desc_str  = desc_univ.get_str();
-                FlatSigningProvider desc_out;
+            std::unique_ptr<interfaces::WalletDescriptorExpansion> expansion;
+            const DescriptorExpandFn expand = [&](const Descriptor& desc, int32_t index, const SigningProvider& keys, std::vector<CScript>& scripts, FlatSigningProvider& out) {
+                if (desc.GetPQHDSeedIDs().empty()) return desc.Expand(index, keys, scripts, out);
+                if (!expansion) expansion = MakeWalletDescriptorExpansion(pwallet);
+                expansion->expand(desc, index, scripts, out);
+                return true;
+            };
+            for (const UniValue& item : solving_data["descriptors"].get_array().getValues()) {
+                const std::string desc_str = item.isStr() ? item.get_str() : item["desc"].get_str();
+                // Preserve index zero for the existing string form; objects can
+                // select an explicit bounded range, including nonzero indices.
+                auto range = item.isObject() && item.exists("range") ? ParseDescriptorRange(item["range"]) : std::pair<int64_t, int64_t>{0, 0};
+                FlatSigningProvider keys;
                 std::string error;
-                std::vector<CScript> scripts_temp;
-                auto descs = Parse(desc_str, desc_out, error, true);
+                auto descs = Parse(desc_str, keys, error, /*require_checksum=*/true);
                 if (descs.empty()) {
                     throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Unable to parse descriptor '%s': %s", desc_str, error));
                 }
-                for (auto& desc : descs) {
-                    desc->Expand(0, desc_out, scripts_temp, desc_out);
+                if (!descs[0]->IsRange()) range = {0, 0};
+                FlatSigningProvider public_data;
+                if (!ExpandDescriptorRange(descs, range, keys, public_data, /*expand_priv=*/false, expand)) {
+                    throw JSONRPCError(RPC_INVALID_PARAMETER, "Unable to expand solving_data descriptor over the requested range");
                 }
-                coinControl.m_external_provider.Merge(std::move(desc_out));
+                coinControl.m_external_provider.Merge(std::move(public_data));
             }
+            // Check cancellation before funding can reserve change or lock inputs.
+            if (expansion) expansion->finish();
         }
     }
 
@@ -900,7 +919,7 @@ RPCHelpMan fundrawtransaction()
     // Clear tx.vout since it is not meant to be used now that we are passing outputs directly.
     // This sets us up for a future PR to completely remove tx from the function signature in favor of passing inputs directly
     tx.vout.clear();
-    auto txr = FundTransaction(*pwallet, tx, recipients, options, coin_control, /*override_min_fee=*/true);
+    auto txr = FundTransaction(pwallet, tx, recipients, options, coin_control, /*override_min_fee=*/true);
 
     UniValue result(UniValue::VOBJ);
     result.pushKV("hex", EncodeHexTx(*txr.tx));
@@ -1363,7 +1382,7 @@ RPCHelpMan send()
             // Clear tx.vout since it is not meant to be used now that we are passing outputs directly.
             // This sets us up for a future PR to completely remove tx from the function signature in favor of passing inputs directly
             rawTx.vout.clear();
-            auto txr = FundTransaction(*pwallet, rawTx, recipients, options, coin_control, /*override_min_fee=*/false);
+            auto txr = FundTransaction(pwallet, rawTx, recipients, options, coin_control, /*override_min_fee=*/false);
 
             CMutableTransaction tx = CMutableTransaction(*txr.tx);
             return FinishTransaction(pwallet, options, tx);
@@ -1656,7 +1675,9 @@ RPCHelpMan walletprocesspsbt()
     return RPCHelpMan{
         "walletprocesspsbt",
         "Update a PSBT with input information from our wallet and then sign inputs\n"
-                "that we can sign for." +
+                "that we can sign for.\n"
+        "PQHD origins are added per key only when requested. Existing origins are retained, but conflicts with known wallet paths are rejected.\n"
+        "Origins supplied by another party are metadata, not proof of key ownership.\n" +
         HELP_REQUIRING_PASSPHRASE,
                 {
                     {"psbt", RPCArg::Type::STR, RPCArg::Optional::NO, "The transaction base64 string"},
@@ -1852,7 +1873,7 @@ RPCHelpMan walletcreatefundedpsbt()
     // Clear tx.vout since it is not meant to be used now that we are passing outputs directly.
     // This sets us up for a future PR to completely remove tx from the function signature in favor of passing inputs directly
     rawTx.vout.clear();
-    auto txr = FundTransaction(wallet, rawTx, recipients, options, coin_control, /*override_min_fee=*/true);
+    auto txr = FundTransaction(pwallet, rawTx, recipients, options, coin_control, /*override_min_fee=*/true);
 
     // Make a blank psbt
     PartiallySignedTransaction psbtx(CMutableTransaction(*txr.tx));

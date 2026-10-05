@@ -4,6 +4,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test block-relay-only anchors functionality"""
 
+from contextlib import ExitStack
 import os
 
 from test_framework.p2p import P2PInterface, P2P_SERVICES
@@ -21,6 +22,13 @@ class AnchorsTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
         self.disable_autoconnect = False
+        self.onion_proxy = None
+
+    def shutdown(self):
+        with ExitStack() as cleanup:
+            if self.onion_proxy is not None:
+                cleanup.callback(self.onion_proxy.stop)
+            return super().shutdown()
 
     def run_test(self):
         node_anchors_path = self.nodes[0].chain_path / "anchors.dat"
@@ -94,7 +102,7 @@ class AnchorsTest(BitcoinTestFramework):
         onion_conf.unauth = True
         onion_conf.addr = ('127.0.0.1', p2p_port(self.num_nodes))
         onion_conf.keep_alive = True
-        onion_proxy = Socks5Server(onion_conf)
+        self.onion_proxy = onion_proxy = Socks5Server(onion_conf)
         onion_proxy.start()
         self.restart_node(0, extra_args=[f"-onion={onion_conf.addr[0]}:{onion_conf.addr[1]}"])
 

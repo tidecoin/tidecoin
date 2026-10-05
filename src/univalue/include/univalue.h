@@ -99,7 +99,8 @@ public:
     std::string write(unsigned int prettyIndent = 0,
                       unsigned int indentLevel = 0) const;
 
-    bool read(std::string_view raw);
+    /// Parse JSON; set value to null on failure.
+    [[nodiscard]] bool read(std::string_view json);
 
 private:
     UniValue::VType typ;
@@ -108,6 +109,8 @@ private:
     std::vector<UniValue> values;
 
     void checkType(const VType& expected) const;
+    /// Internal parser may leave this value incomplete on failure.
+    [[nodiscard]] bool read_impl(std::string_view json);
     bool findKey(const std::string& key, size_t& retIdx) const;
     void writeArray(unsigned int prettyIndent, unsigned int indentLevel, std::string& s) const;
     void writeObject(unsigned int prettyIndent, unsigned int indentLevel, std::string& s) const;

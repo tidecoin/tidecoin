@@ -31,6 +31,7 @@ from test_framework.script import (
     OP_INVALIDOPCODE,
     OP_RETURN,
 )
+from test_framework.segwit_addr import Encoding, bech32_encode, convertbits
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
@@ -304,6 +305,17 @@ class RawTransactionsTest(BitcoinTestFramework):
         assert_raises_rpc_error(-8, "Invalid parameter, key-value pair must contain exactly one key", self.nodes[0].createrawtransaction, [], [{'a': 1, 'b': 2}])
         assert_raises_rpc_error(-8, "Invalid parameter, key-value pair not an object as expected", self.nodes[0].createrawtransaction, [], [['key-value pair1'], ['2']])
 
+        # A repeated key uses its first value before reporting the duplicate.
+        # Keep the original error precedence even if its later value is invalid.
+        for bad_value in ("bad", -1, None, {}):
+            for outputs in (multidict([(address, 1), (address, bad_value)]), [{address: 1}, {address: bad_value}]):
+                assert_raises_rpc_error(-8, f"Invalid parameter, duplicated address: {address}", self.nodes[0].createrawtransaction, [], outputs)
+        assert_raises_rpc_error(-3, "Invalid amount", self.nodes[0].createrawtransaction, [], [{address: "bad"}, {address: 1}])
+        # Case variants are distinct JSON keys for the same destination: their
+        # own amount is checked before destination duplication is reported.
+        assert_raises_rpc_error(-3, "Invalid amount", self.nodes[0].createrawtransaction, [], [{address: 1}, {address.upper(): "bad"}])
+        assert_raises_rpc_error(-8, "duplicated address", self.nodes[0].createrawtransaction, [], [{address: 1}, {address.upper(): 2}])
+
         # Test `createrawtransaction` mismatch between sequence number(s) and `replaceable` option
         assert_raises_rpc_error(-8, "Invalid parameter combination: Sequence number(s) contradict replaceable option",
                                 self.nodes[0].createrawtransaction, [{'txid': TXID, 'vout': 0, 'sequence': MAX_BIP125_RBF_SEQUENCE+1}], {}, 0, True)
@@ -339,6 +351,26 @@ class RawTransactionsTest(BitcoinTestFramework):
             tx.serialize().hex(),
             self.nodes[2].createrawtransaction(inputs=[{'txid': TXID, 'vout': 9}], outputs=[{address: 99}, {address2: 99}, {'data': '99'}]),
         )
+
+        # Distinct amounts and scripts expose key/value misalignment. OP_RETURN
+        # must stay at the requested position for both output argument forms.
+        pq_program = bytes(range(64))
+        pq_address = bech32_encode(Encoding.BECH32M, "rq", [1] + convertbits(pq_program, 8, 5))
+        expected_outputs = [
+            (address, 2, CTxOut(2 * COIN, bytes.fromhex(self.nodes[0].validateaddress(address)["scriptPubKey"]))),
+            (address2, 3, CTxOut(3 * COIN, bytes.fromhex(self.nodes[0].validateaddress(address2)["scriptPubKey"]))),
+            ("data", "1234", CTxOut(0, CScript([OP_RETURN, bytes.fromhex("1234")]))),
+            (pq_address, 4, CTxOut(4 * COIN, b"\x51\x40" + pq_program)),
+        ]
+        for offset in range(len(expected_outputs)):
+            ordered = expected_outputs[offset:] + expected_outputs[:offset]
+            expected_tx = CTransaction()
+            expected_tx.vout = [entry[2] for entry in ordered]
+            pairs = [(key, value) for key, value, _ in ordered]
+            for outputs in (OrderedDict(pairs), [{key: value} for key, value in pairs]):
+                assert_equal(self.nodes[0].createrawtransaction([], outputs), expected_tx.serialize().hex())
+
+        assert_raises_rpc_error(-8, "duplicated address", self.nodes[0].createrawtransaction, [], [{pq_address: 1}, {pq_address.upper(): 2}])
 
         for version in range(TX_MIN_STANDARD_VERSION, TX_MAX_STANDARD_VERSION + 1):
             rawtx = self.nodes[2].createrawtransaction(inputs=[{'txid': TXID, 'vout': 9}], outputs=OrderedDict([(address, 99), (address2, 99)]), version=version)

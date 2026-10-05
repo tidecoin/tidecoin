@@ -455,7 +455,10 @@ static RPCHelpMan importpqhdseed()
 {
     return RPCHelpMan{
         "importpqhdseed",
-        "Import a 32-byte PQHD master seed. Re-importing an existing seed is idempotent.\n",
+        "Import a 32-byte PQHD master seed. Re-importing an existing seed is idempotent.\n"
+        "This stores the seed only; it does not restore historical addresses or scan for transactions.\n"
+        "For recovery, import every required seed, then use importdescriptors with the historical descriptors, ranges, next_index values and timestamps.\n"
+        "A seed identifier alone cannot reconstruct custom scripts, other seeds, or previously used ranges.\n",
         {
             {"seed", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "32-byte seed hex"},
         },
@@ -463,7 +466,7 @@ static RPCHelpMan importpqhdseed()
             RPCResult::Type::OBJ, "", "",
             {
                 {RPCResult::Type::STR_HEX, "seed_id", "Derived SeedID32"},
-                {RPCResult::Type::BOOL, "inserted", "Whether a new seed record was inserted"},
+                {RPCResult::Type::BOOL, "inserted", "Whether a new seed record was inserted; this does not indicate historical recovery"},
             },
         },
         RPCExamples{
@@ -476,26 +479,20 @@ static RPCHelpMan importpqhdseed()
     if (!pwallet) return UniValue::VNULL;
 
     std::vector<unsigned char> seed_bytes = ParseHexV(request.params[0], "seed");
+    const ScopedMemoryCleanse cleanse_parsed_seed{seed_bytes.data(), seed_bytes.size()};
     if (seed_bytes.size() != 32) {
-        if (!seed_bytes.empty()) {
-            memory_cleanse(seed_bytes.data(), seed_bytes.size());
-        }
         throw JSONRPCError(RPC_INVALID_PARAMETER, "seed must be 32-byte hex");
     }
     std::array<unsigned char, 32> master_seed{};
-    for (size_t i = 0; i < master_seed.size(); ++i) {
-        master_seed[i] = seed_bytes[i];
-    }
+    const ScopedMemoryCleanse cleanse_master_seed{master_seed.data(), master_seed.size()};
+    std::copy(seed_bytes.begin(), seed_bytes.end(), master_seed.begin());
     memory_cleanse(seed_bytes.data(), seed_bytes.size());
-    seed_bytes.clear();
 
     LOCK(pwallet->cs_wallet);
     auto import_result = pwallet->ImportPQHDSeed(master_seed);
     if (!import_result) {
-        memory_cleanse(master_seed.data(), master_seed.size());
         throw JSONRPCError(RPC_WALLET_ERROR, util::ErrorString(import_result).original);
     }
-    memory_cleanse(master_seed.data(), master_seed.size());
 
     UniValue out(UniValue::VOBJ);
     out.pushKV("seed_id", import_result->seed_id.ToString());
@@ -888,29 +885,15 @@ RPCHelpMan gethdkeys()
 {
     return RPCHelpMan{
         "gethdkeys",
-        "List all BIP 32 HD keys in the wallet and which descriptors use them.\n",
+        "Compatibility RPC: BIP32/xpub keys are unsupported in PQHD wallets; this call always returns an error.\n"
+        "Use listpqhdseeds for seed identifiers and listdescriptors for public wallet descriptors.\n",
         {
             {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "", {
-                {"active_only", RPCArg::Type::BOOL, RPCArg::Default{false}, "Show the keys for only active descriptors"},
-                {"private", RPCArg::Type::BOOL, RPCArg::Default{false}, "Show private keys"}
+                {"active_only", RPCArg::Type::BOOL, RPCArg::Default{false}, "Legacy compatibility option; this RPC is unsupported"},
+                {"private", RPCArg::Type::BOOL, RPCArg::Default{false}, "Legacy compatibility option; no seed or private key is exported"}
             }},
         },
-        RPCResult{RPCResult::Type::ARR, "", "", {
-            {
-                {RPCResult::Type::OBJ, "", "", {
-                    {RPCResult::Type::STR, "xpub", "The extended public key"},
-                    {RPCResult::Type::BOOL, "has_private", "Whether the wallet has the private key for this xpub"},
-                    {RPCResult::Type::STR, "xprv", /*optional=*/true, "The extended private key if \"private\" is true"},
-                    {RPCResult::Type::ARR, "descriptors", "Array of descriptor objects that use this HD key",
-                    {
-                        {RPCResult::Type::OBJ, "", "", {
-                            {RPCResult::Type::STR, "desc", "Descriptor string representation"},
-                            {RPCResult::Type::BOOL, "active", "Whether this descriptor is currently used to generate new addresses"},
-                        }},
-                    }},
-                }},
-            }
-        }},
+        RPCResult{RPCResult::Type::NONE, "", "Always returns an unsupported-operation error"},
         RPCExamples{
             HelpExampleCli("gethdkeys", "") + HelpExampleRpc("gethdkeys", "")
             + HelpExampleCliNamed("gethdkeys", {{"active_only", "true"}, {"private", "true"}}) + HelpExampleRpcNamed("gethdkeys", {{"active_only", "true"}, {"private", "true"}})
@@ -928,24 +911,16 @@ RPCHelpMan gethdkeys()
 static RPCHelpMan createwalletdescriptor()
 {
     return RPCHelpMan{"createwalletdescriptor",
-        "Creates the wallet's descriptor for the given address type. "
-        "The address type must be one that the wallet does not already have a descriptor for."
-        + HELP_REQUIRING_PASSPHRASE,
+        "Compatibility RPC: BIP32/xpub descriptor creation is unsupported in PQHD wallets; this call always returns an error.\n"
+        "Use setpqhdpolicy/setpqhdseed to select policy defaults, or importdescriptors to register a PQHD descriptor backed by a wallet seed.\n",
         {
             {"type", RPCArg::Type::STR, RPCArg::Optional::NO, "The address type the descriptor will produce. Options are " + FormatAllOutputTypes() + "."},
             {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "", {
                 {"internal", RPCArg::Type::BOOL, RPCArg::DefaultHint{"Both external and internal will be generated unless this parameter is specified"}, "Whether to only make one descriptor that is internal (if parameter is true) or external (if parameter is false)"},
-                {"hdkey", RPCArg::Type::STR, RPCArg::DefaultHint{"The HD key used by all other active descriptors"}, "The HD key that the wallet knows the private key of, listed using 'gethdkeys', to use for this descriptor's key"},
+                {"hdkey", RPCArg::Type::STR, RPCArg::DefaultHint{"omitted"}, "Legacy compatibility option; BIP32 keys are unsupported"},
             }},
         },
-        RPCResult{
-            RPCResult::Type::OBJ, "", "",
-            {
-                {RPCResult::Type::ARR, "descs", "The public descriptors that were added to the wallet",
-                    {{RPCResult::Type::STR, "", ""}}
-                }
-            },
-        },
+        RPCResult{RPCResult::Type::NONE, "", "Always returns an unsupported-operation error"},
         RPCExamples{
             HelpExampleCli("createwalletdescriptor", "\"bech32\"") + HelpExampleRpc("createwalletdescriptor", "\"bech32\"")
         },

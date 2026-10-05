@@ -303,18 +303,26 @@ class WalletRescanReserver; //forward declarations for ScanForWalletTransactions
 class CWallet final : public WalletStorage, public interfaces::Chain::Notifications
 {
     friend struct WalletFlagTxnTestAccess;
+    friend struct WalletReconciliationTestAccess;
 
 private:
     CKeyingMaterial vMasterKey GUARDED_BY(cs_wallet);
 
     bool Unlock(const CKeyingMaterial& vMasterKeyIn);
 
+    // Serialize reservation, cancellation and release. Never acquire wallet
+    // locks while holding this mutex; abort must remain available during import.
+    Mutex m_rescan_mutex;
     std::atomic<bool> fAbortRescan{false};
     std::atomic<bool> fScanningWallet{false}; // controlled by WalletRescanReserver
     std::atomic<bool> m_scanning_with_passphrase{false};
     std::atomic<SteadyClock::time_point> m_scanning_start{SteadyClock::time_point{}};
     std::atomic<double> m_scanning_progress{0};
     friend class WalletRescanReserver;
+
+    enum class DescriptorExpansionState { IDLE, RUNNING, ABORTED };
+    std::atomic<DescriptorExpansionState> m_descriptor_expansion{DescriptorExpansionState::IDLE};
+    friend class WalletDescriptorExpansionReserver;
 
     // Wallet creation progress (used to expose determinate progress for long-running
     // operations during first-run descriptor setup, e.g. PQ keypool prefill).
@@ -426,6 +434,12 @@ private:
      * generation does not need to lock chain state under wallet/SPKM locks. */
     std::atomic<int> m_target_height_for_outputs{0};
 
+    // A failed consumption/transaction update must not be hidden by a later
+    // checkpoint or address reservation. Atomic for access under SPKM locks.
+    std::atomic<bool> m_recovery_required{false};
+    // The in-memory tip during attachment is not a completed scan checkpoint.
+    bool m_attaching_chain GUARDED_BY(cs_wallet){false};
+
     std::map<OutputType, ScriptPubKeyMan*> m_external_spk_managers;
     std::map<OutputType, ScriptPubKeyMan*> m_internal_spk_managers;
 
@@ -453,7 +467,7 @@ private:
     // Reconcile active SPKM bindings to current PQHD policy defaults.
     // When create_missing_descriptors=true, missing policy descriptors may be created.
     util::Result<void> SyncActiveScriptPubKeyMansWithPQHDPolicy(WalletBatch& batch,
-                                                                 bool create_missing_descriptors) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+                                                                 bool create_missing_descriptors, bool preserve_active = false) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     util::Result<DescriptorScriptPubKeyMan*> CreatePQHDDescriptorForPathWithDb(WalletBatch& batch,
                                                                                 const OutputType& type,
                                                                                 bool internal,
@@ -483,7 +497,20 @@ private:
     };
 
     std::map<uint256, PQHDSeedState> m_pqhd_seeds GUARDED_BY(cs_wallet);
-    std::atomic<bool> m_has_pqhd_seeds{false};
+    // Public presence metadata can be queried under a descriptor lock without
+    // taking cs_wallet. Never acquire wallet/descriptor locks under this mutex.
+    class PQHDSeedIDs
+    {
+        mutable Mutex m_mutex;
+        std::set<uint256> m_ids GUARDED_BY(m_mutex);
+
+    public:
+        void Insert(const uint256& id) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { LOCK(m_mutex); m_ids.insert(id); }
+        void Erase(const uint256& id) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { LOCK(m_mutex); m_ids.erase(id); }
+        bool Contains(const uint256& id) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { LOCK(m_mutex); return m_ids.contains(id); }
+        bool Empty() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { LOCK(m_mutex); return m_ids.empty(); }
+    };
+    PQHDSeedIDs m_pqhd_seed_ids;
     std::optional<PQHDPolicy> m_pqhd_policy GUARDED_BY(cs_wallet);
 
     /**
@@ -545,7 +572,7 @@ public:
     bool LoadPQHDCryptedSeed(const uint256& seed_id, PQHDCryptedSeed&& seed) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     void LoadPQHDPolicy(PQHDPolicy&& policy) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
-    bool HavePQHDSeed(const uint256& seed_id) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+    bool HavePQHDSeed(const uint256& seed_id) const override;
     size_t GetPQHDSeedCount() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     std::optional<PQHDPolicy> GetPQHDPolicy() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     util::Result<void> SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
@@ -648,7 +675,20 @@ public:
     /*
      * Rescan abort properties
      */
-    void AbortRescan() { fAbortRescan = true; }
+    bool AbortRescan() EXCLUSIVE_LOCKS_REQUIRED(!m_rescan_mutex)
+    {
+        LOCK(m_rescan_mutex);
+        if (!fScanningWallet || fAbortRescan) return false;
+        fAbortRescan = true;
+        return true;
+    }
+    bool AbortDescriptorExpansion()
+    {
+        auto expected = DescriptorExpansionState::RUNNING;
+        return m_descriptor_expansion.compare_exchange_strong(expected, DescriptorExpansionState::ABORTED) || expected == DescriptorExpansionState::ABORTED;
+    }
+    bool IsDescriptorExpansionRunning() const { return m_descriptor_expansion != DescriptorExpansionState::IDLE; }
+    bool IsDescriptorExpansionAborted() const { return m_descriptor_expansion == DescriptorExpansionState::ABORTED; }
     bool IsAbortingRescan() const { return fAbortRescan; }
     bool IsScanning() const { return fScanningWallet; }
     bool IsScanningWithPassphrase() const { return m_scanning_with_passphrase; }
@@ -701,7 +741,8 @@ public:
     void blockConnected(ChainstateRole role, const interfaces::BlockInfo& block) override;
     void blockDisconnected(const interfaces::BlockInfo& block) override;
     void updatedBlockTip() override;
-    int64_t RescanFromTime(int64_t startTime, const WalletRescanReserver& reserver, bool update);
+    /** Earliest successfully scanned time, or nullopt if interrupted by the user or shutdown. */
+    std::optional<int64_t> RescanFromTime(int64_t startTime, const WalletRescanReserver& reserver, bool update);
 
     struct ScanResult {
         enum { SUCCESS, FAILURE, USER_ABORT } status = SUCCESS;
@@ -870,6 +911,7 @@ public:
     CAmount GetDebit(const CTransaction& tx) const;
 
     DBErrors LoadWallet();
+    bool ValidatePQHDCaches(const CKeyingMaterial* candidate_key = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
     /** Erases the provided transactions from the wallet. */
     util::Result<void> RemoveTxs(std::vector<Txid>& txs_to_remove) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
@@ -1075,7 +1117,7 @@ public:
     //! @param[in] id The unique id for the ScriptPubKeyMan
     //! @param[in] type The OutputType this ScriptPubKeyMan provides addresses for
     //! @param[in] internal Whether this ScriptPubKeyMan provides change addresses
-    void AddActiveScriptPubKeyMan(uint256 id, OutputType type, bool internal);
+    void AddActiveScriptPubKeyMan(uint256 id, OutputType type, bool internal, WalletBatch* batch = nullptr);
 
     //! Loads an active ScriptPubKeyMan for the specified type and internal. (used by LoadWallet)
     //! @param[in] id The unique id for the ScriptPubKeyMan
@@ -1087,7 +1129,7 @@ public:
     //! @param[in] id The unique id for the ScriptPubKeyMan
     //! @param[in] type The OutputType this ScriptPubKeyMan provides addresses for
     //! @param[in] internal Whether this ScriptPubKeyMan provides change addresses
-    void DeactivateScriptPubKeyMan(uint256 id, OutputType type, bool internal);
+    void DeactivateScriptPubKeyMan(uint256 id, OutputType type, bool internal, WalletBatch* batch = nullptr);
 
     void SetupDescriptorScriptPubKeyMans() EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
@@ -1103,7 +1145,8 @@ public:
     std::optional<bool> IsInternalScriptPubKeyMan(ScriptPubKeyMan* spk_man) const;
 
     //! Add a descriptor to the wallet, return a ScriptPubKeyMan & associated output type
-    util::Result<std::reference_wrapper<DescriptorScriptPubKeyMan>> AddWalletDescriptor(WalletDescriptor& desc, const FlatSigningProvider& signing_provider, const std::string& label, bool internal) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+    //! A caller-supplied batch must complete or abort while cs_wallet is still held.
+    util::Result<std::reference_wrapper<DescriptorScriptPubKeyMan>> AddWalletDescriptor(WalletDescriptor& desc, const FlatSigningProvider& signing_provider, const std::string& label, bool internal, WalletBatch* batch = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
     /** Move all records from the BDB database to a new SQLite database for storage.
      * The original BDB file will be deleted and replaced with a new SQLite file.
@@ -1128,6 +1171,9 @@ public:
     void WalletCreationProgressStep() override;
     void TopUpCallback(const std::set<CScript>& spks, ScriptPubKeyMan* spkm) override;
 
+    void RequireWalletRecovery() override;
+    bool IsWalletRecoveryRequired() const override { return m_recovery_required.load(); }
+
     //! Find the private key for the given key id from the wallet's descriptors, if available
     //! Returns nullopt when no descriptor has the key or if the wallet is locked.
     std::optional<CKey> GetKey(const CKeyID& keyid) const;
@@ -1138,6 +1184,36 @@ public:
  * their transactions. Actual rebroadcast schedule is managed by the wallets themselves.
  */
 void MaybeResendWalletTxs(WalletContext& context);
+
+/** One cancellable public-descriptor expansion per wallet. No wallet lock is needed to abort. */
+class WalletDescriptorExpansionReserver
+{
+    CWallet& m_wallet;
+    bool m_reserved{false};
+public:
+    explicit WalletDescriptorExpansionReserver(CWallet& wallet) : m_wallet(wallet) {}
+    WalletDescriptorExpansionReserver(const WalletDescriptorExpansionReserver&) = delete;
+    WalletDescriptorExpansionReserver& operator=(const WalletDescriptorExpansionReserver&) = delete;
+    bool reserve()
+    {
+        assert(!m_reserved);
+        auto expected = CWallet::DescriptorExpansionState::IDLE;
+        m_reserved = m_wallet.m_descriptor_expansion.compare_exchange_strong(expected, CWallet::DescriptorExpansionState::RUNNING);
+        return m_reserved;
+    }
+    bool complete()
+    {
+        assert(m_reserved);
+        auto expected = CWallet::DescriptorExpansionState::RUNNING;
+        if (!m_wallet.m_descriptor_expansion.compare_exchange_strong(expected, CWallet::DescriptorExpansionState::IDLE)) return false;
+        m_reserved = false;
+        return true;
+    }
+    ~WalletDescriptorExpansionReserver()
+    {
+        if (m_reserved) m_wallet.m_descriptor_expansion = CWallet::DescriptorExpansionState::IDLE;
+    }
+};
 
 /** RAII object to check and reserve a wallet rescan */
 class WalletRescanReserver
@@ -1150,16 +1226,22 @@ private:
     NowFn m_now;
 public:
     explicit WalletRescanReserver(CWallet& w) : m_wallet(w) {}
+    WalletRescanReserver(const WalletRescanReserver&) = delete;
+    WalletRescanReserver& operator=(const WalletRescanReserver&) = delete;
 
     bool reserve(bool with_passphrase = false)
     {
         assert(!m_could_reserve);
-        if (m_wallet.fScanningWallet.exchange(true)) {
+        LOCK(m_wallet.m_rescan_mutex);
+        if (m_wallet.fScanningWallet) {
             return false;
         }
-        m_wallet.m_scanning_with_passphrase.exchange(with_passphrase);
+        // Reset only a new reservation, before publishing it to abort callers.
+        m_wallet.fAbortRescan = false;
+        m_wallet.m_scanning_with_passphrase = with_passphrase;
         m_wallet.m_scanning_start = SteadyClock::now();
         m_wallet.m_scanning_progress = 0;
+        m_wallet.fScanningWallet = true;
         m_could_reserve = true;
         return true;
     }
@@ -1176,6 +1258,7 @@ public:
     ~WalletRescanReserver()
     {
         if (m_could_reserve) {
+            LOCK(m_wallet.m_rescan_mutex);
             m_wallet.fScanningWallet = false;
             m_wallet.m_scanning_with_passphrase = false;
         }

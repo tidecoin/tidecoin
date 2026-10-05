@@ -8,12 +8,16 @@
 #include <tidecoin-build-config.h> // IWYU pragma: keep
 
 #include <logging.h>
+#include <random.h>
 #include <sync.h>
+#include <tinyformat.h>
+#include <util/check.h>
 #include <util/fs.h>
 #include <util/syserror.h>
 
 #include <cerrno>
 #include <fstream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -150,27 +154,38 @@ bool TruncateFile(FILE* file, unsigned int length)
 #endif
 }
 
-/**
- * this function tries to raise the file descriptor limit to the requested number.
- * It returns the actual file descriptor limit (which may be more or less than nMinFD)
- */
-int RaiseFileDescriptorLimit(int nMinFD)
+int RaiseFileDescriptorLimit(int min_fd)
 {
+    Assert(min_fd >= 0);
 #if defined(WIN32)
     return 2048;
 #else
     struct rlimit limitFD;
     if (getrlimit(RLIMIT_NOFILE, &limitFD) != -1) {
-        if (limitFD.rlim_cur < (rlim_t)nMinFD) {
-            limitFD.rlim_cur = nMinFD;
-            if (limitFD.rlim_cur > limitFD.rlim_max)
-                limitFD.rlim_cur = limitFD.rlim_max;
-            setrlimit(RLIMIT_NOFILE, &limitFD);
-            getrlimit(RLIMIT_NOFILE, &limitFD);
+        if (limitFD.rlim_cur != RLIM_INFINITY && std::cmp_less(limitFD.rlim_cur, min_fd)) {
+            static_assert(std::in_range<rlim_t>(std::numeric_limits<int>::max()));
+            auto requested{limitFD};
+            requested.rlim_cur = static_cast<rlim_t>(min_fd);
+            if (requested.rlim_max != RLIM_INFINITY && requested.rlim_cur > requested.rlim_max) {
+                requested.rlim_cur = requested.rlim_max;
+            }
+            if (requested.rlim_cur != limitFD.rlim_cur && setrlimit(RLIMIT_NOFILE, &requested) == 0) {
+                // A failed raise must not replace the last known limit with the
+                // requested value. After success, refresh in case it changed.
+                limitFD = requested;
+                struct rlimit actual;
+                if (getrlimit(RLIMIT_NOFILE, &actual) == 0) limitFD = actual;
+            }
         }
-        return limitFD.rlim_cur;
+        // Infinity may be a signed sentinel. Large finite limits also need
+        // clamping before conversion to the caller's descriptor-count type.
+        if (limitFD.rlim_cur == RLIM_INFINITY ||
+            std::cmp_greater_equal(limitFD.rlim_cur, std::numeric_limits<int>::max())) {
+            return std::numeric_limits<int>::max();
+        }
+        return static_cast<int>(limitFD.rlim_cur);
     }
-    return nMinFD; // getrlimit failed, assume it's fine
+    return min_fd; // getrlimit failed, assume it's fine
 #endif
 }
 
@@ -330,3 +345,22 @@ FSType GetFilesystemType(const fs::path& path)
     return FSType::OTHER;
 }
 #endif
+
+bool IsDirWritable(const fs::path& path)
+{
+    if (!fs::is_directory(path)) return false;
+    FastRandomContext rng;
+    const auto probe{path / fs::PathFromString(strprintf(".wallet-write-test-%016x", rng.rand64()))};
+#ifdef __MINGW64__
+    // MinGW's fopen does not support exclusive creation (upstream issue #30210).
+    const char* mode{"wb"};
+#else
+    const char* mode{"wbx"};
+#endif
+    FILE* file{fsbridge::fopen(probe, mode)};
+    if (!file) return false;
+    const bool closed{std::fclose(file) == 0};
+    std::error_code error;
+    const bool removed{fs::remove(probe, error)};
+    return closed && removed && !error;
+}

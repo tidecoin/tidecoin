@@ -10,6 +10,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 /*
@@ -260,7 +261,18 @@ enum expect_bits : unsigned {
 #define setExpect(bit) (expectMask |= EXP_##bit)
 #define clearExpect(bit) (expectMask &= ~EXP_##bit)
 
-bool UniValue::read(std::string_view str_in)
+bool UniValue::read(std::string_view json)
+{
+    UniValue parsed;
+    if (!parsed.read_impl(json)) {
+        setNull();
+        return false;
+    }
+    *this = std::move(parsed);
+    return true;
+}
+
+bool UniValue::read_impl(std::string_view str_in)
 {
     clear();
 

@@ -144,6 +144,13 @@ public:
     SERIALIZE_METHODS(TestHeaderAndShortIDs, obj) { READWRITE(obj.header, obj.nonce, Using<VectorFormatter<CustomUintFormatter<CBlockHeaderAndShortTxIDs::SHORTTXIDS_LENGTH>>>(obj.shorttxids), obj.prefilledtxn); }
 };
 
+struct TestPartiallyDownloadedBlock : PartiallyDownloadedBlock {
+    using PartiallyDownloadedBlock::PartiallyDownloadedBlock;
+
+    size_t GetMempoolCount() const { return mempool_count; }
+    size_t GetExtraCount() const { return extra_count; }
+};
+
 BOOST_AUTO_TEST_CASE(NonCoinbasePreforwardRTTest)
 {
     CTxMemPool& pool = *Assert(m_node.mempool);
@@ -319,6 +326,12 @@ BOOST_AUTO_TEST_CASE(ReceiveWithExtraTransactions) {
     const CTransactionRef non_block_tx = MakeTransactionRef(std::move(mtx));
 
     CBlock block(BuildBlockTestCase(rand_ctx));
+    // Leave one transaction missing so scanning doesn't stop before the collision.
+    mtx = BuildTransactionTestCase();
+    mtx.vin[0].prevout.hash = Txid::FromUint256(rand_ctx.rand256());
+    block.vtx.push_back(MakeTransactionRef(std::move(mtx)));
+    block.hashMerkleRoot = BlockMerkleRoot(block);
+    while (!CheckProofOfWork(block.GetPoWHash(), block.nBits, Params().GetConsensus())) ++block.nNonce;
     std::vector<std::pair<Wtxid, CTransactionRef>> extra_txn;
     extra_txn.resize(10);
 
@@ -352,6 +365,87 @@ BOOST_AUTO_TEST_CASE(ReceiveWithExtraTransactions) {
         // This transaction is now available via extra_txn:
         BOOST_CHECK(partial_block_with_extra.IsTxAvailable(1));
         BOOST_CHECK(partial_block_with_extra.IsTxAvailable(2));
+
+        auto check_reconstruction = [&](PartiallyDownloadedBlock partial, const std::vector<CTransactionRef>& missing) {
+            CBlock rebuilt;
+            BOOST_REQUIRE_EQUAL(partial.FillBlock(rebuilt, missing, /*segwit_active=*/true), READ_STATUS_OK);
+            BOOST_CHECK_EQUAL(rebuilt.GetHash(), block.GetHash());
+            BOOST_CHECK_EQUAL(BlockMerkleRoot(rebuilt), block.hashMerkleRoot);
+        };
+
+        // Same transaction from both sources is a duplicate, not a collision.
+        extra_txn[2] = {block.vtx[2]->GetWitnessHash(), block.vtx[2]};
+        TestPartiallyDownloadedBlock duplicate{&pool};
+        BOOST_REQUIRE_EQUAL(duplicate.InitData(cmpctblock, extra_txn), READ_STATUS_OK);
+        BOOST_CHECK(duplicate.IsTxAvailable(1));
+        BOOST_CHECK(duplicate.IsTxAvailable(2));
+        BOOST_CHECK_EQUAL(duplicate.GetMempoolCount(), 2U);
+        BOOST_CHECK_EQUAL(duplicate.GetExtraCount(), 1U);
+        check_reconstruction(duplicate, {block.vtx[3]});
+
+        // Simulate a mempool collision after finding an unrelated extra transaction.
+        // As in upstream's test, substitute the lookup hash rather than search
+        // for a natural 48-bit collision. The transaction objects stay distinct.
+        extra_txn[2] = {block.vtx[2]->GetWitnessHash(), non_block_tx};
+        TestPartiallyDownloadedBlock partial_block_with_extra_collision{&pool};
+        BOOST_REQUIRE_EQUAL(partial_block_with_extra_collision.InitData(cmpctblock, extra_txn), READ_STATUS_OK);
+        BOOST_CHECK(partial_block_with_extra_collision.IsTxAvailable(1));
+        BOOST_CHECK(!partial_block_with_extra_collision.IsTxAvailable(2));
+        BOOST_CHECK_EQUAL(partial_block_with_extra_collision.GetMempoolCount(), 1U);
+        BOOST_CHECK_EQUAL(partial_block_with_extra_collision.GetExtraCount(), 1U);
+        check_reconstruction(partial_block_with_extra_collision, {block.vtx[2], block.vtx[3]});
+
+        // Now also collide the extra-sourced slot: both counters decrement once.
+        extra_txn[3] = {block.vtx[1]->GetWitnessHash(), non_block_tx};
+        TestPartiallyDownloadedBlock partial_block_with_extra_source_collision{&pool};
+        BOOST_REQUIRE_EQUAL(partial_block_with_extra_source_collision.InitData(cmpctblock, extra_txn), READ_STATUS_OK);
+        BOOST_CHECK(!partial_block_with_extra_source_collision.IsTxAvailable(1));
+        BOOST_CHECK(!partial_block_with_extra_source_collision.IsTxAvailable(2));
+        BOOST_CHECK_EQUAL(partial_block_with_extra_source_collision.GetMempoolCount(), 0U);
+        BOOST_CHECK_EQUAL(partial_block_with_extra_source_collision.GetExtraCount(), 0U);
+
+        // Collided slots are terminal: not even genuine transactions refill them.
+        extra_txn[4] = {block.vtx[2]->GetWitnessHash(), block.vtx[2]};
+        extra_txn[5] = {block.vtx[1]->GetWitnessHash(), block.vtx[1]};
+        TestPartiallyDownloadedBlock partial_block_no_refill{&pool};
+        BOOST_REQUIRE_EQUAL(partial_block_no_refill.InitData(cmpctblock, extra_txn), READ_STATUS_OK);
+        BOOST_CHECK(!partial_block_no_refill.IsTxAvailable(1));
+        BOOST_CHECK(!partial_block_no_refill.IsTxAvailable(2));
+        BOOST_CHECK_EQUAL(partial_block_no_refill.GetMempoolCount(), 0U);
+        BOOST_CHECK_EQUAL(partial_block_no_refill.GetExtraCount(), 0U);
+        check_reconstruction(partial_block_no_refill, {block.vtx[1], block.vtx[2], block.vtx[3]});
+
+        // With no extra-sourced candidate, colliding a mempool slot must not
+        // decrement zero and wrap the unsigned extra counter.
+        TestPartiallyDownloadedBlock zero_extra{&pool};
+        BOOST_REQUIRE_EQUAL(zero_extra.InitData(cmpctblock, {{block.vtx[2]->GetWitnessHash(), non_block_tx}}), READ_STATUS_OK);
+        BOOST_CHECK(!zero_extra.IsTxAvailable(2));
+        BOOST_CHECK_EQUAL(zero_extra.GetMempoolCount(), 0U);
+        BOOST_CHECK_EQUAL(zero_extra.GetExtraCount(), 0U);
+        check_reconstruction(zero_extra, {block.vtx[1], block.vtx[2], block.vtx[3]});
+
+        // Exercise the mempool/mempool collision branch deterministically and
+        // confirm that a later extra-cache candidate cannot refill that slot.
+        AddToMempool(pool, entry.FromTx(non_block_tx));
+        TestPartiallyDownloadedBlock mempool_collision{&pool};
+        {
+            const auto original = pool.txns_randomized;
+            struct RestoreLookup {
+                CTxMemPool& pool;
+                const decltype(pool.txns_randomized)& original;
+                ~RestoreLookup() { pool.txns_randomized = original; }
+            } restore{pool, original};
+            for (auto& [wtxid, txit] : pool.txns_randomized) wtxid = block.vtx[2]->GetWitnessHash();
+            BOOST_REQUIRE_EQUAL(mempool_collision.InitData(cmpctblock, {
+                {block.vtx[2]->GetWitnessHash(), block.vtx[2]},
+                {block.vtx[1]->GetWitnessHash(), block.vtx[1]},
+            }), READ_STATUS_OK);
+        }
+        BOOST_CHECK(!mempool_collision.IsTxAvailable(2));
+        BOOST_CHECK(mempool_collision.IsTxAvailable(1));
+        BOOST_CHECK_EQUAL(mempool_collision.GetMempoolCount(), 1U);
+        BOOST_CHECK_EQUAL(mempool_collision.GetExtraCount(), 1U);
+        check_reconstruction(mempool_collision, {block.vtx[2], block.vtx[3]});
     }
 }
 

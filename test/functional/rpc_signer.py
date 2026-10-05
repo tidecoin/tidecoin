@@ -4,11 +4,12 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test external signer.
 
-Verify that a bitcoind node can use an external signer command.
+Verify that a tidecoind node can use an external signer command.
 See also wallet_signer.py for tests that require wallet context.
 """
 import os
 import platform
+import shutil
 import sys
 
 from test_framework.test_framework import BitcoinTestFramework
@@ -19,9 +20,14 @@ from test_framework.util import (
 
 
 class RPCSignerTest(BitcoinTestFramework):
+    @staticmethod
+    def quote_command_arg(arg):
+        # The -signer parser has its own platform-independent quoting rules.
+        return '"' + str(arg).replace('\\', '\\\\').replace('"', '\\"') + '"'
+
     def mock_signer_path(self):
         path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mocks', 'signer.py')
-        return sys.executable + " " + path
+        return self.quote_command_arg(sys.executable) + " " + self.quote_command_arg(path)
 
     def set_test_params(self):
         self.num_nodes = 4
@@ -73,6 +79,33 @@ class RPCSignerTest(BitcoinTestFramework):
         self.clear_mock_result(self.nodes[1])
 
         assert_equal({'fingerprint': '00000001', 'name': 'trezor_t'} in self.nodes[1].enumeratesigners()['signers'], True)
+
+        # Exercise configured fixed arguments and a script path containing spaces.
+        signer_dir = self.nodes[1].datadir_path / 'signer with spaces'
+        signer_dir.mkdir()
+        signer_path = signer_dir / 'mock signer.py'
+        shutil.copyfile(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mocks', 'signer.py'), signer_path)
+        command = self.quote_command_arg(sys.executable) + ' -u ' + self.quote_command_arg(signer_path)
+        self.restart_node(1, extra_args=[f'-signer={command}'])
+        expected = [{'fingerprint': '00000001', 'name': 'trezor_t'}]
+        assert_equal(self.nodes[1].enumeratesigners()['signers'], expected)
+
+        # Bad quoting must produce a useful RPC error before starting a process.
+        for command, error in [
+            ('"unterminated', 'Unterminated quote in command'),
+            ('"" enumerate', 'Command executable is empty'),
+            ('   ', 'External signer command is empty'),
+        ]:
+            self.restart_node(1, extra_args=[f'-signer={command}'])
+            assert_raises_rpc_error(-1, error, self.nodes[1].enumeratesigners)
+
+        # The same quoting works in tidecoin.conf; no outer shell quoting is needed.
+        command = self.quote_command_arg(sys.executable) + ' -u ' + self.quote_command_arg(signer_path)
+        self.stop_node(1)
+        with open(self.nodes[1].datadir_path / 'tidecoin.conf', 'a', encoding='utf8') as config:
+            config.write(f'\nsigner={command}\n')
+        self.start_node(1, extra_args=[])
+        assert_equal(self.nodes[1].enumeratesigners()['signers'], expected)
 
 if __name__ == '__main__':
     RPCSignerTest(__file__).main()

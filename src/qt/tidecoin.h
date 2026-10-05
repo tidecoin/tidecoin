@@ -16,6 +16,8 @@
 
 #include <QApplication>
 
+Q_MOC_INCLUDE("qt/tidecoingui.h")
+
 class BitcoinGUI;
 class ClientModel;
 class NetworkStyle;

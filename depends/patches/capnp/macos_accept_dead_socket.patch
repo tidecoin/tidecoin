@@ -1,0 +1,32 @@
+Handle aborted socket accepts in Cap'n Proto 1.2.0.
+Based on upstream 85d8e47fcb156afc3d95ed9033ba470d6189cbff (Bitcoin #35796).
+Keep the existing listener alive after macOS returns an already-dead socket.
+
+--- a/src/kj/async-io-unix.c++
++++ b/src/kj/async-io-unix.c++
+@@ -1343,6 +1343,13 @@
+ 
+     if (newFd >= 0) {
+       kj::AutoCloseFd ownFd(newFd);
++      // macOS may return a dead socket with no peer address after an aborted accept.
++      if (addrlen == 0) {
++#if !__APPLE__
++        KJ_LOG(ERROR, "accept() returned zero-size address?");
++#endif
++        return acceptImpl(authenticated);
++      }
+       if (!filter.shouldAllow(reinterpret_cast<struct sockaddr*>(&addr), addrlen)) {
+         // Ignore disallowed address.
+         return acceptImpl(authenticated);
+@@ -1357,8 +1364,9 @@
+               ownFd.get(), IPPROTO_TCP, TCP_NODELAY, (char*)&one, sizeof(one))) {
+           case EOPNOTSUPP:
+           case ENOPROTOOPT: // (returned for AF_UNIX in cygwin)
+-#if __FreeBSD__
+-          case EINVAL: // (returned for AF_UNIX in FreeBSD)
++#if __APPLE__ || __FreeBSD__
++          // FreeBSD AF_UNIX, or a socket already disconnected on macOS.
++          case EINVAL:
+ #endif
+             break;
+           default:

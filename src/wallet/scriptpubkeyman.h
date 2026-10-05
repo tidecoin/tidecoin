@@ -54,8 +54,13 @@ public:
     virtual bool HasEncryptionKeys() const = 0;
     virtual bool IsLocked() const = 0;
     virtual bool HasPQHDSeeds() const = 0;
+    //! Presence, including encrypted seeds, without retrieving secret material.
+    virtual bool HavePQHDSeed(const uint256& seed_id) const = 0;
     virtual std::optional<pqhd::SecureSeed32> GetPQHDSeed(const uint256& seed_id) const = 0;
     virtual int GetTargetHeightForOutputs() const = 0;
+    //! Latch a failed wallet update until reload and chain reconciliation.
+    virtual void RequireWalletRecovery() = 0;
+    virtual bool IsWalletRecoveryRequired() const = 0;
     /** Notification hook for long-running wallet creation (e.g. PQ keypool prefill). Default no-op. */
     virtual void WalletCreationProgressStep() {}
     //! Callback function for after TopUp completes containing any scripts that were added by a SPKMan
@@ -267,6 +272,8 @@ public:
 class DescriptorScriptPubKeyMan : public ScriptPubKeyMan
 {
     friend class LegacyDataSPKM;
+    friend class CWallet;
+    friend struct WalletReconciliationTestAccess;
 private:
     using ScriptPubKeyMap = std::map<CScript, int32_t>; // Map of scripts to descriptor range index
     using PubKeyMap = std::map<CPubKey, int32_t>; // Map of pubkeys involved in scripts to descriptor range index
@@ -276,6 +283,10 @@ private:
     ScriptPubKeyMap m_map_script_pub_keys GUARDED_BY(cs_desc_man);
     PubKeyMap m_map_pubkeys GUARDED_BY(cs_desc_man);
     int32_t m_max_cached_index = -1;
+    // Loaded public data is usable before seed verification. A detected mismatch
+    // is sticky for this manager and must never be treated as merely unchecked.
+    enum class CacheState : uint8_t { UNVERIFIED, VERIFIED, INVALID };
+    CacheState m_cache_state{CacheState::VERIFIED};
 
     KeyMap m_map_keys GUARDED_BY(cs_desc_man);
     CryptedKeyMap m_map_crypted_keys GUARDED_BY(cs_desc_man);
@@ -290,6 +301,12 @@ private:
 
     KeyMap GetKeys() const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
 
+    // One rollback snapshot per transaction. Callbacks must tolerate a newly
+    // created manager being discarded before the surrounding transaction ends.
+    std::shared_ptr<int> m_lifetime{std::make_shared<int>(0)};
+    std::set<WalletBatch*> m_mutation_batches;
+    void RegisterMutationRollback(WalletBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
+
     // Cached FlatSigningProviders to avoid regenerating them each time they are needed.
     mutable std::map<int32_t, FlatSigningProvider> m_map_signing_providers;
     // Fetch the SigningProvider for the given script and optionally include private keys
@@ -301,14 +318,15 @@ protected:
     WalletDescriptor m_wallet_descriptor GUARDED_BY(cs_desc_man);
 
     //! Same as 'TopUp' but designed for use within a batch transaction context
-    bool TopUpWithDB(WalletBatch& batch, unsigned int size = 0);
+    // Imports populate exactly the requested range; normal top-ups extend it.
+    bool TopUpWithDB(WalletBatch& batch, unsigned int size = 0, bool expand_range = true);
 
 public:
     DescriptorScriptPubKeyMan(WalletStorage& storage, WalletDescriptor& descriptor, int64_t keypool_size)
         :   ScriptPubKeyMan(storage),
             m_keypool_size(keypool_size),
             m_wallet_descriptor(descriptor)
-        {}
+        { m_cache_state = descriptor.cache.GetCachedDerivedPubKeys().empty() ? CacheState::VERIFIED : CacheState::UNVERIFIED; }
     DescriptorScriptPubKeyMan(WalletStorage& storage, int64_t keypool_size)
         :   ScriptPubKeyMan(storage),
             m_keypool_size(keypool_size)
@@ -333,7 +351,8 @@ public:
 
     //! Setup a descriptor without relying on BIP32/xpub master keys (e.g. PQHD descriptors).
     //! This assumes the descriptor itself can derive its keys/scripts from the provided wallet storage.
-    bool SetupDescriptor(WalletBatch& batch, WalletDescriptor&& descriptor);
+    // On failure the caller must abort the batch and discard this new manager.
+    [[nodiscard]] bool SetupDescriptor(WalletBatch& batch, WalletDescriptor&& descriptor);
 
     bool HavePrivateKeys() const override;
     bool HasPrivKey(const CKeyID& keyid) const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
@@ -353,8 +372,9 @@ public:
 
     bool CanProvide(const CScript& script, SignatureData& sigdata) override;
 
-    // Fetch the SigningProvider for the given pubkey and always include private keys. This should only be called by signing code.
-    std::unique_ptr<FlatSigningProvider> GetSigningProvider(const CPubKey& pubkey) const;
+    // Fetch cached public data, optionally deriving private keys for signing.
+    std::unique_ptr<FlatSigningProvider> GetSigningProvider(const CPubKey& pubkey, bool include_private) const;
+    bool UpdatePQHDOrigins(const FlatSigningProvider& provider, std::set<PSBTProprietary>& records, uint8_t map_type, bool include_origins) const;
     std::unique_ptr<FlatSigningProvider> GetSigningProviderForIndex(int32_t index, bool include_private = false) const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man)
     {
         return GetSigningProvider(index, include_private);
@@ -371,17 +391,29 @@ public:
     uint256 GetID() const override;
 
     void SetCache(const DescriptorCache& cache);
+    // A shared per-validation cache avoids repeating PQ key generation for
+    // wrappers containing the same hardened leaf path. It contains public data.
+    using VerifiedPQHDKeys = std::map<std::pair<uint256, std::vector<uint32_t>>, CPubKey>;
+    bool VerifyCache(const SigningProvider& provider, VerifiedPQHDKeys& verified) const;
+    bool IsCacheVerified() const { LOCK(cs_desc_man); return m_cache_state == CacheState::VERIFIED; }
+    bool IsCacheUsable() const { LOCK(cs_desc_man); return m_cache_state != CacheState::INVALID; }
 
     bool AddKey(const CKeyID& key_id, const CKey& key);
     bool AddCryptedKey(const CKeyID& key_id, const CPubKey& pubkey, const std::vector<unsigned char>& crypted_key);
 
     bool HasWalletDescriptor(const WalletDescriptor& desc) const;
-    util::Result<void> UpdateWalletDescriptor(WalletDescriptor& descriptor);
+    util::Result<void> UpdateWalletDescriptor(WalletDescriptor& descriptor, WalletBatch* batch = nullptr);
     bool CanUpdateToWalletDescriptor(const WalletDescriptor& descriptor, std::string& error);
     void AddDescriptorKey(const CKey& key, const CPubKey &pubkey);
     void WriteDescriptor();
 
     WalletDescriptor GetWalletDescriptor() const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man);
+    std::shared_ptr<const Descriptor> GetPublicDescriptor() const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man) { return m_wallet_descriptor.descriptor; }
+    /** Read public expansion data without populating any wallet caches. */
+    bool ExpandPublicFromCache(int32_t index, std::vector<CScript>& scripts, FlatSigningProvider& out) const EXCLUSIVE_LOCKS_REQUIRED(cs_desc_man)
+    {
+        return IsCacheUsable() && index >= 0 && m_wallet_descriptor.descriptor->ExpandFromCache(index, m_wallet_descriptor.cache, scripts, out);
+    }
     std::unordered_set<CScript, SaltedSipHasher> GetScriptPubKeys() const override;
     std::unordered_set<CScript, SaltedSipHasher> GetScriptPubKeys(int32_t minimum_index) const;
     int32_t GetEndRange() const;
