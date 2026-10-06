@@ -58,6 +58,7 @@ add_library(tidecoinkernel
   ../support/lockedpool.cpp
   ../sync.cpp
   ../txdb.cpp
+  ../txgraph.cpp
   ../txmempool.cpp
   ../auxpow.cpp
   ../uint256.cpp

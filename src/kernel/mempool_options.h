@@ -18,7 +18,7 @@ class ValidationSignals;
 /** Default for -maxmempool, maximum megabytes of mempool memory usage */
 static constexpr unsigned int DEFAULT_MAX_MEMPOOL_SIZE_MB{1024};
 /** Default for -maxmempool when blocksonly is set */
-static constexpr unsigned int DEFAULT_BLOCKSONLY_MAX_MEMPOOL_SIZE_MB{9};
+static constexpr unsigned int DEFAULT_BLOCKSONLY_MAX_MEMPOOL_SIZE_MB{10};
 /** Default for -mempoolexpiry, expiration time for mempool transactions in hours */
 static constexpr unsigned int DEFAULT_MEMPOOL_EXPIRY_HOURS{336};
 /** Whether to fall back to legacy V1 serialization when writing mempool.dat */

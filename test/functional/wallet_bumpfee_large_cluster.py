@@ -2,7 +2,11 @@
 # Copyright (c) 2026 The Tidecoin developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Fee bumping reports a wallet error when ancestor fee calculation is unavailable."""
+"""Fee bumping works at the maximum supported connected-component count.
+
+The old 502-entry connected-component fixture is no longer admissible.
+MiniMiner's 500-entry union cutoff remains covered by miniminer_tests.
+"""
 
 from decimal import Decimal
 
@@ -17,10 +21,8 @@ class BumpFeeLargeClusterTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
         self.setup_clean_chain = True
-        self.extra_args = [[
-            "-limitancestorcount=1000", "-limitdescendantcount=1000",
-            "-limitancestorsize=1000", "-limitdescendantsize=1000",
-        ]]
+        # Permit wallet selection at the node admission bound for this fixture.
+        self.extra_args = [["-limitancestorcount=64", "-limitdescendantcount=64"]]
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
@@ -33,6 +35,10 @@ class BumpFeeLargeClusterTest(BitcoinTestFramework):
         # Give the wallet one branch and grow a separate branch of the same
         # parent. The transaction to bump itself must have no descendants.
         address = node.getnewaddress()
+        # The raw target has no change output. Supply a confirmed wallet input
+        # so fee bumping can fund the increase without reducing its recipient.
+        miniwallet.send_to(from_node=node, scriptPubKey=bytes.fromhex(node.getaddressinfo(address)['scriptPubKey']), amount=10000000)
+        self.generate(miniwallet, 1)
         parent = miniwallet.create_self_transfer_multi(num_outputs=2)
         parent["tx"].vout[0].scriptPubKey = bytes.fromhex(node.getaddressinfo(address)["scriptPubKey"])
         parent_id = miniwallet.sendrawtransaction(from_node=node, tx_hex=parent["tx"].serialize().hex())
@@ -47,19 +53,21 @@ class BumpFeeLargeClusterTest(BitcoinTestFramework):
         target = node.sendrawtransaction(signed["hex"])
 
         utxo = miniwallet.get_utxo(txid=parent_id, vout=1)
-        for _ in range(500):
+        for _ in range(62):
             utxo = miniwallet.send_self_transfer(from_node=node, utxo_to_spend=utxo)["new_utxo"]
         assert_equal(node.getmempoolentry(target)["descendantcount"], 1)
-        assert_equal(node.getmempoolinfo()["size"], 502)
+        assert_equal(node.getmempoolinfo()["size"], 64)
 
-        message = "Failed to calculate bump fees, because unconfirmed UTXOs depend on an enormous cluster of unconfirmed transactions."
-        for method in (node.bumpfee, node.psbtbumpfee):
-            assert_raises_rpc_error(-4, message, method, target, {"fee_rate": 1000})
+        extra = miniwallet.create_self_transfer(utxo_to_spend=utxo)
+        assert_raises_rpc_error(-26, "too-large-cluster", node.sendrawtransaction, extra['hex'])
+        assert node.psbtbumpfee(target, {"fee_rate": 1000})['psbt']
+        bumped = node.bumpfee(target, {"fee_rate": 1000})['txid']
+        assert target not in node.getrawmempool()
+        assert bumped in node.getrawmempool()
+        assert_equal(node.getmempoolinfo()["size"], 64)
 
-        # The failure must leave the original transaction and node usable.
-        assert_equal(node.gettransaction(target)["confirmations"], 0)
         self.generate(node, 1)
-        assert_equal(node.gettransaction(target)["confirmations"], 1)
+        assert_equal(node.gettransaction(bumped)["confirmations"], 1)
 
 
 if __name__ == "__main__":

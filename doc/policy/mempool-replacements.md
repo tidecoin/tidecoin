@@ -12,12 +12,7 @@ other consensus and policy rules, each of the following conditions are met:
 
 1. (Removed)
 
-2. The replacement transaction only include an unconfirmed input if that input was included in
-   one of the directly conflicting transactions. An unconfirmed input spends an output from a
-   currently-unconfirmed transaction.
-
-   *Rationale*: When RBF was originally implemented, the mempool did not keep track of
-   ancestor feerates yet. This rule was suggested as a temporary restriction.
+2. (Removed)
 
 3. The replacement transaction pays an absolute fee of at least the sum paid by the original
    transactions.
@@ -38,19 +33,33 @@ other consensus and policy rules, each of the following conditions are met:
    *Rationale*: Try to prevent DoS attacks where an attacker causes the network to repeatedly relay
    transactions each paying a tiny additional amount in fees, e.g. just 1 satoshi.
 
-5. The number of original transactions does not exceed 100. More precisely, the sum of all
-   directly conflicting transactions' descendant counts (number of transactions inclusive of itself
-   and its descendants) must not exceed 100; it is possible that this overestimates the true number
-   of original transactions.
+5. At most 100 distinct clusters may contain directly conflicting transactions. Tidecoin also
+   limits the union of transactions actually removed (direct conflicts and their descendants) to
+   100 entries. Shared descendants count once.
 
-   *Rationale*: Try to prevent DoS attacks where an attacker is able to easily occupy and flush out
-   significant portions of the node's mempool using replacements with multiple directly conflicting
-   transactions, each with large descendant sets.
+   *Rationale*: Bound dependency processing and the amount of mempool state removed by one
+   replacement. The additional removal bound is stricter than Bitcoin's cluster-only bound.
 
-6. The replacement transaction's feerate is greater than the feerates of all directly conflicting
-   transactions.
+6. The replacement must strictly improve the affected mempool fee diagram. The comparison includes
+   affected retained parents and descendants, not only directly conflicting transactions. Equal or
+   crossing diagrams are rejected.
 
-   *Rationale*: This rule was originally intended to ensure that the replacement transaction is
-   preferable for block-inclusion, compared to what would be removed from the mempool. This rule
-   predates ancestor feerate-based transaction selection.
+   *Rationale*: Compare the old and new sets using the same dependency-aware fee model used for
+   block construction and eviction. This does not guarantee optimal block revenue when chunks do
+   not fit the remaining block space.
 
+7. The staged result must satisfy the cluster limits: by default at most 64 transactions and
+   968,000 sigops-adjusted weight units (242,000 virtual-byte equivalent) in each connected
+   component. Replacement removes the old conflicts before evaluating the resulting limits.
+
+New unconfirmed inputs are permitted when these checks succeed. Spending an output of a transaction
+being removed by the replacement remains prohibited. CPFP and RBF ancestor/descendant carveouts are
+superseded by the staged cluster checks.
+
+Local adjustments from `prioritisetransaction` retain signed 64-bit inputs and saturating updates.
+Actual transaction fees determine coinbase revenue. Virtual priority adjustments are not additional
+fees paid on chain. Relay ordering continues to use base fees, independently of local priority.
+
+These are local mempool policies. A received consensus-valid block is not rejected for exceeding
+mempool cluster limits or for containing a replacement this node would not have relayed. Older
+Tidecoin peers can apply different unconfirmed-transaction limits and replacement policies.

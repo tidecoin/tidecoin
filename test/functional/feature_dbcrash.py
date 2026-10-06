@@ -53,8 +53,7 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
 
         # Use the minimum allowed mempool size on Tidecoin.
         self.base_args = [
-            "-limitdescendantsize=0",
-            "-maxmempool=9",
+            "-maxmempool=10",
             "-dbbatchsize=200000",
         ]
 

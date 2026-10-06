@@ -305,12 +305,12 @@ class InitTest(BitcoinTestFramework):
         # allocating their budgets, and also works with the 32-bit dbcache cap.
         for value in [1 << 40, max_dbcache_mib]:
             node.assert_start_raises_init_error(
-                guard + [f"-dbcache={value}", "-maxmempool=9"],
+                guard + [f"-dbcache={value}", "-maxmempool=10"],
                 expected_msg="Error: Unable to create the PID file",
                 match=ErrorMatch.PARTIAL_REGEX,
             )
         # Ordinary configurations still start and recover after rejected options.
-        self.start_node(0, ["-dbcache=4", "-maxmempool=9"])
+        self.start_node(0, ["-dbcache=4", "-maxmempool=10"])
         assert_equal(node.getblockcount(), 200)
 
     def init_rlimit_test(self):

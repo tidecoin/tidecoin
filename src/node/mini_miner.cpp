@@ -74,12 +74,13 @@ MiniMiner::MiniMiner(const CTxMemPool& mempool, const std::vector<COutPoint>& ou
     // Add every entry to m_entries_by_txid and m_entries, except the ones that will be replaced.
     for (const auto& txiter : cluster) {
         if (!m_to_be_replaced.count(txiter->GetTx().GetHash())) {
+            auto [ancestor_count, ancestor_size, ancestor_fee] = mempool.CalculateAncestorData(*txiter);
             auto [mapiter, success] = m_entries_by_txid.emplace(txiter->GetTx().GetHash(),
                 MiniMinerMempoolEntry{/*tx_in=*/txiter->GetSharedTx(),
                                       /*vsize_self=*/txiter->GetTxSize(),
-                                      /*vsize_ancestor=*/txiter->GetSizeWithAncestors(),
+                                      /*vsize_ancestor=*/int64_t(ancestor_size),
                                       /*fee_self=*/txiter->GetModifiedFee(),
-                                      /*fee_ancestor=*/txiter->GetModFeesWithAncestors()});
+                                      /*fee_ancestor=*/ancestor_fee});
             m_entries.push_back(mapiter);
         } else {
             auto outpoints_it = m_requested_outpoints_by_txid.find(txiter->GetTx().GetHash());
@@ -183,12 +184,12 @@ struct AncestorFeerateComparator
         auto min_feerate = [](const MiniMinerMempoolEntry& e) -> FeeFrac {
             FeeFrac self_feerate(e.GetModifiedFee(), e.GetTxSize());
             FeeFrac ancestor_feerate(e.GetModFeesWithAncestors(), e.GetSizeWithAncestors());
-            return std::min(ancestor_feerate, self_feerate);
+            return std::min(ancestor_feerate, self_feerate, [](const auto& a, const auto& b) { return ByRatioNegSize{a} < ByRatioNegSize{b}; });
         };
         FeeFrac a_feerate{min_feerate(a->second)};
         FeeFrac b_feerate{min_feerate(b->second)};
         if (a_feerate != b_feerate) {
-            return a_feerate > b_feerate;
+            return ByRatioNegSize{a_feerate} > ByRatioNegSize{b_feerate};
         }
         // Use txid as tiebreaker for stable sorting
         return a->first < b->first;

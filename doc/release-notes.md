@@ -263,3 +263,28 @@ full compaction. An unfinished job is reused instead of starting another one.
 Cache resizing and shutdown wait as needed for compaction to finish using the
 database handle. Resizing reopens the existing database without deleting its
 records. Maintenance introduces no database-format change or reindex requirement.
+
+### Cluster mempool policy
+
+The mempool now uses connected transaction clusters for dependency accounting, replacement, block
+assembly and eviction. Defaults are 64 entries and 242,000 virtual-byte-equivalent adjusted weight
+per cluster (968,000 weight units). Ordinary transaction limits remain 800,000 weight units and
+package submission remains 25 entries / 808,000 weight units. TRUC, PQ signatures and activation
+rules are unchanged.
+
+`-limitclustercount` accepts 1–64 and `-limitclustersize` accepts 1–242 decimal kilobytes. The old
+ancestor/descendant size options are ignored with a warning; count options remain wallet selection
+preferences. The blocks-only default mempool budget is now 10 MB; a nonzero budget must be at least
+40 times the configured cluster size. `-maxmempool=0` is supported explicitly.
+
+Single and package replacements must improve the complete affected fee diagram, in addition to
+paying the required fees. Tidecoin retains a 100-unique-removed-transaction guard alongside the
+100-conflicting-cluster limit. CPFP/RBF ancestry carveouts are replaced by final staged cluster
+checks. Local fee-priority RPC behavior and base-fee relay ordering are preserved. Existing
+`getmempoolentry` and `getmempoolinfo` responses include chunk and cluster-limit metadata; no new
+RPC is required.
+
+Some previously accepted connected groups exceeding the new cluster limits will be rejected,
+including when reloading unconfirmed transactions. Conversely, small chains longer than 25 entries
+can fit the new policy. Older peers may not relay them. These changes do not alter block consensus
+or transaction/wallet formats and require no reindex.

@@ -1,65 +1,68 @@
 # Mempool Limits
 
-## Definitions
+## Dependencies and clusters
 
-Given any two transactions Tx0 and Tx1 where Tx1 spends an output of Tx0,
-Tx0 is a *parent* of Tx1 and Tx1 is a *child* of Tx0.
+If transaction Tx1 spends an output of Tx0, Tx0 is a *parent* of Tx1 and Tx1 is
+its *child*. Ancestors and descendants include these relationships recursively.
+The ancestor and descendant counts and sizes reported by mempool RPCs include
+the transaction itself.
 
-A transaction's *ancestors* include, recursively, its parents, the parents of its parents, etc.
-A transaction's *descendants* include, recursively, its children, the children of its children, etc.
+A *cluster* is a connected component of unconfirmed transactions: any two entries
+in it are connected by parent/child relationships, in either direction. A
+transaction spending outputs from two separate clusters joins those clusters.
+A cluster can therefore be larger than any individual entry's ancestor or
+descendant set.
 
-A mempool entry's *ancestor count* is the total number of in-mempool (unconfirmed) transactions in
-its ancestor set, including itself.
-A mempool entry's *descendant count* is the total number of in-mempool (unconfirmed) transactions in
-its descendant set, including itself.
+By default, every cluster is limited to:
 
-A mempool entry's *ancestor size* is the aggregated virtual size of in-mempool (unconfirmed)
-transactions in its ancestor set, including itself.
-A mempool entry's *descendant size* is the aggregated virtual size of in-mempool (unconfirmed)
-transactions in its descendant set, including itself.
+- 64 transactions (`-limitclustercount=64`).
+- 968,000 sigop-adjusted weight units (`-limitclustersize=242`, in decimal
+  thousands of virtual bytes).
 
-Transactions submitted to the mempool must not exceed the ancestor and descendant limits (aka
-mempool *package limits*) set by the node (see `-limitancestorcount`, `-limitancestorsize`,
-`-limitdescendantcount`, `-limitdescendantsize`).
+The size check sums exact adjusted weights. It does not sum individually rounded
+virtual sizes displayed by RPCs. Adjustment accounts for signature-operation cost
+as well as transaction weight. The supported configuration ranges are 1–64
+transactions and 1–242 thousand virtual bytes; nodes may choose smaller limits.
 
-## Exemptions
+These are local admission and retention rules, not consensus limits. A valid
+block may contain a group that a node would reject from its mempool. Different
+versions or configurations can consequently relay different unconfirmed groups
+while accepting the same valid blocks.
 
-### CPFP Carve Out
+## Admission, replacement and CPFP
 
-**CPFP Carve Out** if a transaction candidate for submission to the
-mempool would cause some mempool entry to exceed its descendant limits, an exemption is made if all
-of the following conditions are met:
+An addition must leave every resulting cluster within both limits. Small chains
+can exceed the former 25-entry ancestor limit, but wide or interleaved dependency
+graphs previously admitted under separate ancestry limits may now be rejected.
+Ordinary payments and consolidations remain subject to the separate standard
+transaction weight limit of 800,000 WU.
 
-1. The candidate transaction is no more than 10,000 virtual bytes.
+A replacement is checked against the graph after staging removal of its conflicts
+and their descendants. Rejection discards the staged changes. There is no separate
+single-conflict RBF limit discount. Replacement must also satisfy the fee and work
+rules described in [mempool replacements](mempool-replacements.md).
 
-2. The candidate transaction has an ancestor count of 2 (itself and exactly 1 ancestor).
+A child paying for its parent must fit the same cluster limits. The former CPFP
+carve-out is removed: there is no extra transaction or size allowance beyond a
+full cluster. The default 242,000-vbyte-equivalent limit accommodates the former
+202,000-vbyte descendant allowance plus its 40,000-vbyte CPFP exception, but this
+does not preserve every previously accepted dependency graph.
 
-3. The in-mempool transaction's descendant count, including the candidate transaction, would only
-   exceed the limit by 1.
+Package submission has its own limits: at most 25 transactions and 808,000 WU.
+It does not allow bypassing cluster limits. TRUC transactions retain their
+separate 2-ancestor/2-descendant, 10,000-vbyte transaction and 4,000-vbyte child
+restrictions. See [packages](packages.md) for package acceptance details.
 
-*Rationale*: this rule was introduced to prevent pinning by domination of a transaction's descendant
-limits in two-party contract protocols such as LN.  Also see the [mailing list
-post](https://lists.linuxfoundation.org/pipermail/bitcoin-dev/2018-November/016518.html).
+## Compatibility options and memory budget
 
-This rule was introduced in [PR #15681](https://github.com/bitcoin/bitcoin/pull/15681).
+`-limitancestorcount` and `-limitdescendantcount` remain wallet selection
+preferences; they no longer configure mempool admission. `-limitancestorsize`
+and `-limitdescendantsize` are ignored with a warning. Use the cluster options to
+configure admission limits.
 
-### Single-Conflict RBF Carve Out
-
-When a candidate transaction for submission to the mempool would replace mempool entries, it may
-also decrease the descendant count of other mempool entries. Since ancestor/descendant limits are
-calculated prior to removing the would-be-replaced transactions, they may be overestimated.
-
-An exemption is given for a candidate transaction that would replace mempool transactions and meets
-all of the following conditions:
-
-1. The candidate transaction has exactly 1 directly conflicting transaction.
-
-2. The candidate transaction does not spend any unconfirmed inputs that are not also spent by the
-   directly conflicting transaction.
-
-The following discounts are given to account for the would-be-replaced transaction(s):
-
-1. The descendant count limit is temporarily increased by 1.
-
-2. The descendant size limit temporarily is increased by the virtual size of the to-be-replaced
-   directly conflicting transaction.
+A nonzero `-maxmempool` budget must be at least 40 times the configured cluster
+size in virtual bytes. With default cluster limits this requires at least 10 MB
+when expressed as an integer command-line value. The blocks-only default is also
+10 MB. Explicit `-maxmempool=0` is supported, but does not retain unconfirmed
+transactions. Memory-pressure eviction can remove entries even when their
+clusters satisfy the topology and size limits.

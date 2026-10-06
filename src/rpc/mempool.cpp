@@ -258,6 +258,7 @@ static RPCHelpMan testmempoolaccept()
     };
 }
 
+
 static std::vector<RPCResult> MempoolEntryDescription()
 {
     return {
@@ -269,6 +270,7 @@ static std::vector<RPCResult> MempoolEntryDescription()
         RPCResult{RPCResult::Type::NUM, "descendantsize", "virtual transaction size of in-mempool descendants (including this one)"},
         RPCResult{RPCResult::Type::NUM, "ancestorcount", "number of in-mempool ancestor transactions (including this one)"},
         RPCResult{RPCResult::Type::NUM, "ancestorsize", "virtual transaction size of in-mempool ancestors (including this one)"},
+        RPCResult{RPCResult::Type::NUM, "chunkweight", "sigops-adjusted weight (as defined in BIP 141 and modified by '-bytespersigop') of this transaction's chunk"},
         RPCResult{RPCResult::Type::STR_HEX, "wtxid", "hash of serialized transaction, including witness data"},
         RPCResult{RPCResult::Type::OBJ, "fees", "",
             {
@@ -276,6 +278,7 @@ static std::vector<RPCResult> MempoolEntryDescription()
                 RPCResult{RPCResult::Type::STR_AMOUNT, "modified", "transaction fee with fee deltas used for mining priority, denominated in " + CURRENCY_UNIT},
                 RPCResult{RPCResult::Type::STR_AMOUNT, "ancestor", "transaction fees of in-mempool ancestors (including this one) with fee deltas used for mining priority, denominated in " + CURRENCY_UNIT},
                 RPCResult{RPCResult::Type::STR_AMOUNT, "descendant", "transaction fees of in-mempool descendants (including this one) with fee deltas used for mining priority, denominated in " + CURRENCY_UNIT},
+                RPCResult{RPCResult::Type::STR_AMOUNT, "chunk", "transaction fees of chunk, denominated in " + CURRENCY_UNIT},
             }},
         RPCResult{RPCResult::Type::ARR, "depends", "unconfirmed transactions used as inputs for this transaction",
             {RPCResult{RPCResult::Type::STR_HEX, "transactionid", "parent transaction id"}}},
@@ -286,25 +289,32 @@ static std::vector<RPCResult> MempoolEntryDescription()
     };
 }
 
+
 static void entryToJSON(const CTxMemPool& pool, UniValue& info, const CTxMemPoolEntry& e) EXCLUSIVE_LOCKS_REQUIRED(pool.cs)
 {
     AssertLockHeld(pool.cs);
+
+    auto [ancestor_count, ancestor_size, ancestor_fees] = pool.CalculateAncestorData(e);
+    auto [descendant_count, descendant_size, descendant_fees] = pool.CalculateDescendantData(e);
 
     info.pushKV("vsize", (int)e.GetTxSize());
     info.pushKV("weight", (int)e.GetTxWeight());
     info.pushKV("time", count_seconds(e.GetTime()));
     info.pushKV("height", (int)e.GetHeight());
-    info.pushKV("descendantcount", e.GetCountWithDescendants());
-    info.pushKV("descendantsize", e.GetSizeWithDescendants());
-    info.pushKV("ancestorcount", e.GetCountWithAncestors());
-    info.pushKV("ancestorsize", e.GetSizeWithAncestors());
+    info.pushKV("descendantcount", descendant_count);
+    info.pushKV("descendantsize", descendant_size);
+    info.pushKV("ancestorcount", ancestor_count);
+    info.pushKV("ancestorsize", ancestor_size);
     info.pushKV("wtxid", e.GetTx().GetWitnessHash().ToString());
+    auto feerate = pool.GetMainChunkFeerate(e);
+    info.pushKV("chunkweight", feerate.size);
 
     UniValue fees(UniValue::VOBJ);
     fees.pushKV("base", ValueFromAmount(e.GetFee()));
     fees.pushKV("modified", ValueFromAmount(e.GetModifiedFee()));
-    fees.pushKV("ancestor", ValueFromAmount(e.GetModFeesWithAncestors()));
-    fees.pushKV("descendant", ValueFromAmount(e.GetModFeesWithDescendants()));
+    fees.pushKV("ancestor", ValueFromAmount(ancestor_fees));
+    fees.pushKV("descendant", ValueFromAmount(descendant_fees));
+    fees.pushKV("chunk", ValueFromAmount((int)feerate.fee));
     info.pushKV("fees", std::move(fees));
 
     const CTransaction& tx = e.GetTx();
@@ -324,7 +334,7 @@ static void entryToJSON(const CTxMemPool& pool, UniValue& info, const CTxMemPool
     info.pushKV("depends", std::move(depends));
 
     UniValue spent(UniValue::VARR);
-    for (const CTxMemPoolEntry& child : e.GetMemPoolChildrenConst()) {
+    for (const CTxMemPoolEntry& child : pool.GetChildren(e)) {
         spent.push_back(child.GetTx().GetHash().ToString());
     }
 
@@ -380,6 +390,7 @@ UniValue MempoolToJSON(const CTxMemPool& pool, bool verbose, bool include_mempoo
         }
     }
 }
+
 
 static RPCHelpMan getrawmempool()
 {
@@ -471,7 +482,7 @@ static RPCHelpMan getmempoolancestors()
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Transaction not in mempool");
     }
 
-    auto ancestors{mempool.AssumeCalculateMemPoolAncestors(self.m_name, *entry, CTxMemPool::Limits::NoLimits(), /*fSearchForParents=*/false)};
+    auto ancestors{mempool.CalculateMemPoolAncestors(*entry)};
 
     if (!fVerbose) {
         UniValue o(UniValue::VARR);
@@ -557,6 +568,7 @@ static RPCHelpMan getmempooldescendants()
 },
     };
 }
+
 
 static RPCHelpMan getmempoolentry()
 {
@@ -687,10 +699,12 @@ UniValue MempoolInfoToJSON(const CTxMemPool& pool)
     ret.pushKV("mempoolminfee", ValueFromAmount(std::max(pool.GetMinFee(), pool.m_opts.min_relay_feerate).GetFeePerK()));
     ret.pushKV("minrelaytxfee", ValueFromAmount(pool.m_opts.min_relay_feerate.GetFeePerK()));
     ret.pushKV("incrementalrelayfee", ValueFromAmount(pool.m_opts.incremental_relay_feerate.GetFeePerK()));
-    ret.pushKV("unbroadcastcount", uint64_t{pool.GetUnbroadcastTxs().size()});
+    ret.pushKV("unbroadcastcount", uint64_t{pool.GetUnbroadcastCount()});
     ret.pushKV("fullrbf", true);
     ret.pushKV("permitbaremultisig", pool.m_opts.permit_bare_multisig);
     ret.pushKV("maxdatacarriersize", pool.m_opts.max_datacarrier_bytes.value_or(0));
+    ret.pushKV("limitclustercount", pool.m_opts.limits.cluster_count);
+    ret.pushKV("limitclustersize", pool.m_opts.limits.cluster_size_vbytes);
     return ret;
 }
 
@@ -715,6 +729,8 @@ static RPCHelpMan getmempoolinfo()
                 {RPCResult::Type::BOOL, "fullrbf", "True if the mempool accepts RBF without replaceability signaling inspection (DEPRECATED)"},
                 {RPCResult::Type::BOOL, "permitbaremultisig", "True if the mempool accepts transactions with bare multisig outputs"},
                 {RPCResult::Type::NUM, "maxdatacarriersize", "Maximum number of bytes that can be used by OP_RETURN outputs in the mempool"},
+                {RPCResult::Type::NUM, "limitclustercount", "Maximum number of transactions that can be in a cluster (configured by -limitclustercount)"},
+                {RPCResult::Type::NUM, "limitclustersize", "Maximum size of a cluster in virtual bytes (configured by -limitclustersize)"},
             }},
         RPCExamples{
             HelpExampleCli("getmempoolinfo", "")

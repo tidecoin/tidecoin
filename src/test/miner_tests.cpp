@@ -45,6 +45,7 @@ using node::BlockAssembler;
 namespace miner_tests {
 struct MinerTestingSetup : public TestingSetup {
     void TestPackageSelection(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    void TestSigOpsAdjustedWeightChunkLimit(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     void TestBasicMining(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst, int baseheight) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     void TestPrioritisedMining(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     bool TestSequenceLocks(const CTransaction& tx, CTxMemPool& tx_mempool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
@@ -61,7 +62,12 @@ struct MinerTestingSetup : public TestingSetup {
         // instead.
         m_node.mempool.reset();
         bilingual_str error;
-        m_node.mempool = std::make_unique<CTxMemPool>(MemPoolOptionsForTest(m_node), error);
+        auto opts = MemPoolOptionsForTest(m_node);
+        // The "block size > limit" test creates a cluster of 1192590 vbytes,
+        // so set the cluster vbytes limit big enough so that the txgraph
+        // doesn't become oversized.
+        opts.limits.cluster_size_vbytes = 1'200'000;
+        m_node.mempool = std::make_unique<CTxMemPool>(opts, error);
         Assert(error.empty());
         return *m_node.mempool;
     }
@@ -268,6 +274,77 @@ void MinerTestingSetup::TestPackageSelection(const CScript& scriptPubKey, const 
     BOOST_CHECK(block.vtx[8]->GetHash() == hashLowFeeTx2);
 }
 
+std::vector<CTransactionRef> CreateBigSigOpsCluster(const CTransactionRef& first_tx)
+{
+    std::vector<CTransactionRef> ret;
+
+    CMutableTransaction tx;
+    // block sigops > limit: 1000 CHECKMULTISIG + 1
+    tx.vin.resize(1);
+    // NOTE: OP_NOP is used to force 20 SigOps for the CHECKMULTISIG
+    tx.vin[0].scriptSig = CScript() << OP_0 << OP_0 << OP_CHECKSIG << OP_1;
+    tx.vin[0].prevout.hash = first_tx->GetHash();
+    tx.vin[0].prevout.n = 0;
+    tx.vout.resize(50);
+    for (auto &out : tx.vout) {
+        out.nValue = first_tx->vout[0].nValue / 50;
+        out.scriptPubKey = CScript() << OP_1;
+    }
+
+    tx.vout[0].nValue -= CENT;
+    CTransactionRef parent_tx = MakeTransactionRef(tx);
+    ret.push_back(parent_tx);
+    assert(GetLegacySigOpCount(*parent_tx) == 1);
+
+    // Tx1 has 1 sigops, 1 input, 50 outputs.
+    // Tx2-51 has 400 sigops: 1 input, 20 CHECKMULTISIG outputs
+    // Total: 1000 CHECKMULTISIG + 1
+    for (unsigned int i = 0; i < 50; ++i) {
+        auto tx2 = tx;
+        tx2.vin.resize(1);
+        tx2.vin[0].prevout.hash = parent_tx->GetHash();
+        tx2.vin[0].prevout.n = i;
+        tx2.vin[0].scriptSig = CScript() << OP_1;
+        tx2.vout.resize(20);
+        tx2.vout[0].nValue = parent_tx->vout[i].nValue - CENT;
+        for (auto &out : tx2.vout) {
+            out.nValue = 0;
+            out.scriptPubKey = CScript() << OP_0 << OP_0 << OP_0 << OP_NOP << OP_CHECKMULTISIG << OP_1;
+        }
+        ret.push_back(MakeTransactionRef(tx2));
+    }
+    return ret;
+}
+
+void MinerTestingSetup::TestSigOpsAdjustedWeightChunkLimit(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst)
+{
+    auto mining = MakeMining();
+    auto& pool = MakeMempool();
+    LOCK(pool.cs);
+    CMutableTransaction tx;
+    tx.vin.emplace_back(COutPoint{txFirst[0]->GetHash(), 0}, CScript() << OP_1);
+    tx.vout.resize(50);
+    for (auto& output : tx.vout) {
+        output.nValue = (txFirst[0]->vout[0].nValue - CENT) / 50;
+        output.scriptPubKey = CScript() << OP_CHECKMULTISIG;
+    }
+    const CAmount fee = txFirst[0]->vout[0].nValue - 50 * tx.vout[0].nValue;
+    TestMemPoolEntryHelper entry;
+    const auto sigops = GetLegacySigOpCount(CTransaction{tx}) * WITNESS_SCALE_FACTOR;
+    const auto candidate = entry.Fee(fee).SpendsCoinbase(true).SigOpsCost(sigops).FromTx(tx);
+    BOOST_REQUIRE(candidate.GetAdjustedWeight() > candidate.GetTxWeight());
+    BOOST_REQUIRE(candidate.GetSigOpCost() < MAX_BLOCK_SIGOPS_COST);
+    AddToMempool(pool, candidate);
+    BlockAssembler::Options options;
+    options.coinbase_output_script = scriptPubKey;
+    options.nBlockMaxWeight = DEFAULT_BLOCK_RESERVED_WEIGHT + candidate.GetTxWeight() + 1;
+    const auto block_template = mining->createNewBlock(options);
+    BOOST_REQUIRE(block_template);
+    const auto block = block_template->getBlock();
+    BOOST_REQUIRE_EQUAL(block.vtx.size(), 2U);
+    BOOST_CHECK(block.vtx[1]->GetHash() == tx.GetHash());
+}
+
 void MinerTestingSetup::TestBasicMining(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst, int baseheight)
 {
     Txid hash;
@@ -297,23 +374,18 @@ void MinerTestingSetup::TestBasicMining(const CScript& scriptPubKey, const std::
         BOOST_REQUIRE(block_template);
         CBlock block{block_template->getBlock()};
 
-        // block sigops > limit: 1000 CHECKMULTISIG + 1
-        tx.vin.resize(1);
-        // NOTE: OP_NOP is used to force 20 SigOps for the CHECKMULTISIG
-        tx.vin[0].scriptSig = CScript() << OP_0 << OP_0 << OP_0 << OP_NOP << OP_CHECKMULTISIG << OP_1;
-        tx.vin[0].prevout.hash = txFirst[0]->GetHash();
-        tx.vin[0].prevout.n = 0;
-        tx.vout.resize(1);
-        tx.vout[0].nValue = BLOCKSUBSIDY;
-        for (unsigned int i = 0; i < 1001; ++i) {
-            tx.vout[0].nValue -= LOWFEE;
-            hash = tx.GetHash();
-            bool spendsCoinbase = i == 0; // only first tx spends coinbase
-            // If we don't set the # of sig ops in the CTxMemPoolEntry, template creation fails
-            AddToMempool(tx_mempool, entry.Fee(LOWFEE).Time(Now<NodeSeconds>()).SpendsCoinbase(spendsCoinbase).FromTx(tx));
-            tx.vin[0].prevout.hash = hash;
-        }
+        auto txs = CreateBigSigOpsCluster(txFirst[0]);
 
+        int64_t legacy_sigops = 0;
+        for (auto& t : txs) {
+            // If we don't set the number of sigops in the CTxMemPoolEntry,
+            // template creation fails during sanity checks.
+            AddToMempool(tx_mempool, entry.Fee(LOWFEE).Time(Now<NodeSeconds>()).SpendsCoinbase(true).FromTx(t));
+            legacy_sigops += GetLegacySigOpCount(*t);
+            BOOST_CHECK(tx_mempool.GetIter(t->GetHash()).has_value());
+        }
+        assert(tx_mempool.mapTx.size() == 51);
+        assert(legacy_sigops == 20001);
         BOOST_CHECK_EXCEPTION(mining->createNewBlock(options), std::runtime_error, HasReason("bad-blk-sigops"));
     }
 
@@ -321,16 +393,25 @@ void MinerTestingSetup::TestBasicMining(const CScript& scriptPubKey, const std::
         CTxMemPool& tx_mempool{MakeMempool()};
         LOCK(tx_mempool.cs);
 
-        tx.vin[0].prevout.hash = txFirst[0]->GetHash();
-        tx.vout[0].nValue = BLOCKSUBSIDY;
-        for (unsigned int i = 0; i < 1001; ++i) {
-            tx.vout[0].nValue -= LOWFEE;
-            hash = tx.GetHash();
-            bool spendsCoinbase = i == 0; // only first tx spends coinbase
-            // If we do set the # of sig ops in the CTxMemPoolEntry, template creation passes
-            AddToMempool(tx_mempool, entry.Fee(LOWFEE).Time(Now<NodeSeconds>()).SpendsCoinbase(spendsCoinbase).SigOpsCost(80).FromTx(tx));
-            tx.vin[0].prevout.hash = hash;
+        // Check that the mempool is empty.
+        assert(tx_mempool.mapTx.empty());
+
+        // Just to make sure we can still make simple blocks
+        auto block_template{mining->createNewBlock(options)};
+        BOOST_REQUIRE(block_template);
+        CBlock block{block_template->getBlock()};
+
+        auto txs = CreateBigSigOpsCluster(txFirst[0]);
+
+        int64_t legacy_sigops = 0;
+        for (auto& t : txs) {
+            AddToMempool(tx_mempool, entry.Fee(LOWFEE).Time(Now<NodeSeconds>()).SpendsCoinbase(true).SigOpsCost(GetLegacySigOpCount(*t)*WITNESS_SCALE_FACTOR).FromTx(t));
+            legacy_sigops += GetLegacySigOpCount(*t);
+            BOOST_CHECK(tx_mempool.GetIter(t->GetHash()).has_value());
         }
+        assert(tx_mempool.mapTx.size() == 51);
+        assert(legacy_sigops == 20001);
+
         BOOST_REQUIRE(mining->createNewBlock(options));
     }
 
@@ -339,20 +420,26 @@ void MinerTestingSetup::TestBasicMining(const CScript& scriptPubKey, const std::
         LOCK(tx_mempool.cs);
 
         // block size > limit
-        tx.vin[0].scriptSig = CScript();
-        // 18 * (520char + DROP) + OP_1 = 9433 bytes
+        tx.vin.resize(1);
+        tx.vout.resize(1);
+        tx.vout[0].nValue = BLOCKSUBSIDY;
+        // 36 * (520char + DROP) + OP_1 = 18757 bytes
         std::vector<unsigned char> vchData(520);
         for (unsigned int i = 0; i < 18; ++i) {
             tx.vin[0].scriptSig << vchData << OP_DROP;
+            tx.vout[0].scriptPubKey << vchData << OP_DROP;
         }
         tx.vin[0].scriptSig << OP_1;
+        tx.vout[0].scriptPubKey << OP_1;
         tx.vin[0].prevout.hash = txFirst[0]->GetHash();
+        tx.vin[0].prevout.n = 0;
         tx.vout[0].nValue = BLOCKSUBSIDY;
-        for (unsigned int i = 0; i < 128; ++i) {
+        for (unsigned int i = 0; i < 63; ++i) {
             tx.vout[0].nValue -= LOWFEE;
             hash = tx.GetHash();
             bool spendsCoinbase = i == 0; // only first tx spends coinbase
             AddToMempool(tx_mempool, entry.Fee(LOWFEE).Time(Now<NodeSeconds>()).SpendsCoinbase(spendsCoinbase).FromTx(tx));
+            BOOST_CHECK(tx_mempool.GetIter(hash).has_value());
             tx.vin[0].prevout.hash = hash;
         }
         BOOST_REQUIRE(mining->createNewBlock(options));
@@ -946,6 +1033,7 @@ BOOST_AUTO_TEST_CASE(CreateNewBlock_validity)
 
     LOCK(cs_main);
 
+    TestSigOpsAdjustedWeightChunkLimit(scriptPubKey, txFirst);
     TestBasicMining(scriptPubKey, txFirst, baseheight);
 
     m_node.chainman->ActiveChain().Tip()->nHeight--;

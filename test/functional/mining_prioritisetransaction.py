@@ -57,6 +57,20 @@ class PrioritiseTransactionTest(BitcoinTestFramework):
         self.generate(self.nodes[0], 1)
         assert_equal(self.nodes[0].getprioritisedtransactions(), {})
 
+    def test_priority_integer_range(self):
+        self.log.info("Preserve signed-64 priority increments and saturating accumulation")
+        node = self.nodes[0]
+        txid = 'ff' * 32
+        maximum, minimum = 2**63 - 1, -(2**63)
+        for delta, expected in [(maximum, maximum), (1, maximum), (-maximum, 0),
+                                (minimum, minimum), (-1, minimum), (maximum, -1), (1, 0)]:
+            node.prioritisetransaction(txid, 0, delta)
+            entries = node.getprioritisedtransactions()
+            if expected:
+                assert_equal(entries[txid], {'fee_delta': expected, 'in_mempool': False})
+            else:
+                assert txid not in entries
+
     def test_diamond(self):
         self.log.info("Test diamond-shape package with priority")
         mock_time = int(time.time())
@@ -101,14 +115,21 @@ class PrioritiseTransactionTest(BitcoinTestFramework):
         self.nodes[0].prioritisetransaction(txid=txid_c, fee_delta=int(fee_delta_c_1 * COIN))
         self.nodes[0].prioritisetransaction(txid=txid_c, fee_delta=int(fee_delta_c_2 * COIN))
         raw_before[txid_a]["fees"]["descendant"] += fee_delta_b + fee_delta_c_1 + fee_delta_c_2
+        # We expect tx_a to have a chunk fee that includes tx_b and tx_c.
+        raw_before[txid_a]["fees"]["chunk"] += fee_delta_b + fee_delta_c_1 + fee_delta_c_2
         raw_before[txid_b]["fees"]["modified"] += fee_delta_b
         raw_before[txid_b]["fees"]["ancestor"] += fee_delta_b
         raw_before[txid_b]["fees"]["descendant"] += fee_delta_b
+        # We also expect tx_b and tx_c to have their chunk fees modified too,
+        # since they chunk together.
+        raw_before[txid_b]["fees"]["chunk"] += fee_delta_b + fee_delta_c_1 + fee_delta_c_2
         raw_before[txid_c]["fees"]["modified"] += fee_delta_c_1 + fee_delta_c_2
         raw_before[txid_c]["fees"]["ancestor"] += fee_delta_c_1 + fee_delta_c_2
         raw_before[txid_c]["fees"]["descendant"] += fee_delta_c_1 + fee_delta_c_2
+        raw_before[txid_c]["fees"]["chunk"] += fee_delta_b + fee_delta_c_1 + fee_delta_c_2
         raw_before[txid_d]["fees"]["ancestor"] += fee_delta_b + fee_delta_c_1 + fee_delta_c_2
         raw_after = self.nodes[0].getrawmempool(verbose=True)
+        # Don't bother comparing cluster ids, which are not meant to be stable.
         assert_equal(raw_before[txid_a], raw_after[txid_a])
         assert_equal(raw_before, raw_after)
         assert_equal(self.nodes[0].getprioritisedtransactions(), {txid_b: {"fee_delta" : fee_delta_b*COIN, "in_mempool" : True, "modified_fee": int(fee_delta_b*COIN + COIN * tx_o_b["fee"])}, txid_c: {"fee_delta" : (fee_delta_c_1 + fee_delta_c_2)*COIN, "in_mempool" : True, "modified_fee": int((fee_delta_c_1 + fee_delta_c_2 ) * COIN + COIN * tx_o_c["fee"])}})
@@ -183,6 +204,7 @@ class PrioritiseTransactionTest(BitcoinTestFramework):
         # Test `prioritisetransaction` invalid `fee_delta`
         assert_raises_rpc_error(-3, "JSON value of type string is not of expected type number", self.nodes[0].prioritisetransaction, txid=txid, fee_delta='foo')
 
+        self.test_priority_integer_range()
         self.test_replacement()
         self.test_diamond()
 

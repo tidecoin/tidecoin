@@ -68,7 +68,7 @@ class ConnectionType(Enum):
 class TxDownloadTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 2
-        self.extra_args= [['-maxmempool=9', '-persistmempool=0']] * self.num_nodes
+        self.extra_args= [['-maxmempool=10', '-persistmempool=0']] * self.num_nodes
 
     def test_tx_requests(self):
         self.log.info("Test that we request transactions from all our peers, eventually")

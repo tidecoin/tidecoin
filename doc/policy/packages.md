@@ -16,12 +16,12 @@ parent of a parent should not be in this package (unless this "grandparent" is a
 
 The following rules are enforced for all packages:
 
-* Packages cannot exceed `MAX_PACKAGE_COUNT=25` count and `MAX_PACKAGE_WEIGHT=404000` total weight
+* Packages cannot exceed `MAX_PACKAGE_COUNT=25` count and `MAX_PACKAGE_WEIGHT=808000` total weight
    (#20833)
 
    - *Rationale*: We want package size to be as small as possible to mitigate DoS via package
-     validation. However, we want to make sure that the limit does not restrict ancestor
-     packages that would be allowed if submitted individually.
+     validation. Package submission has its own 25-entry/808,000-weight bound; a larger group
+     that fits cluster policy may still require individual submission.
 
    - Note that, if these mempool limits change, package limits should be reconsidered. Users may
      also configure their mempool limits differently.
@@ -38,10 +38,8 @@ The following rules are enforced for all packages:
 
    - Packages are 1-parent-1-child, with no in-mempool ancestors of the package.
 
-   - All conflicting clusters (connected components of mempool transactions) must be clusters of up to size 2.
-
-   - No more than MAX_REPLACEMENT_CANDIDATES transactions can be replaced, analogous to
-     regular [replacement rule](./mempool-replacements.md) 5).
+   - The number of distinct clusters containing conflicting transactions can be no more than 100, analogous to
+     regular [replacement rule](./mempool-replacements.md) 5). Tidecoin also limits the union of removed transactions to 100.
 
    - Replacements must pay more total fees at the incremental relay fee (analogous to
      regular [replacement rules](./mempool-replacements.md) 3 and 4).
@@ -55,18 +53,6 @@ The following rules are enforced for all packages:
      those chains when needed. Combined with TRUC transactions this can
      result in more robust fee bumping. More general package RBF may be
      enabled in the future.
-
-* When packages are evaluated against ancestor/descendant limits, the union of all transactions'
-  descendants and ancestors is considered. (#21800)
-
-   - *Rationale*: This is essentially a "worst case" heuristic intended for packages that are
-     heavily connected, i.e. some transaction in the package is the ancestor or descendant of all
-     the other transactions.
-
-* [CPFP Carve Out](./mempool-limits.md#CPFP-Carve-Out) is disabled in packaged contexts. (#21800)
-
-   - *Rationale*: This carve out cannot be accurately applied when there are multiple transactions'
-     ancestors and descendants being considered at the same time.
 
 The following rules are only enforced for packages to be submitted to the mempool (not
 enforced for test accepts):
@@ -156,3 +142,11 @@ backward-compatible for users and applications that rely on p2p transaction rela
 package validation should not prevent the acceptance of a transaction that would otherwise be
 policy-valid on its own. By always accepting a transaction that passes individual validation before
 trying package validation, we prevent any unintentional restriction of policy.
+
+### Connected cluster limits
+
+Admission checks the final connected component after staged additions and removals. Defaults are
+64 transactions and 968,000 sigops-adjusted weight units, including existing mempool entries.
+The size check sums exact adjusted weights, not individually rounded RPC virtual sizes. A package
+that fits the batch limits can still fail when it joins existing clusters. Failed staging leaves
+the live pool unchanged; multi-subpackage submission can still accept a successful subset.

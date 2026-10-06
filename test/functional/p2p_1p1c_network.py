@@ -40,7 +40,7 @@ class PackageRelayTest(BitcoinTestFramework):
         # hugely speeds up the test, as it involves multiple hops of tx relay.
         self.noban_tx_relay = True
         self.extra_args = [[
-            "-maxmempool=9",
+            "-maxmempool=10",
         ]] * self.num_nodes
 
     def raise_network_minfee(self):

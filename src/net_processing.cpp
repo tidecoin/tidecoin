@@ -5463,15 +5463,25 @@ void PeerManagerImpl::MaybeSendFeefilter(CNode& pto, Peer& peer, std::chrono::mi
 namespace {
 class CompareInvMempoolOrder
 {
-    const CTxMemPool* m_mempool;
+    const std::map<Wtxid, CTxMemPool::RelaySortKey>& m_keys;
 public:
-    explicit CompareInvMempoolOrder(CTxMemPool* mempool) : m_mempool{mempool} {}
+    explicit CompareInvMempoolOrder(const std::map<Wtxid, CTxMemPool::RelaySortKey>& keys)
+        : m_keys{keys} {}
 
-    bool operator()(std::set<Wtxid>::iterator a, std::set<Wtxid>::iterator b)
+    bool operator()(std::set<Wtxid>::iterator a, std::set<Wtxid>::iterator b) const
     {
-        /* As std::make_heap produces a max-heap, we want the entries with the
-         * fewest ancestors/highest fee to sort later. */
-        return m_mempool->CompareDepthAndScore(*b, *a);
+        // Max-heap: lower ancestor count, then higher base fee, is popped first.
+        // Snapshot once so comparisons neither traverse the graph nor leak deltas.
+        const auto ai = m_keys.find(*a), bi = m_keys.find(*b);
+        if (ai == m_keys.end()) return false;
+        if (bi == m_keys.end()) return true;
+        const auto& ak = ai->second;
+        const auto& bk = bi->second;
+        if (ak.ancestors != bk.ancestors) return ak.ancestors > bk.ancestors;
+        if (ByRatio{ak.base_feerate} != ByRatio{bk.base_feerate}) {
+            return ByRatio{ak.base_feerate} < ByRatio{bk.base_feerate};
+        }
+        return ak.txid < bk.txid;
     }
 };
 } // namespace
@@ -5828,7 +5838,8 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                     const CFeeRate filterrate{tx_relay->m_fee_filter_received.load()};
                     // Topologically and fee-rate sort the inventory we send for privacy and priority reasons.
                     // A heap is used so that not all items need sorting if only a few are being sent.
-                    CompareInvMempoolOrder compareInvMempoolOrder(&m_mempool);
+                    const auto relay_keys = m_mempool.GetRelaySortKeys(tx_relay->m_tx_inventory_to_send);
+                    CompareInvMempoolOrder compareInvMempoolOrder(relay_keys);
                     std::make_heap(vInvTx.begin(), vInvTx.end(), compareInvMempoolOrder);
                     // No reason to drain out at many times the network's capacity,
                     // especially since we have many peers and some will draw much shorter delays.

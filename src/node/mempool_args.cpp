@@ -15,6 +15,7 @@
 #include <policy/feerate.h>
 #include <policy/policy.h>
 #include <tinyformat.h>
+#include <txgraph.h>
 #include <util/moneystr.h>
 #include <util/translation.h>
 
@@ -32,13 +33,14 @@ static constexpr int MAX_32BIT_MEMPOOL_MB{500};
 namespace {
 void ApplyArgsManOptions(const ArgsManager& argsman, MemPoolLimits& mempool_limits)
 {
+    // Cluster arguments are validated before this conversion.
+    mempool_limits.cluster_count = argsman.GetIntArg("-limitclustercount", mempool_limits.cluster_count);
+
+    if (auto vkb = argsman.GetIntArg("-limitclustersize")) mempool_limits.cluster_size_vbytes = *vkb * 1'000;
+
     mempool_limits.ancestor_count = argsman.GetIntArg("-limitancestorcount", mempool_limits.ancestor_count);
 
-    if (auto vkb = argsman.GetIntArg("-limitancestorsize")) mempool_limits.ancestor_size_vbytes = *vkb * 1'000;
-
     mempool_limits.descendant_count = argsman.GetIntArg("-limitdescendantcount", mempool_limits.descendant_count);
-
-    if (auto vkb = argsman.GetIntArg("-limitdescendantsize")) mempool_limits.descendant_size_vbytes = *vkb * 1'000;
 }
 }
 
@@ -109,7 +111,22 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainP
 
     mempool_opts.persist_v1_dat = argsman.GetBoolArg("-persistmempoolv1", mempool_opts.persist_v1_dat);
 
+    const auto cluster_count = argsman.GetIntArg("-limitclustercount", mempool_opts.limits.cluster_count);
+    const auto cluster_kvb = argsman.GetIntArg("-limitclustersize", mempool_opts.limits.cluster_size_vbytes / 1000);
+    if (cluster_count < 1 || cluster_count > MAX_CLUSTER_COUNT_LIMIT) {
+        return util::Error{Untranslated(strprintf("limitclustercount must be between 1 and %d", MAX_CLUSTER_COUNT_LIMIT))};
+    }
+    if (cluster_kvb < 1 || cluster_kvb > DEFAULT_CLUSTER_SIZE_LIMIT_KVB) {
+        return util::Error{Untranslated(strprintf("limitclustersize must be between 1 and %d kB", DEFAULT_CLUSTER_SIZE_LIMIT_KVB))};
+    }
+    for (const auto* arg : {"-limitancestorsize", "-limitdescendantsize"}) {
+        if (argsman.IsArgSet(arg)) LogWarning("%s is ignored; use -limitclustersize instead.", arg);
+    }
     ApplyArgsManOptions(argsman, mempool_opts.limits);
+
+    if (mempool_opts.limits.cluster_count > MAX_CLUSTER_COUNT_LIMIT) {
+        return util::Error{Untranslated(strprintf("limitclustercount must be less than or equal to %d", MAX_CLUSTER_COUNT_LIMIT))};
+    }
 
     return {};
 }

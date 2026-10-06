@@ -448,7 +448,7 @@ class RPCPackagesTest(BitcoinTestFramework):
         # but child is too high fee
         # Lower mempool limit to make it easier to fill_mempool
         self.restart_node(0, extra_args=[
-            "-maxmempool=9",
+            "-maxmempool=10",
             "-persistmempool=0",
         ])
         self.wallet.rescan_utxos()

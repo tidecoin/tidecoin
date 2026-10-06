@@ -5,6 +5,8 @@
 #ifndef BITCOIN_UTIL_OVERFLOW_H
 #define BITCOIN_UTIL_OVERFLOW_H
 
+#include <util/check.h>
+
 #include <climits>
 #include <concepts>
 #include <limits>
@@ -65,6 +67,21 @@ constexpr std::optional<T> CheckedLeftShift(T input, unsigned shift) noexcept
     if (input > (std::numeric_limits<T>::max() >> shift)) return std::nullopt;
     if (input < (std::numeric_limits<T>::min() >> shift)) return std::nullopt;
     return input << shift;
+}
+
+/**
+ * @brief Integer ceiling division (for unsigned values).
+ *
+ * Computes the smallest integer q such that q * divisor >= dividend.
+ * Both dividend and divisor must be unsigned, and divisor must be non-zero.
+ *
+ * The implementation avoids overflow that can occur with `(dividend + divisor - 1) / divisor`.
+ */
+template <std::unsigned_integral Dividend, std::unsigned_integral Divisor>
+[[nodiscard]] constexpr auto CeilDiv(const Dividend dividend, const Divisor divisor)
+{
+    assert(divisor > 0);
+    return dividend / divisor + (dividend % divisor != 0);
 }
 
 /**

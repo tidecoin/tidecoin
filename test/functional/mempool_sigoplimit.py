@@ -147,7 +147,7 @@ class BytesPerSigOpTest(BitcoinTestFramework):
         # separately they would work.
         # Pick bytespersigop so each tx remains individually acceptable while the
         # 2-tx package exceeds ancestor package size limits on Tidecoin policy.
-        self.restart_node(0, extra_args=["-bytespersigop=5051","-permitbaremultisig=1"])
+        self.restart_node(0, extra_args=["-bytespersigop=6051","-permitbaremultisig=1"])
 
         def create_bare_multisig_tx(utxo_to_spend=None):
             _, pubkey = generate_keypair()
@@ -169,21 +169,20 @@ class BytesPerSigOpTest(BitcoinTestFramework):
         # Separately, the parent tx is ok
         parent_individual_testres = self.nodes[0].testmempoolaccept([tx_parent.serialize().hex()])[0]
         assert parent_individual_testres["allowed"]
-        max_multisig_vsize = MAX_PUBKEYS_PER_MULTISIG * 5051
+        max_multisig_vsize = MAX_PUBKEYS_PER_MULTISIG * 6051
         assert_equal(parent_individual_testres["vsize"], max_multisig_vsize)
 
         # But together, it's exceeding limits in the *package* context. If sigops adjusted vsize wasn't being checked
-        # here, it would get further in validation and give too-long-mempool-chain error instead.
+        # here, it would get further in validation and give too-large-cluster error instead.
         packet_test = self.nodes[0].testmempoolaccept([tx_parent.serialize().hex(), tx_child.serialize().hex()])
         packet_errors = [x.get("package-error", x.get("reject-reason", x.get("error", ""))) for x in packet_test]
         assert_equal(len(packet_errors), 2)
         for err in packet_errors:
-            assert "package-mempool-limits" in err
-            assert "exceeds ancestor size limit" in err
+            assert "too-large-cluster" in err
 
         # When we actually try to submit, the parent makes it into the mempool, but the child would exceed ancestor vsize limits
         res = self.nodes[0].submitpackage([tx_parent.serialize().hex(), tx_child.serialize().hex()])
-        assert "too-long-mempool-chain" in res["tx-results"][tx_child.wtxid_hex]["error"]
+        assert "too-large-cluster" in res["tx-results"][tx_child.wtxid_hex]["error"]
         assert tx_parent.txid_hex in self.nodes[0].getrawmempool()
 
         # Serialized txs should still be much smaller than the sigop-adjusted
