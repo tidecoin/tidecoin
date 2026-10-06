@@ -576,6 +576,28 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_loadblockindex, TestChain100Setup)
     BOOST_CHECK_EQUAL(cs2.setBlockIndexCandidates.size(), num_indexes - last_assumed_valid_idx + 1);
 }
 
+BOOST_FIXTURE_TEST_CASE(loadblockindex_invalid_descendants, TestChain100Setup)
+{
+    LOCK(Assert(m_node.chainman)->GetMutex());
+
+    // Simulate a block index written by an older Tidecoin version:
+    // grand_parent is directly invalid, parent has the legacy descendant flag,
+    // and child has not yet inherited either failure flag.
+    auto* child{m_node.chainman->ActiveChain().Tip()};
+    auto* parent{child->pprev};
+    auto* grand_parent{parent->pprev};
+    grand_parent->nStatus |= BLOCK_FAILED_VALID;
+    parent->nStatus = (parent->nStatus & ~BLOCK_FAILED_VALID) | BLOCK_FAILED_CHILD;
+    child->nStatus &= ~BLOCK_FAILED_VALID;
+
+    BOOST_REQUIRE(m_node.chainman->LoadBlockIndex());
+
+    BOOST_CHECK(grand_parent->nStatus & BLOCK_FAILED_VALID);
+    BOOST_CHECK(parent->nStatus & BLOCK_FAILED_VALID);
+    BOOST_CHECK(child->nStatus & BLOCK_FAILED_VALID);
+    BOOST_CHECK_EQUAL(parent->nStatus & BLOCK_FAILED_CHILD, 0U);
+}
+
 //! Ensure that snapshot chainstates initialize properly when found on disk.
 BOOST_FIXTURE_TEST_CASE(chainstatemanager_snapshot_init, SnapshotTestSetup)
 {

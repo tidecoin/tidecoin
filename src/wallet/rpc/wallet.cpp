@@ -844,6 +844,8 @@ static RPCHelpMan migratewallet()
                 {RPCResult::Type::STR, "watchonly_name", /*optional=*/true, "The name of the migrated wallet containing the watchonly scripts"},
                 {RPCResult::Type::STR, "solvables_name", /*optional=*/true, "The name of the migrated wallet containing solvable but not watched scripts"},
                 {RPCResult::Type::STR, "backup_path", "The location of the backup of the original wallet"},
+                {RPCResult::Type::ARR, "warnings", /*optional=*/true, "Warnings related to loading the migrated wallets or saving their startup settings.",
+                    {{RPCResult::Type::STR, "", "Warning message"}}},
             }
         },
         RPCExamples{
@@ -875,6 +877,7 @@ static RPCHelpMan migratewallet()
                 r.pushKV("solvables_name", res->solvables_wallet->GetName());
             }
             r.pushKV("backup_path", res->backup_path.utf8string());
+            PushWarnings(res->warnings, r);
 
             return r;
         },

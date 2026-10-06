@@ -8,6 +8,8 @@
 #include <rpc/request.h>
 #include <rpc/server.h>
 #include <test/util/setup_common.h>
+#include <test/util/logging.h>
+#include <test/util/random.h>
 #include <txdb.h>
 #include <validation.h>
 #include <validationinterface.h>
@@ -254,6 +256,45 @@ BOOST_FIXTURE_TEST_CASE(chainstate_write_interval, TestingSetup)
     chainstate.FlushStateToDisk(state_dummy, FlushStateMode::PERIODIC);
     m_node.validation_signals->SyncWithValidationInterfaceQueue();
     BOOST_CHECK(sub->m_did_flush);
+}
+
+BOOST_FIXTURE_TEST_CASE(chainstate_compaction_scheduling, RegTestingSetup)
+{
+    auto& chainman = *Assert(m_node.chainman);
+    auto& chainstate = chainman.ActiveChainstate();
+    std::atomic<size_t> starts{0};
+    DebugLogHelper logs{"Starting chainstate compaction", [&starts](const std::string* line) {
+        if (line) ++starts;
+        return false;
+    }};
+    BOOST_REQUIRE(chainman.IsInitialBlockDownload());
+    SeedRandomStateForTest(SeedRand::ZEROS);
+    for (int i{0}; i < 1024; ++i) BOOST_REQUIRE(chainstate.ForceFlushStateToDisk());
+    BOOST_CHECK_EQUAL(starts.load(), 0U);
+
+    // Make the genesis-only regtest chain current, without changing consensus
+    // parameters or introducing a production test switch for compaction.
+    SetMockTime(chainman.GetParams().GenesisBlock().GetBlockTime());
+    BOOST_REQUIRE(!chainman.IsInitialBlockDownload());
+    BlockValidationState state;
+    for (int i{0}; i < 1024; ++i) BOOST_REQUIRE(chainstate.FlushStateToDisk(state, FlushStateMode::NONE));
+    BOOST_CHECK_EQUAL(starts.load(), 0U);
+
+    // Fixed test randomness exercises the real 1-in-320 scheduler. The bound
+    // prevents an absent trigger from hanging the test.
+    SeedRandomStateForTest(SeedRand::ZEROS);
+    for (int i{0}; i < 4096 && starts.load() == 0; ++i) BOOST_REQUIRE(chainstate.ForceFlushStateToDisk());
+    const bool scheduled{starts.load() > 0};
+    WITH_LOCK(::cs_main, return chainstate.CoinsDB().CompactFullAsync()).get();
+    BOOST_CHECK(scheduled);
+
+    // The interrupt flag suppresses maintenance even after a successful flush.
+    const auto before = starts.load();
+    BOOST_REQUIRE(m_interrupt());
+    SeedRandomStateForTest(SeedRand::ZEROS);
+    for (int i{0}; i < 1024; ++i) BOOST_CHECK(chainstate.ForceFlushStateToDisk());
+    BOOST_CHECK_EQUAL(starts.load(), before);
+    BOOST_REQUIRE(m_interrupt.reset());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

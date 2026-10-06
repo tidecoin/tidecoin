@@ -7,6 +7,7 @@
 #include <coins.h>
 #include <compressor.h>
 #include <streams.h>
+#include <test/util/logging.h>
 #include <test/util/poolresourcetester.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
@@ -15,6 +16,11 @@
 #include <undo.h>
 #include <util/strencodings.h>
 
+#include <leveldb/env.h>
+
+#include <atomic>
+#include <chrono>
+#include <future>
 #include <map>
 #include <string>
 #include <variant>
@@ -1222,6 +1228,140 @@ BOOST_FIXTURE_TEST_CASE(ccoins_flush_behavior, FlushTest)
     for (const auto& view : caches) {
         TestFlushBehavior(view.get(), base, caches, /*do_erasing_flush=*/false);
         TestFlushBehavior(view.get(), base, caches, /*do_erasing_flush=*/true);
+    }
+}
+
+// Adapted from Bitcoin's coins_db_leveldb_layout regression, with Tidecoin
+// format-marker, spent-output and reopen checks.
+BOOST_FIXTURE_TEST_CASE(coins_db_leveldb_layout, FlushTest)
+{
+    const auto path = m_args.GetDataDirBase() / "coins_db_leveldb_layout";
+    const COutPoint outpoint{Txid::FromUint256(m_rng.rand256()), 0};
+    const COutPoint spent{Txid::FromUint256(m_rng.rand256()), 1};
+    const Coin coin{MakeCoin()};
+    const uint256 block_hash{m_rng.rand256()};
+    {
+        CCoinsViewDB base{{.path = path, .cache_bytes = 1 << 20, .wipe_data = true}, {}};
+        BOOST_CHECK(base.GetFormatState() == CoinsDBFormatState::OK);
+        CCoinsViewCache cache{&base};
+        cache.AddCoin(outpoint, Coin{coin}, false);
+        cache.AddCoin(spent, Coin{coin}, false);
+        cache.SetBestBlock(block_hash);
+        BOOST_REQUIRE(cache.Sync());
+        BOOST_REQUIRE(cache.SpendCoin(spent));
+        BOOST_REQUIRE(cache.Sync());
+
+        BOOST_CHECK_EQUAL(base.GetDBProperty("leveldb.num-files-at-level2").value(), "0");
+        WITH_LOCK(::cs_main, return base.CompactFullAsync()).get();
+        BOOST_CHECK_EQUAL(base.GetDBProperty("leveldb.num-files-at-level2").value(), "1");
+        BOOST_CHECK(!base.GetDBProperty("not-a-leveldb-property"));
+        BOOST_CHECK(*Assert(base.GetCoin(outpoint)) == coin);
+        BOOST_CHECK(!base.HaveCoin(spent));
+        BOOST_CHECK(base.GetBestBlock() == block_hash);
+
+        // Reopening for a different cache budget must preserve the database.
+        WITH_LOCK(::cs_main, base.ResizeCache(2 << 20));
+        BOOST_CHECK(*Assert(base.GetCoin(outpoint)) == coin);
+        BOOST_CHECK(!base.HaveCoin(spent));
+        BOOST_CHECK(base.GetBestBlock() == block_hash);
+    }
+    {
+        CDBWrapper raw{{.path = path, .cache_bytes = 1 << 20}};
+        uint8_t format{0};
+        BOOST_REQUIRE(raw.Read(uint8_t{'F'}, format));
+        BOOST_CHECK_EQUAL(format, 1);
+    }
+    CCoinsViewDB reopened{{.path = path, .cache_bytes = 1 << 20}, {}};
+    BOOST_CHECK(*Assert(reopened.GetCoin(outpoint)) == coin);
+    BOOST_CHECK(!reopened.HaveCoin(spent));
+    BOOST_CHECK(reopened.GetBestBlock() == block_hash);
+}
+
+namespace {
+// Pause the first table-file creation by explicit compaction, while the
+// compaction worker owns its database-lifetime mutex. A bounded wait makes
+// a failing test release the worker instead of hanging in database destruction.
+class CompactionGateEnv : public leveldb::EnvWrapper {
+public:
+    std::atomic<bool> armed{false};
+    std::atomic<bool> timed_out{false};
+    std::promise<void> entered;
+    std::promise<void> release;
+    std::shared_future<void> released{release.get_future().share()};
+
+    CompactionGateEnv() : EnvWrapper{leveldb::Env::Default()} {}
+    leveldb::Status NewWritableFile(const std::string& name, leveldb::WritableFile** file) override
+    {
+        if (name.ends_with(".ldb") && armed.exchange(false)) {
+            entered.set_value();
+            if (released.wait_for(std::chrono::seconds{10}) != std::future_status::ready) {
+                timed_out = true;
+                *file = nullptr;
+                return leveldb::Status::IOError("compaction test gate timed out");
+            }
+        }
+        return target()->NewWritableFile(name, file);
+    }
+};
+} // namespace
+
+BOOST_FIXTURE_TEST_CASE(coins_db_compaction_lifetime, FlushTest)
+{
+    for (const bool destroy : {false, true}) {
+        CompactionGateEnv env;
+        const auto path = m_args.GetDataDirBase() / (destroy ? "compact_destroy" : "compact_resize");
+        auto base = std::make_unique<CCoinsViewDB>(DBParams{.path = path, .cache_bytes = 1 << 20, .options = {.env = &env}}, CoinsViewOptions{});
+        const COutPoint outpoint{Txid::FromUint256(m_rng.rand256()), 0};
+        const Coin coin{MakeCoin()};
+        const uint256 block_hash{m_rng.rand256()};
+        {
+            CCoinsViewCache cache{base.get()};
+            cache.AddCoin(outpoint, Coin{coin}, false);
+            cache.SetBestBlock(block_hash);
+            BOOST_REQUIRE(cache.Sync());
+        }
+        std::atomic<size_t> starts{0};
+        DebugLogHelper logs{"Starting chainstate compaction", [&starts](const std::string* line) {
+            if (line) ++starts;
+            return false;
+        }};
+        env.armed = true;
+        auto first = WITH_LOCK(::cs_main, return base->CompactFullAsync());
+        const bool entered{env.entered.get_future().wait_for(std::chrono::seconds{10}) == std::future_status::ready};
+        if (!entered) env.release.set_value();
+        BOOST_REQUIRE(entered);
+        auto duplicate = WITH_LOCK(::cs_main, return base->CompactFullAsync());
+        BOOST_CHECK(first.wait_for(std::chrono::seconds{0}) == std::future_status::timeout);
+        BOOST_CHECK(duplicate.wait_for(std::chrono::seconds{0}) == std::future_status::timeout);
+
+        std::promise<void> attempting;
+        auto lifetime = std::async(std::launch::async, [&] {
+            attempting.set_value();
+            if (destroy) {
+                base.reset();
+            } else {
+                WITH_LOCK(::cs_main, base->ResizeCache(2 << 20));
+            }
+        });
+        attempting.get_future().wait();
+        BOOST_CHECK(lifetime.wait_for(std::chrono::milliseconds{50}) == std::future_status::timeout);
+        env.release.set_value();
+        lifetime.get();
+        first.get();
+        duplicate.get();
+        BOOST_CHECK(!env.timed_out);
+        BOOST_CHECK_EQUAL(starts.load(), 1U);
+        if (!destroy) {
+            BOOST_CHECK(*Assert(base->GetCoin(outpoint)) == coin);
+            BOOST_CHECK(base->GetBestBlock() == block_hash);
+            // A completed job must not suppress future maintenance.
+            WITH_LOCK(::cs_main, return base->CompactFullAsync()).get();
+            BOOST_CHECK_EQUAL(starts.load(), 2U);
+            base.reset();
+        }
+        CCoinsViewDB reopened{{.path = path, .cache_bytes = 1 << 20}, {}};
+        BOOST_CHECK(*Assert(reopened.GetCoin(outpoint)) == coin);
+        BOOST_CHECK(reopened.GetBestBlock() == block_hash);
     }
 }
 

@@ -159,6 +159,19 @@ struct RawRecord {
     template <typename Stream> void Serialize(Stream& s) const { s.write(std::span<const std::byte>{data.data(), data.size()}); }
     void Unserialize(DataStream& s) { data = std::move(s); }
 };
+class FailingCursor final : public DatabaseCursor {
+    std::unique_ptr<DatabaseCursor> m_inner;
+    Failure& m_failure;
+    const std::string m_type;
+public:
+    FailingCursor(std::unique_ptr<DatabaseCursor> inner, Failure& failure, std::string type)
+        : m_inner(std::move(inner)), m_failure(failure), m_type(std::move(type)) {}
+    Status Next(DataStream& key, DataStream& value) override {
+        if (m_failure.Reject("cursor_throw", m_type)) throw std::runtime_error("injected cursor read error");
+        if (m_failure.Reject("cursor_next", m_type)) return Status::FAIL;
+        return m_inner->Next(key, value);
+    }
+};
 class FailingBatch final : public DatabaseBatch {
     std::unique_ptr<DatabaseBatch> m_inner;
     Failure& m_failure;
@@ -189,7 +202,14 @@ public:
     void Close() override { m_inner->Close(); }
     bool ErasePrefix(std::span<const std::byte> prefix) override { return m_inner->ErasePrefix(prefix); }
     std::unique_ptr<DatabaseCursor> GetNewCursor() override { return m_inner->GetNewCursor(); }
-    std::unique_ptr<DatabaseCursor> GetNewPrefixCursor(std::span<const std::byte> prefix) override { return m_inner->GetNewPrefixCursor(prefix); }
+    std::unique_ptr<DatabaseCursor> GetNewPrefixCursor(std::span<const std::byte> prefix) override {
+        const auto type{Type(DataStream{prefix})};
+        if (m_failure.Reject("cursor_create_throw", type)) throw std::runtime_error("injected cursor creation error");
+        if (m_failure.Reject("cursor_create", type)) return nullptr;
+        auto cursor{m_inner->GetNewPrefixCursor(prefix)};
+        if (!cursor) return nullptr;
+        return std::make_unique<FailingCursor>(std::move(cursor), m_failure, type);
+    }
     bool TxnBegin() override {
         if (m_before_begin) m_before_begin();
         return !m_failure.Reject("begin") && m_inner->TxnBegin();
@@ -237,6 +257,76 @@ struct PersistenceSetup : BasicTestingSetup {
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(wallet_persistence_tests, PersistenceSetup)
+
+BOOST_AUTO_TEST_CASE(migration_locator_absence_corruption_and_read_errors)
+{
+    auto wallet{Open(m_args.GetDataDirBase() / "migration-locator")};
+    auto& db{wallet->GetDatabase()};
+    auto& fault{Fault(*wallet)};
+    auto raw{db.MakeBatch()};
+    WalletBatch batch{db};
+    CBlockLocator old, modern, sentinel, result;
+    old.vHave = {uint256::ONE};
+    modern.vHave = {uint256::ZERO};
+    sentinel.vHave = {uint256::ONE, uint256::ZERO};
+    auto check = [&](const CBlockLocator& expected) {
+        result = sentinel;
+        BOOST_REQUIRE(batch.ReadBestBlockForMigration(result));
+        BOOST_CHECK(result.vHave == expected.vHave);
+    };
+    auto reject = [&] {
+        result = sentinel;
+        BOOST_CHECK(!batch.ReadBestBlockForMigration(result));
+        BOOST_CHECK(result.vHave == sentinel.vHave);
+    };
+    check({});
+    BOOST_REQUIRE(raw->Write(DBKeys::BESTBLOCK, CBlockLocator{}));
+    check({});
+    BOOST_REQUIRE(raw->Write(DBKeys::BESTBLOCK_NOMERKLE, modern));
+    check(modern);
+    BOOST_REQUIRE(raw->Write(DBKeys::BESTBLOCK, old));
+    check(old);
+    BOOST_REQUIRE(raw->Erase(DBKeys::BESTBLOCK));
+    check(modern);
+
+    // Missing cursors and errors on the first read or after a valid record must
+    // never become a successful absent-record result or leak partial output.
+    for (const auto& type : {DBKeys::BESTBLOCK, DBKeys::BESTBLOCK_NOMERKLE}) {
+        for (const auto& operation : {"cursor_create", "cursor_next", "cursor_create_throw", "cursor_throw"}) {
+            fault = {operation, type};
+            reject();
+            BOOST_CHECK(fault.hit);
+        }
+    }
+    fault = {"cursor_next", DBKeys::BESTBLOCK_NOMERKLE, false, 1};
+    reject();
+    BOOST_CHECK(fault.hit);
+    fault = {};
+
+    for (const auto& type : {DBKeys::BESTBLOCK, DBKeys::BESTBLOCK_NOMERKLE}) {
+        BOOST_REQUIRE(raw->Erase(DBKeys::BESTBLOCK));
+        BOOST_REQUIRE(raw->Erase(DBKeys::BESTBLOCK_NOMERKLE));
+        for (int mode : {0, 1, 2}) {
+            DataStream malformed;
+            if (mode == 0) {
+                malformed << uint8_t{1}; // Truncated version.
+            } else if (mode == 1) {
+                // Decode one hash before failing on the second.
+                malformed << int32_t{70016} << uint8_t{2} << uint256::ONE;
+            } else {
+                malformed << old << uint8_t{1}; // Trailing garbage.
+            }
+            BOOST_REQUIRE(raw->Write(type, RawRecord{malformed}));
+            reject();
+        }
+        BOOST_REQUIRE(raw->Write(type, old));
+        fault = {"cursor_next", type, false, 1};
+        reject();
+        BOOST_CHECK(fault.hit);
+        fault = {};
+        check(old);
+    }
+}
 
 BOOST_AUTO_TEST_CASE(unlock_rpc_failure_restores_lock_and_timeout)
 {

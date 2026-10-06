@@ -233,3 +233,33 @@ their foundational work.
 The post-quantum cryptographic integration, PQHD wallet, ML-KEM transport,
 YespowerTIDE mining, AuxPoW infrastructure, and script extensions were
 developed by the Tidecoin contributors.
+
+Legacy wallet migration recovery
+--------------------------------
+
+Legacy wallets recovered without a saved block locator can now migrate and
+rescan their history. Malformed locator records and database read errors still
+fail migration. Required historical blocks must be available for the rescan.
+Failed migration preserves existing wallet startup settings; newly created
+auxiliary wallets are registered only after all migrated wallets load. The
+`migratewallet` result reports warnings if their startup settings cannot be saved.
+
+Block invalidation and reconsideration
+--------------------------------------
+
+Invalid blocks and all descendants now use one in-memory failure state. This
+prevents a branch-specific `reconsiderblock` sequence from violating block-index
+invariants and terminating the node when consistency checking is enabled. On
+startup, the node converts the legacy descendant-failure flag in existing
+block-index records to the unified state.
+
+Chainstate database maintenance
+------------------------------
+
+Read-triggered LevelDB compaction is disabled to reduce unnecessary database
+rewrites. Size-triggered compaction remains enabled. After initial synchronization,
+each completed full chainstate flush has a 1-in-320 chance to start background
+full compaction. An unfinished job is reused instead of starting another one.
+Cache resizing and shutdown wait as needed for compaction to finish using the
+database handle. Resizing reopens the existing database without deleting its
+records. Maintenance introduces no database-format change or reindex requirement.

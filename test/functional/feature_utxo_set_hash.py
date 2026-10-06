@@ -72,6 +72,22 @@ class UTXOSetHashTest(BitcoinTestFramework):
 
     def run_test(self):
         self.test_muhash_implementation()
+        self.test_compaction_preserves_utxos()
+
+    def test_compaction_preserves_utxos(self):
+        self.log.info("Check UTXO contents across full database compaction and reopening")
+        node = self.nodes[0]
+        expected = node.gettxoutsetinfo("muhash")
+        expected.pop("disk_size")
+        for cache in (4, 8):
+            # The existing startup option exercises the same full-compaction
+            # operation. Async scheduling and lifetime races have unit coverage.
+            with node.assert_debug_log(["Starting database compaction of", "Finished database compaction of"]):
+                self.restart_node(0, extra_args=["-forcecompactdb", f"-dbcache={cache}"])
+            actual = node.gettxoutsetinfo("muhash")
+            actual.pop("disk_size")
+            assert_equal(actual, expected)
+            assert_equal(node.verifychain(4, 0), True)
 
 
 if __name__ == '__main__':

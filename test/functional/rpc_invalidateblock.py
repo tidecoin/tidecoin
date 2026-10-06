@@ -18,14 +18,60 @@ ADDRESS_RTBC1_UNSPENDABLE_DESCRIPTOR = "addr(rtbc1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqq
 
 
 class InvalidateTest(BitcoinTestFramework):
+    def add_options(self, parser):
+        parser.add_argument(
+            "--auxpow-disabled", action="store_true",
+            help="Run with the pre-AuxPoW proof-of-work rules",
+        )
+
     def set_test_params(self):
         self.setup_clean_chain = True
-        self.num_nodes = 3
+        self.num_nodes = 4
+        if self.options.auxpow_disabled:
+            self.extra_args = [["-auxpowactivationheight=never"] for _ in range(self.num_nodes)]
 
     def setup_network(self):
         self.setup_nodes()
 
+    def test_reconsider_sibling_branch(self):
+        node = self.nodes[3]
+
+        self.log.info("Verify branch-specific reconsideration keeps a failed sibling consistent")
+        self.generate(node, 1, sync_fun=self.no_op)
+        common_ancestor = self.generate(node, 1, sync_fun=self.no_op)[0]
+        old_branch = self.generatetodescriptor(
+            node, 1, ADDRESS_RTBC1_UNSPENDABLE_DESCRIPTOR, sync_fun=self.no_op,
+        )[0]
+        old_tip = self.generate(node, 3, sync_fun=self.no_op)[-1]
+
+        node.invalidateblock(old_branch)
+        sibling_tip = self.generate(node, 3, sync_fun=self.no_op)[-1]
+
+        # Mark both branches invalid, then reconsider only the longer branch.
+        # Legacy BLOCK_FAILED_CHILD handling left the sibling with a failure flag
+        # but no failed ancestor, causing CheckBlockIndex() to abort here.
+        node.reconsiderblock(common_ancestor)
+        node.invalidateblock(common_ancestor)
+        node.reconsiderblock(old_branch)
+
+        assert_equal(node.getbestblockhash(), old_tip)
+        tips = {tip["hash"]: tip["status"] for tip in node.getchaintips()}
+        assert_equal(tips[sibling_tip], "invalid")
+
+        self.restart_node(3)
+        assert_equal(node.getbestblockhash(), old_tip)
+        tips = {tip["hash"]: tip["status"] for tip in node.getchaintips()}
+        assert_equal(tips[sibling_tip], "invalid")
+
+        # Reconsidering the common ancestor deliberately restores both branches.
+        node.reconsiderblock(common_ancestor)
+        assert_equal(node.getbestblockhash(), old_tip)
+        tips = {tip["hash"]: tip["status"] for tip in node.getchaintips()}
+        assert_equal(tips[sibling_tip], "valid-fork")
+
     def run_test(self):
+        self.test_reconsider_sibling_branch()
+
         self.log.info("Make sure we repopulate setBlockIndexCandidates after InvalidateBlock:")
         self.log.info("Mine 4 blocks on Node 0")
         self.generate(self.nodes[0], 4, sync_fun=self.no_op)

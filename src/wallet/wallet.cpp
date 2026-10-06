@@ -5150,7 +5150,9 @@ util::Result<void> CWallet::ApplyMigrationData(WalletBatch& local_wallet_batch, 
 
     // Get best block locator so that we can copy it to the watchonly and solvables
     CBlockLocator best_block_locator;
-    if (!local_wallet_batch.ReadBestBlock(best_block_locator)) {
+    // Key-only recovery can legitimately omit the locator. Empty locators let
+    // chain attachment rescan; malformed records and backend failures are errors.
+    if (!local_wallet_batch.ReadBestBlockForMigration(best_block_locator)) {
         return util::Error{_("Error: Unable to read wallet's best block locator record")};
     }
 
@@ -5169,7 +5171,7 @@ util::Result<void> CWallet::ApplyMigrationData(WalletBatch& local_wallet_batch, 
         LOCK(data.watchonly_wallet->cs_wallet);
         data.watchonly_wallet->nOrderPosNext = nOrderPosNext;
         watchonly_batch->WriteOrderPosNext(data.watchonly_wallet->nOrderPosNext);
-        // Write the best block locator to avoid rescanning on reload
+        // Preserve the scan position; an empty locator requires rescanning on load.
         if (!watchonly_batch->WriteBestBlock(best_block_locator)) {
             return util::Error{_("Error: Unable to write watchonly wallet best block locator record")};
         }
@@ -5178,7 +5180,7 @@ util::Result<void> CWallet::ApplyMigrationData(WalletBatch& local_wallet_batch, 
     if (data.solvable_wallet) {
         solvables_batch = std::make_unique<WalletBatch>(data.solvable_wallet->GetDatabase());
         if (!solvables_batch->TxnBegin()) return util::Error{strprintf(_("Error: database transaction cannot be executed for wallet %s"), data.solvable_wallet->GetName())};
-        // Write the best block locator to avoid rescanning on reload
+        // Preserve the scan position; an empty locator requires rescanning on load.
         if (!solvables_batch->WriteBestBlock(best_block_locator)) {
             return util::Error{_("Error: Unable to write solvable wallet best block locator record")};
         }
@@ -5369,9 +5371,6 @@ bool DoMigration(CWallet& wallet, WalletContext& context, bilingual_str& error, 
                     throw std::runtime_error(util::ErrorString(spkm_res).original);
                 }
             }
-
-            // Add the wallet to settings
-            UpdateWalletSetting(*context.chain, wallet_name, /*load_on_startup=*/true, warnings);
         }
         if (data->solvable_descs.size() > 0) {
             wallet.WalletLogPrintf("Making a new watchonly wallet containing the unwatched solvable scripts\n");
@@ -5408,9 +5407,6 @@ bool DoMigration(CWallet& wallet, WalletContext& context, bilingual_str& error, 
                     throw std::runtime_error(util::ErrorString(spkm_res).original);
                 }
             }
-
-            // Add the wallet to settings
-            UpdateWalletSetting(*context.chain, wallet_name, /*load_on_startup=*/true, warnings);
         }
     }
 
@@ -5564,7 +5560,11 @@ util::Result<MigrationResult> MigrateLegacyToDescriptor(std::shared_ptr<CWallet>
     // fails to load.
     std::set<fs::path> wallet_dirs;
     std::set<fs::path> wallet_files;
+    std::vector<std::string> auxiliary_wallet_names;
     if (success) {
+        for (const auto& wallet : {res.watchonly_wallet, res.solvables_wallet}) {
+            if (wallet) auxiliary_wallet_names.push_back(wallet->GetName());
+        }
         Assume(!res.wallet); // We will set it here.
         // Check if the local wallet is empty after migration
         if (empty_local_wallet) {
@@ -5600,6 +5600,8 @@ util::Result<MigrationResult> MigrateLegacyToDescriptor(std::shared_ptr<CWallet>
     if (!success) {
         // Make list of wallets to cleanup
         std::vector<std::shared_ptr<CWallet>> created_wallets;
+        // The first successfully loaded wallet may already have moved into res.
+        if (res.wallet) created_wallets.push_back(std::move(res.wallet));
         if (local_wallet) created_wallets.push_back(std::move(local_wallet));
         if (res.watchonly_wallet) created_wallets.push_back(std::move(res.watchonly_wallet));
         if (res.solvables_wallet) created_wallets.push_back(std::move(res.solvables_wallet));
@@ -5616,7 +5618,9 @@ util::Result<MigrationResult> MigrateLegacyToDescriptor(std::shared_ptr<CWallet>
         for (std::shared_ptr<CWallet>& w : created_wallets) {
             if (w->HaveChain()) {
                 // Unloading for wallets that were loaded for normal use
-                if (!RemoveWallet(context, w, /*load_on_start=*/false)) {
+                // Migration has not changed startup settings yet. Preserve any
+                // preexisting entry, including when a later wallet fails to load.
+                if (!RemoveWallet(context, w, /*load_on_start=*/std::nullopt)) {
                     error += _("\nUnable to cleanup failed migration");
                     return util::Error{error};
                 }
@@ -5652,6 +5656,12 @@ util::Result<MigrationResult> MigrateLegacyToDescriptor(std::shared_ptr<CWallet>
 
         return util::Error{error};
     }
+    // Only register auxiliary wallets after every migrated wallet has loaded and
+    // rescanned. Failed migration then leaves startup settings untouched.
+    for (const auto& name : auxiliary_wallet_names) {
+        UpdateWalletSetting(*context.chain, name, /*load_on_startup=*/true, warnings);
+    }
+    res.warnings = std::move(warnings);
     return res;
 }
 

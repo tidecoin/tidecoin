@@ -14,8 +14,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 class COutPoint;
@@ -49,9 +51,13 @@ class CCoinsViewDB final : public CCoinsView
 protected:
     DBParams m_db_params;
     CoinsViewOptions m_options;
+    //! Prevents compaction from using m_db while ResizeCache() replaces it.
+    Mutex m_db_mutex;
     std::unique_ptr<CDBWrapper> m_db;
+    std::shared_future<void> m_compaction;
 public:
     explicit CCoinsViewDB(DBParams db_params, CoinsViewOptions options);
+    ~CCoinsViewDB() override;
 
     std::optional<Coin> GetCoin(const COutPoint& outpoint) const override;
     bool HaveCoin(const COutPoint &outpoint) const override;
@@ -66,7 +72,12 @@ public:
     size_t EstimateSize() const override;
 
     //! Dynamically alter the underlying leveldb cache size.
-    void ResizeCache(size_t new_cache_size) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void ResizeCache(size_t new_cache_size) EXCLUSIVE_LOCKS_REQUIRED(cs_main, !m_db_mutex);
+
+    //! Compact on a one-shot background thread, reusing an unfinished job.
+    std::shared_future<void> CompactFullAsync() EXCLUSIVE_LOCKS_REQUIRED(cs_main, !m_db_mutex);
+    //! Return an underlying LevelDB property value, if available.
+    std::optional<std::string> GetDBProperty(const std::string& property) const;
 
     //! @returns filesystem path to on-disk storage or std::nullopt if in memory.
     std::optional<fs::path> StoragePath() { return m_db->StoragePath(); }

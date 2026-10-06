@@ -473,8 +473,14 @@ bool BlockManager::LoadBlockIndex(const std::optional<uint256>& snapshot_blockha
                 pindex->m_chain_tx_count = pindex->nTx;
             }
         }
-        if (!(pindex->nStatus & BLOCK_FAILED_MASK) && pindex->pprev && (pindex->pprev->nStatus & BLOCK_FAILED_MASK)) {
-            pindex->nStatus |= BLOCK_FAILED_CHILD;
+        if (pindex->nStatus & BLOCK_FAILED_CHILD) {
+            // BLOCK_FAILED_CHILD is no longer produced, but may still exist on disk.
+            pindex->nStatus = (pindex->nStatus & ~BLOCK_FAILED_CHILD) | BLOCK_FAILED_VALID;
+            m_dirty_blockindex.insert(pindex);
+        }
+        if (!(pindex->nStatus & BLOCK_FAILED_VALID) && pindex->pprev && (pindex->pprev->nStatus & BLOCK_FAILED_VALID)) {
+            // All descendants of invalid blocks are invalid too.
+            pindex->nStatus |= BLOCK_FAILED_VALID;
             m_dirty_blockindex.insert(pindex);
         }
         if (pindex->pprev) {

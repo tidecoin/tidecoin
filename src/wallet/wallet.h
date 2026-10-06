@@ -1277,6 +1277,7 @@ struct MigrationResult {
     std::shared_ptr<CWallet> watchonly_wallet;
     std::shared_ptr<CWallet> solvables_wallet;
     fs::path backup_path;
+    std::vector<bilingual_str> warnings;
 };
 
 //! Do all steps to migrate a legacy wallet to a descriptor wallet

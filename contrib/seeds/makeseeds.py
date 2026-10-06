@@ -3,7 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #
-# Generate seeds.txt from Pieter's DNS seeder
+# Select Tidecoin fixed seeds from a DNS seeder crawler report.
 #
 
 import argparse
@@ -32,25 +32,12 @@ PATTERN_IPV4 = re.compile(r"^(([0-2]?\d{1,2})\.([0-2]?\d{1,2})\.([0-2]?\d{1,2})\
 PATTERN_IPV6 = re.compile(r"^\[([\da-f:]+)]:(\d{1,5})$", re.IGNORECASE)
 PATTERN_ONION = re.compile(r"^([a-z2-7]{56}\.onion):(\d+)$")
 PATTERN_I2P = re.compile(r"^([a-z2-7]{52}\.b32\.i2p):(\d{1,5})$")
+# Explicitly supported clients: current UA_NAME/CLIENT_VERSION and legacy 0.18.3.
+# Comments use SAFE_CHARS_UA_COMMENT from both implementations. Review this list
+# when releasing another version; user agents are claims, not authentication.
 PATTERN_AGENT = re.compile(
-    r"^/Satoshi:("
-    r"0\.14\.(0|1|2|3|99)"
-    r"|0\.15\.(0|1|2|99)"
-    r"|0\.16\.(0|1|2|3|99)"
-    r"|0\.17\.(0|0\.1|1|2|99)"
-    r"|0\.18\.(0|1|99)"
-    r"|0\.19\.(0|1|2|99)"
-    r"|0\.20\.(0|1|2|99)"
-    r"|0\.21\.(0|1|2|99)"
-    r"|22\.(0|1|99)\.0"
-    r"|23\.(0|1|2|99)\.0"
-    r"|24\.(0|1|2|99)\.(0|1)"
-    r"|25\.(0|1|2|99)\.0"
-    r"|26\.(0|1|2|99)\.0"
-    r"|27\.(0|1|2|99)\.0"
-    r"|28\.(0|1|2|99)\.0"
-    r"|29\.(0|99)\.0"
-    r")")
+    r"/(?:Tidecoin:1\.0\.0|TidecoinCore:0\.18\.3)"
+    r"(?:\([A-Za-z0-9 .,;_?@-]*\))?/")
 
 def parseline(line: str) -> Union[dict, None]:
     """ Parses a line from `seeds_main.txt` into a dictionary of details for that line.
@@ -59,9 +46,13 @@ def parseline(line: str) -> Union[dict, None]:
     if line.startswith('#'):
         # Ignore line that starts with comment
         return None
-    sline = line.split()
-    if len(sline) < 11:
+    # The final quoted user agent can contain spaces in -uacomment values.
+    sline = line.split(maxsplit=11)
+    if len(sline) < 12:
         # line too short to be valid, skip it.
+        return None
+    agent_field = sline[11].strip()
+    if len(agent_field) < 2 or not (agent_field.startswith('"') and agent_field.endswith('"')):
         return None
     # Skip bad results.
     if int(sline[1]) == 0:
@@ -114,7 +105,7 @@ def parseline(line: str) -> Union[dict, None]:
     # Extract protocol version.
     version = int(sline[10])
     # Extract user agent.
-    agent = sline[11][1:-1]
+    agent = agent_field[1:-1]
     # Extract service flags.
     service = int(sline[9], 16)
     # Extract blocks.
@@ -196,7 +187,7 @@ def ip_stats(ips: list[dict]) -> str:
     return f"{hist['ipv4']:6d} {hist['ipv6']:6d} {hist['onion']:6d} {hist['i2p']:6d} {hist['cjdns']:6d}"
 
 def parse_args():
-    argparser = argparse.ArgumentParser(description='Generate a list of bitcoin node seed ip addresses.')
+    argparser = argparse.ArgumentParser(description='Generate a list of Tidecoin node seed IP addresses.')
     argparser.add_argument("-a","--asmap", help='the location of the asmap asn database file (required)', required=True)
     argparser.add_argument("-s","--seeds", help='the location of the DNS seeds file (required)', required=True)
     argparser.add_argument("-m", "--minblocks", help="The minimum number of blocks each node must have", default=MIN_BLOCKS, type=int)
@@ -241,14 +232,14 @@ def main():
     }
     ips = [ip for ip in ips if ip['uptime'] > req_uptime[ip['net']]]
     print(f'{ip_stats(ips):s} Require minimum uptime', file=sys.stderr)
-    # Require a known and recent user agent.
-    ips = [ip for ip in ips if PATTERN_AGENT.match(ip['agent'])]
-    print(f'{ip_stats(ips):s} Require a known and recent user agent', file=sys.stderr)
+    # Require an explicitly supported Tidecoin user agent, including legacy nodes.
+    ips = [ip for ip in ips if PATTERN_AGENT.fullmatch(ip['agent'])]
+    print(f'{ip_stats(ips):s} Require a supported Tidecoin user agent', file=sys.stderr)
     # Sort by availability (and use last success as tie breaker)
     ips.sort(key=lambda x: (x['uptime'], x['lastsuccess'], x['ip']), reverse=True)
-    # Filter out hosts with multiple bitcoin ports, these are likely abusive
+    # Filter out hosts with multiple Tidecoin ports, these are likely abusive
     ips = filtermultiport(ips)
-    print(f'{ip_stats(ips):s} Filter out hosts with multiple bitcoin ports', file=sys.stderr)
+    print(f'{ip_stats(ips):s} Filter out hosts with multiple Tidecoin ports', file=sys.stderr)
     # Look up ASNs and limit results, both per ASN and globally.
     ips = filterbyasn(asmap, ips, MAX_SEEDS_PER_ASN, NSEEDS)
     print(f'{ip_stats(ips):s} Look up ASNs and limit results per ASN and per net', file=sys.stderr)

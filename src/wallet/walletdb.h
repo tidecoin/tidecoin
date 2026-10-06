@@ -222,6 +222,10 @@ public:
 
     bool WriteBestBlock(const CBlockLocator& locator);
     bool ReadBestBlock(CBlockLocator& locator);
+    /** Migration permits absent locators, but rejects malformed records and read errors.
+     * On failure, locator is unchanged. An absent/empty locator requires a rescan.
+     */
+    bool ReadBestBlockForMigration(CBlockLocator& locator);
 
     // Returns true if wallet stores encryption keys
     bool IsEncrypted();

@@ -400,16 +400,10 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
   return state.found ? state.s : Status::NotFound(Slice());
 }
 
-bool Version::UpdateStats(const GetStats& stats) {
-  FileMetaData* f = stats.seek_file;
-  if (f != nullptr) {
-    f->allowed_seeks--;
-    if (f->allowed_seeks <= 0 && file_to_compact_ == nullptr) {
-      file_to_compact_ = f;
-      file_to_compact_level_ = stats.seek_file_level;
-      return true;
-    }
-  }
+bool Version::UpdateStats(const GetStats& /*stats*/) {
+  // Disable automatic compactions triggered by read seek counters.
+  // The heuristic can cause severe write amplification on random-key databases.
+  // Size and manual compactions still run.
   return false;
 }
 
@@ -661,6 +655,7 @@ class VersionSet::Builder {
       // same as the compaction of 40KB of data.  We are a little
       // conservative and allow approximately one seek for every 16KB
       // of data before triggering a compaction.
+      // Seek compactions are disabled. See Version::UpdateStats.
       f->allowed_seeks = static_cast<int>((f->file_size / 16384U));
       if (f->allowed_seeks < 100) f->allowed_seeks = 100;
 

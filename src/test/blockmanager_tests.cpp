@@ -14,6 +14,7 @@
 #include <validation.h>
 
 #include <algorithm>
+#include <vector>
 
 #include <boost/test/unit_test.hpp>
 #include <test/util/logging.h>
@@ -77,6 +78,80 @@ BOOST_FIXTURE_TEST_CASE(unlinked_blocks_reload_skips_pruned_data, TestChain100Se
         BOOST_REQUIRE_EQUAL(blockman.m_blocks_unlinked.size(), 1U);
         BOOST_CHECK(blockman.m_blocks_unlinked.begin()->first == pruned);
         BOOST_CHECK(blockman.m_blocks_unlinked.begin()->second == available);
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(legacy_invalidity_roundtrip, TestChain100Setup)
+{
+    LOCK(cs_main);
+    const auto& chain = m_node.chainman->ActiveChain();
+    const auto* child = chain.Tip();
+    const auto* parent = child->pprev;
+
+    // Serialize a legacy failure with valid ancestors, as can remain after
+    // reconsidering a sibling. An invalid ancestor must not mask a broken
+    // conversion by supplying the parent's failure flag through propagation.
+    CDiskBlockIndex legacy_parent{parent};
+    legacy_parent.nStatus |= BLOCK_FAILED_CHILD;
+    std::vector<const CBlockIndex*> records;
+    for (int height{0}; height <= chain.Height(); ++height) {
+        BOOST_REQUIRE_EQUAL(chain[height]->nStatus & (BLOCK_FAILED_VALID | BLOCK_FAILED_CHILD), 0U);
+        records.push_back(height == parent->nHeight ? &legacy_parent : chain[height]);
+    }
+
+    KernelNotifications notifications{Assert(m_node.shutdown_request), m_node.exit_status, *Assert(m_node.warnings)};
+    const BlockManager::Options blockman_opts{
+        .chainparams = Params(),
+        .blocks_dir = m_args.GetBlocksDirPath(),
+        .notifications = notifications,
+        .block_tree_db_params = DBParams{
+            .path = m_args.GetDataDirNet() / "legacy-invalidity-index",
+            .cache_bytes = 1 << 20,
+            .memory_only = false,
+        },
+    };
+    {
+        node::BlockTreeDB db{blockman_opts.block_tree_db_params};
+        BOOST_REQUIRE(db.WriteBatchSync({}, child->nFile, records));
+    }
+
+    // Open a fresh database and block manager each time. The second load must
+    // read already-normalized records, without needing to repair them again.
+    for (int reopen{0}; reopen < 2; ++reopen) {
+        BlockManager blockman{*Assert(m_node.shutdown_signal), blockman_opts};
+        if (reopen == 1) {
+            // Inspect persisted records before normalization can repair them.
+            // This proves the first load scheduled both changed entries for
+            // WriteBlockIndexDB, without exposing its private dirty set.
+            node::BlockMap persisted;
+            BOOST_REQUIRE(blockman.m_block_tree_db->LoadBlockIndexGuts(
+                Params().GetConsensus(),
+                [&persisted](const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(cs_main) -> CBlockIndex* {
+                    if (hash.IsNull()) return nullptr;
+                    auto [it, inserted] = persisted.try_emplace(hash);
+                    it->second.phashBlock = &it->first;
+                    return &it->second;
+                },
+                *Assert(m_node.shutdown_signal)));
+            for (int height{0}; height <= chain.Height(); ++height) {
+                const auto* original = chain[height];
+                const auto it = persisted.find(original->GetBlockHash());
+                BOOST_REQUIRE(it != persisted.end());
+                const uint32_t expected_status{original->nStatus | (height >= parent->nHeight ? BLOCK_FAILED_VALID : 0U)};
+                BOOST_CHECK_EQUAL(it->second.nStatus, expected_status);
+            }
+        }
+        BOOST_REQUIRE(blockman.LoadBlockIndexDB(std::nullopt));
+        for (int height{0}; height <= chain.Height(); ++height) {
+            const auto* original = chain[height];
+            auto* loaded = blockman.LookupBlockIndex(original->GetBlockHash());
+            BOOST_REQUIRE(loaded);
+            const uint32_t expected_status{original->nStatus | (height >= parent->nHeight ? BLOCK_FAILED_VALID : 0U)};
+            // Compare the complete status so validity, data, undo and witness
+            // flags must survive conversion, persistence and reloading.
+            BOOST_CHECK_EQUAL(loaded->nStatus, expected_status);
+        }
+        BOOST_REQUIRE(blockman.WriteBlockIndexDB());
     }
 }
 

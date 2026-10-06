@@ -23,6 +23,7 @@
 #include <wallet/sqlite.h>
 #include <wallet/wallet.h>
 
+#include <algorithm>
 #include <atomic>
 #include <optional>
 #include <string>
@@ -209,6 +210,33 @@ bool WalletBatch::ReadBestBlock(CBlockLocator& locator)
 {
     if (m_batch->Read(DBKeys::BESTBLOCK, locator) && !locator.vHave.empty()) return true;
     return m_batch->Read(DBKeys::BESTBLOCK_NOMERKLE, locator);
+}
+
+bool WalletBatch::ReadBestBlockForMigration(CBlockLocator& locator)
+{
+    // Read() conflates missing records, backend errors and failed deserialization.
+    // A prefix cursor distinguishes absence (DONE) from backend failure (FAIL).
+    try {
+        CBlockLocator candidate;
+        for (const auto& type : {DBKeys::BESTBLOCK, DBKeys::BESTBLOCK_NOMERKLE}) {
+            DataStream prefix, key, value;
+            prefix << type;
+            auto cursor{m_batch->GetNewPrefixCursor(prefix)};
+            if (!cursor) return false;
+            const auto status{cursor->Next(key, value)};
+            if (status == DatabaseCursor::Status::FAIL) return false;
+            if (status == DatabaseCursor::Status::DONE) continue;
+            if (!std::ranges::equal(key, prefix)) return false;
+            value >> candidate;
+            if (!value.empty() || cursor->Next(key, value) != DatabaseCursor::Status::DONE) return false;
+            // Preserve the old nonempty locator's precedence over the newer record.
+            if (!candidate.IsNull()) break;
+        }
+        locator = std::move(candidate);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 
 bool WalletBatch::IsEncrypted()
