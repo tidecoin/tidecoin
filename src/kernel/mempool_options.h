@@ -15,8 +15,10 @@
 
 class ValidationSignals;
 
+/** Maximum mempool size on 32-bit systems, in decimal megabytes. */
+static constexpr unsigned int MAX_32BIT_MEMPOOL_MB{500};
 /** Default for -maxmempool, maximum megabytes of mempool memory usage */
-static constexpr unsigned int DEFAULT_MAX_MEMPOOL_SIZE_MB{1024};
+static constexpr unsigned int DEFAULT_MAX_MEMPOOL_SIZE_MB{sizeof(void*) == 4 ? MAX_32BIT_MEMPOOL_MB : 1024};
 /** Default for -maxmempool when blocksonly is set */
 static constexpr unsigned int DEFAULT_BLOCKSONLY_MAX_MEMPOOL_SIZE_MB{10};
 /** Default for -mempoolexpiry, expiration time for mempool transactions in hours */

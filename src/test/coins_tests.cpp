@@ -1433,4 +1433,38 @@ BOOST_AUTO_TEST_CASE(coinsdb_marks_current_script_compression_format)
     }
 }
 
+BOOST_AUTO_TEST_CASE(coins_snapshot_pins_cache_reopen)
+{
+    CCoinsViewDB db{{.path = m_args.GetDataDirNet() / "pinned-coins", .cache_bytes = 1 << 20}, {}};
+    CCoinsViewCache cache{&db};
+    const COutPoint outpoint{Txid::FromUint256(uint256{1}), 0};
+    cache.AddCoin(outpoint, Coin{CTxOut{42, CScript{} << OP_TRUE}, 1, false}, false);
+    cache.SetBestBlock(uint256{2});
+    BOOST_REQUIRE(cache.Flush());
+    // Release the cursor before waiting for the worker even if an assertion throws.
+    std::future<void> resize;
+    auto cursor = WITH_LOCK(cs_main, return db.CursorWithCacheLock());
+    std::promise<void> entered;
+    auto entered_future = entered.get_future();
+    resize = std::async(std::launch::async, [&] {
+        LOCK(cs_main);
+        entered.set_value();
+        db.ResizeCache(2 << 20);
+    });
+    entered_future.wait();
+    // Reopening cannot finish while the snapshot still references the old DB.
+    BOOST_CHECK(resize.wait_for(std::chrono::milliseconds{50}) == std::future_status::timeout);
+    COutPoint key;
+    Coin coin;
+    BOOST_REQUIRE(cursor->GetKey(key));
+    BOOST_CHECK(key == outpoint);
+    BOOST_REQUIRE(cursor->GetValue(coin));
+    BOOST_CHECK_EQUAL(coin.out.nValue, 42);
+    cursor.reset();
+    resize.get();
+    auto saved = db.GetCoin(outpoint);
+    BOOST_REQUIRE(saved);
+    BOOST_CHECK_EQUAL(saved->out.nValue, 42);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

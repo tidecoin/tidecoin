@@ -8,6 +8,7 @@
 #include <key.h>
 #include <key_io.h>
 #include <node/context.h>
+#include <node/blockstorage.h>
 #include <pq/pq_api.h>
 #include <rpc/blockchain.h>
 #include <rpc/client.h>
@@ -822,6 +823,65 @@ BOOST_AUTO_TEST_CASE(rpc_arg_helper)
         };
     CheckRpc(params, UniValue{JSON(R"([5, "hello", null, null, null, null, null])")}, check_positional);
     CheckRpc(params, UniValue{JSON(R"([5, "hello", 4, "test", true, 1.23, "world"])")}, check_positional);
+}
+
+BOOST_FIXTURE_TEST_CASE(historical_snapshot_isolation_and_interruption, TestChain100Setup)
+{
+    auto& chainstate = m_node.chainman->ActiveChainstate();
+    const auto* target = WITH_LOCK(cs_main, return chainstate.m_chain.Tip());
+    const auto baseline_path = m_args.GetDataDirNet() / "baseline.dat";
+    m_node.rpc_interruption_point = [] {};
+    AutoFile baseline_file{fsbridge::fopen(baseline_path, "wb")};
+    auto baseline = CreateUTXOSnapshot(m_node, chainstate, std::move(baseline_file), baseline_path, baseline_path);
+    mineBlocks(10);
+    const auto* tip = WITH_LOCK(cs_main, return chainstate.m_chain.Tip());
+    const auto path = m_args.GetDataDirNet() / "rollback.dat";
+    const auto check_cleanup = [&] {
+        for (const auto& entry : fs::directory_iterator(path.parent_path())) {
+            BOOST_CHECK(!fs::PathToString(entry.path().filename()).starts_with("temp_utxo_"));
+        }
+        BOOST_CHECK(WITH_LOCK(cs_main, return chainstate.m_chain.Tip() == tip));
+        BOOST_CHECK(WITH_LOCK(cs_main, return !(tip->nStatus & BLOCK_FAILED_VALID)));
+    };
+    size_t calls{0};
+    m_node.rpc_interruption_point = [&] { ++calls; };
+    {
+        AutoFile file{fsbridge::fopen(path, "wb")};
+        auto result = CreateRolledBackUTXOSnapshot(m_node, chainstate, target, std::move(file), path, path);
+        for (const auto* key : {"coins_written", "base_hash", "base_height", "txoutset_hash", "nchaintx"}) {
+            BOOST_CHECK_EQUAL(result[key].write(), baseline[key].write());
+        }
+    }
+    check_cleanup();
+    BOOST_REQUIRE(calls > 110U);
+    const size_t total_calls = calls;
+    // Interrupt early copying, later copying, undo processing and final output.
+    for (const size_t stop : {size_t{1}, size_t{50}, size_t{115}, total_calls}) {
+        calls = 0;
+        m_node.rpc_interruption_point = [&] {
+            if (++calls == stop) throw std::runtime_error("cancel export");
+        };
+        AutoFile file{fsbridge::fopen(path, "wb")};
+        BOOST_CHECK_EXCEPTION(CreateRolledBackUTXOSnapshot(m_node, chainstate, target, std::move(file), path, path),
+                              std::runtime_error, [](const auto& e) { return std::string{e.what()} == "cancel export"; });
+        check_cleanup();
+    }
+    m_node.rpc_interruption_point = [] {};
+    // A reorg between RPC target selection and capture must fail, not export a
+    // different block at the requested height. A disconnected index models it.
+    CBlockIndex stale_target;
+    stale_target.nHeight = target->nHeight;
+    {
+        AutoFile file{fsbridge::fopen(path, "wb")};
+        BOOST_CHECK_EXCEPTION(CreateRolledBackUTXOSnapshot(m_node, chainstate, &stale_target, std::move(file), path, path),
+                              UniValue, [](const auto& e) { return e["message"].get_str() == "Snapshot target is no longer on the captured chain"; });
+    }
+    check_cleanup();
+    // Recovery: a subsequent export still produces the expected historical set.
+    AutoFile file{fsbridge::fopen(path, "wb")};
+    auto result = CreateRolledBackUTXOSnapshot(m_node, chainstate, target, std::move(file), path, path);
+    BOOST_CHECK_EQUAL(result["txoutset_hash"].get_str(), baseline["txoutset_hash"].get_str());
+    check_cleanup();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

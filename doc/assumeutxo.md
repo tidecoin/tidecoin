@@ -72,13 +72,22 @@ Example usage:
 $ tidecoin-cli -rpcclienttimeout=0 dumptxoutset /path/to/output rollback
 ```
 
-For most of the duration of `dumptxoutset` running the node is in a temporary
-state that does not actually reflect reality, i.e. blocks are marked invalid
-although we know they are not invalid. Because of this it is discouraged to
-interact with the node in any other way during this time to avoid inconsistent
-results and race conditions, particularly RPCs that interact with blockstorage.
-This inconsistent state is also why network activity is temporarily disabled,
-causing us to disconnect from all peers.
+Historical exports copy the current UTXO database into a temporary database
+alongside the output file, then undo blocks in that copy to reach the requested
+height. The active chain and mempool are not rolled back, and networking remains
+in its existing state. Required block and undo files are protected against
+pruning during export; already-pruned data cannot be recovered by this method.
+
+Allow disk space for both the temporary database and the exported snapshot.
+Only one `dumptxoutset` call can run at a time. Other node operations remain
+available, although database flushing and a concurrent cache resize can delay
+them. Cancellation takes effect at processing checkpoints and cannot interrupt
+a blocked filesystem operation.
+
+Temporary databases are removed on normal completion or an export error. An
+abrupt shutdown can leave a `temp_utxo_*` directory and an `.incomplete` output
+file. These are not resumed or automatically deleted; remove abandoned files
+only after confirming that no export is using them.
 
 `dumptxoutset` takes some time to complete, independent of hardware and
 what parameter is chosen. Because of that it is recommended to increase the RPC

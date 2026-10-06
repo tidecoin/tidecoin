@@ -320,6 +320,10 @@ class MempoolClusterTest(BitcoinTestFramework):
 
     def test_options(self):
         node = self.nodes[0]
+        default_maxmempool = node.getmempoolinfo()['maxmempool']
+        assert default_maxmempool in (500_000_000, 1_024_000_000)
+        self.restart_node(0, extra_args=['-maxmempool=500'])
+        assert_equal(node.getmempoolinfo()['maxmempool'], 500_000_000)
         self.stop_node(0)
         for arg in ['-limitclustercount=0', '-limitclustercount=65', '-limitclustercount=9223372036854775807']:
             node.assert_start_raises_init_error([arg], 'Error: limitclustercount must be between 1 and 64')
@@ -333,6 +337,7 @@ class MempoolClusterTest(BitcoinTestFramework):
         self.restart_node(0, extra_args=['-maxmempool=0'])
         assert_equal(node.getmempoolinfo()['maxmempool'], 0)
         self.restart_node(0)
+        assert_equal(node.getmempoolinfo()['maxmempool'], default_maxmempool)
 
     @cleanup
     def test_tidecoin_policy_transition(self):

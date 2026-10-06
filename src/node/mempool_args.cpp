@@ -27,9 +27,6 @@ using common::AmountErrMsg;
 using kernel::MemPoolLimits;
 using kernel::MemPoolOptions;
 
-//! Maximum mempool size on 32-bit systems.
-static constexpr int MAX_32BIT_MEMPOOL_MB{500};
-
 namespace {
 void ApplyArgsManOptions(const ArgsManager& argsman, MemPoolLimits& mempool_limits)
 {
@@ -58,6 +55,13 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainP
             return util::Error{Untranslated(strprintf("-maxmempool must be between 0 and %d MB", max_mempool_mb))};
         }
         mempool_opts.max_size_bytes = *mb * 1'000'000;
+    }
+
+    // Validate inherited/default options too, not only an explicit -maxmempool.
+    if constexpr (sizeof(void*) == 4) {
+        if (mempool_opts.max_size_bytes > int64_t{MAX_32BIT_MEMPOOL_MB} * 1'000'000) {
+            return util::Error{Untranslated(strprintf("Maximum mempool size can't be over %u MB on 32-bit systems", MAX_32BIT_MEMPOOL_MB))};
+        }
     }
 
     if (auto hours = argsman.GetIntArg("-mempoolexpiry")) mempool_opts.expiry = std::chrono::hours{*hours};

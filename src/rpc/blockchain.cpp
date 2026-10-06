@@ -34,6 +34,7 @@
 #include <node/utxo_snapshot.h>
 #include <node/warnings.h>
 #include <primitives/transaction.h>
+#include <random.h>
 #include <rpc/server.h>
 #include <rpc/server_util.h>
 #include <rpc/util.h>
@@ -47,6 +48,7 @@
 #include <univalue.h>
 #include <util/check.h>
 #include <util/fs.h>
+#include <util/fs_helpers.h>
 #include <util/strencodings.h>
 #include <util/syserror.h>
 #include <util/translation.h>
@@ -3021,40 +3023,42 @@ static RPCHelpMan getblockfilter()
     };
 }
 
-/**
- * RAII class that disables the network in its constructor and enables it in its
- * destructor.
- */
-class NetworkDisable
+/** Protect rollback block/undo data independently for each export. */
+class TemporaryPruneLock
 {
-    CConnman& m_connman;
+    BlockManager& m_blockman;
+    const std::string m_name;
 public:
-    NetworkDisable(CConnman& connman) : m_connman(connman) {
-        m_connman.SetNetworkActive(false);
-        if (m_connman.GetNetworkActive()) {
-            throw JSONRPCError(RPC_MISC_ERROR, "Network activity could not be suspended.");
-        }
-    };
-    ~NetworkDisable() {
-        m_connman.SetNetworkActive(true);
-    };
+    TemporaryPruneLock(BlockManager& blockman, const std::string& name, int height)
+        : m_blockman(blockman), m_name(name)
+    {
+        LOCK(::cs_main);
+        m_blockman.UpdatePruneLock(m_name, {height});
+    }
+    ~TemporaryPruneLock()
+    {
+        LOCK(::cs_main);
+        m_blockman.DeletePruneLock(m_name);
+    }
 };
 
-/**
- * RAII class that temporarily rolls back the local chain in it's constructor
- * and rolls it forward again in it's destructor.
- */
-class TemporaryRollback
+/** Own only a newly created directory, never an existing database. */
+class TemporaryUTXODatabase
 {
-    ChainstateManager& m_chainman;
-    const CBlockIndex& m_invalidate_index;
+    const fs::path m_path;
 public:
-    TemporaryRollback(ChainstateManager& chainman, const CBlockIndex& index) : m_chainman(chainman), m_invalidate_index(index) {
-        InvalidateBlock(m_chainman, m_invalidate_index.GetBlockHash());
-    };
-    ~TemporaryRollback() {
-        ReconsiderBlock(m_chainman, m_invalidate_index.GetBlockHash());
-    };
+    explicit TemporaryUTXODatabase(const fs::path& path) : m_path(path)
+    {
+        if (!fs::create_directory(m_path)) {
+            throw JSONRPCError(RPC_DATABASE_ERROR, "Unable to create temporary UTXO database");
+        }
+    }
+    ~TemporaryUTXODatabase()
+    {
+        if (!DestroyDB(fs::PathToString(m_path))) {
+            LogWarning("Failed to clean up temporary UTXO database at %s; remove it manually", fs::PathToString(m_path));
+        }
+    }
 };
 
 /**
@@ -3066,13 +3070,13 @@ static RPCHelpMan dumptxoutset()
 {
     return RPCHelpMan{
         "dumptxoutset",
-        "Write the serialized UTXO set to a file. This can be used in loadtxoutset afterwards if this snapshot height is supported in the chainparams as well.\n\n"
-        "Unless the \"latest\" type is requested, the node will roll back to the requested height and network activity will be suspended during this process. "
-        "Because of this it is discouraged to interact with the node in any other way during the execution of this call to avoid inconsistent results and race conditions, particularly RPCs that interact with blockstorage.\n\n"
-        "This call may take several minutes. Make sure to use no RPC timeout (tidecoin-cli -rpcclienttimeout=0)",
+        "Write the serialized UTXO set to a file. This can be used in loadtxoutset afterwards if this snapshot height is supported in the chainparams as well.\n"
+        "Historical exports use a temporary UTXO database alongside the output file, keeping the active chain and network activity intact. Allow disk space for the copied UTXO set and output snapshot.\n"
+        "An unclean shutdown may leave a temp_utxo_* directory and an incomplete output requiring manual removal. Only one dumptxoutset call may run at a time.\n"
+        "This call may take several minutes. Use no RPC timeout (tidecoin-cli -rpcclienttimeout=0).",
         {
             {"path", RPCArg::Type::STR, RPCArg::Optional::NO, "Path to the output file. If relative, will be prefixed by datadir."},
-            {"type", RPCArg::Type::STR, RPCArg::Default(""), "The type of snapshot to create. Can be \"latest\" to create a snapshot of the current UTXO set or \"rollback\" to temporarily roll back the state of the node to a historical block before creating the snapshot of a historical UTXO set. This parameter can be omitted if a separate \"rollback\" named parameter is specified indicating the height or hash of a specific historical block. If \"rollback\" is specified and separate \"rollback\" named parameter is not specified, this will roll back to the latest valid snapshot block that can currently be loaded with loadtxoutset."},
+            {"type", RPCArg::Type::STR, RPCArg::Default(""), "The type of snapshot to create. Can be \"latest\" to create a snapshot of the current UTXO set or \"rollback\" to roll back a temporary copy of the UTXO set to a historical block before creating the snapshot of a historical UTXO set. This parameter can be omitted if a separate \"rollback\" named parameter is specified indicating the height or hash of a specific historical block. If \"rollback\" is specified and separate \"rollback\" named parameter is not specified, this will roll back to the latest valid snapshot block that can currently be loaded with loadtxoutset."},
             {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
                 {
                     {"rollback", RPCArg::Type::NUM, RPCArg::Optional::OMITTED,
@@ -3099,6 +3103,12 @@ static RPCHelpMan dumptxoutset()
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
+    // Bound temporary storage use and prevent concurrent writers to the same
+    // output/.incomplete path. Other RPCs and validation continue normally.
+    static Mutex dump_mutex;
+    TRY_LOCK(dump_mutex, dump_lock);
+    if (!dump_lock) throw JSONRPCError(RPC_MISC_ERROR, "UTXO snapshot export already in progress");
+
     NodeContext& node = EnsureAnyNodeContext(request.context);
     const CBlockIndex* tip{WITH_LOCK(::cs_main, return node.chainman->ActiveChain().Tip())};
     const CBlockIndex* target_index{nullptr};
@@ -3141,81 +3151,118 @@ static RPCHelpMan dumptxoutset()
             "Couldn't open file " + temppath.utf8string() + " for writing.");
     }
 
-    CConnman& connman = EnsureConnman(node);
-    const CBlockIndex* invalidate_index{nullptr};
-    std::optional<NetworkDisable> disable_network;
-    std::optional<TemporaryRollback> temporary_rollback;
-
-    // If the user wants to dump the txoutset of the current tip, we don't have
-    // to roll back at all
-    if (target_index != tip) {
-        // If the node is running in pruned mode we ensure all necessary block
-        // data is available before starting to roll back.
-        if (node.chainman->m_blockman.IsPruneMode()) {
-            LOCK(node.chainman->GetMutex());
-            const CBlockIndex* current_tip{node.chainman->ActiveChain().Tip()};
-            const CBlockIndex* first_block{node.chainman->m_blockman.GetFirstBlock(*current_tip, /*status_mask=*/BLOCK_HAVE_MASK)};
-            if (first_block->nHeight > target_index->nHeight) {
-                throw JSONRPCError(RPC_MISC_ERROR, "Could not roll back to requested height since necessary block data is already pruned.");
-            }
-        }
-
-        // Suspend network activity for the duration of the process when we are
-        // rolling back the chain to get a utxo set from a past height. We do
-        // this so we don't punish peers that send us that send us data that
-        // seems wrong in this temporary state. For example a normal new block
-        // would be classified as a block connecting an invalid block.
-        // Skip if the network is already disabled because this
-        // automatically re-enables the network activity at the end of the
-        // process which may not be what the user wants.
-        if (connman.GetNetworkActive()) {
-            disable_network.emplace(connman);
-        }
-
-        invalidate_index = WITH_LOCK(::cs_main, return node.chainman->ActiveChain().Next(target_index));
-        temporary_rollback.emplace(*node.chainman, *invalidate_index);
-    }
-
-    Chainstate* chainstate;
-    std::unique_ptr<CCoinsViewCursor> cursor;
-    CCoinsStats stats;
-    {
-        // Lock the chainstate before calling PrepareUtxoSnapshot, to be able
-        // to get a UTXO database cursor while the chain is pointing at the
-        // target block. After that, release the lock while calling
-        // WriteUTXOSnapshot. The cursor will remain valid and be used by
-        // WriteUTXOSnapshot to write a consistent snapshot even if the
-        // chainstate changes.
-        LOCK(node.chainman->GetMutex());
-        chainstate = &node.chainman->ActiveChainstate();
-        // In case there is any issue with a block being read from disk we need
-        // to stop here, otherwise the dump could still be created for the wrong
-        // height.
-        // The new tip could also not be the target block if we have a stale
-        // sister block of invalidate_index. This block (or a descendant) would
-        // be activated as the new tip and we would not get to new_tip_index.
-        if (target_index != chainstate->m_chain.Tip()) {
-            LogWarning("dumptxoutset failed to roll back to requested height, reverting to tip.\n");
-            throw JSONRPCError(RPC_MISC_ERROR, "Could not roll back to requested height.");
-        } else {
-            std::tie(cursor, stats, tip) = PrepareUTXOSnapshot(*chainstate, node.rpc_interruption_point);
-        }
-    }
-
-    UniValue result = WriteUTXOSnapshot(*chainstate,
-                                        cursor.get(),
-                                        &stats,
-                                        tip,
-                                        std::move(afile),
-                                        path,
-                                        temppath,
-                                        node.rpc_interruption_point);
+    Chainstate& chainstate{WITH_LOCK(::cs_main, return node.chainman->ActiveChainstate())};
+    UniValue result = snapshot_type == "latest"
+        ? CreateUTXOSnapshot(node, chainstate, std::move(afile), path, temppath)
+        : CreateRolledBackUTXOSnapshot(node, chainstate, target_index, std::move(afile), path, temppath);
     fs::rename(temppath, path);
 
-    result.pushKV("path", path.utf8string());
     return result;
 },
     };
+}
+
+UniValue CreateRolledBackUTXOSnapshot(
+    NodeContext& node,
+    Chainstate& chainstate,
+    const CBlockIndex* target,
+    AutoFile&& afile,
+    const fs::path& path,
+    const fs::path& tmppath)
+{
+    const std::string name{"temp_utxo_" + GetRandHash().ToString()};
+    const fs::path temp_path{tmppath.parent_path() / name};
+    if (!CheckDiskSpace(tmppath.parent_path())) {
+        throw JSONRPCError(RPC_DATABASE_ERROR, "Insufficient disk space for temporary UTXO database");
+    }
+    TemporaryUTXODatabase cleanup{temp_path};
+    CCoinsViewDB temp_db{{.path = temp_path, .cache_bytes = 0, .memory_only = false,
+                         .wipe_data = false, .obfuscate = false}, CoinsViewOptions{}};
+    std::optional<TemporaryPruneLock> prune_lock;
+    const CBlockIndex* tip;
+
+    auto flush = [&](CCoinsViewCache& cache) {
+        node.rpc_interruption_point();
+        if (!CheckDiskSpace(temp_path) || !cache.Flush()) {
+            throw JSONRPCError(RPC_DATABASE_ERROR, "Unable to flush temporary UTXO database");
+        }
+    };
+
+    LogInfo("Copying current UTXO set to temporary database %s", fs::PathToString(temp_path));
+    {
+        CCoinsViewCache copy_cache{&temp_db};
+        std::unique_ptr<CCoinsViewCursor> cursor;
+        {
+            LOCK(::cs_main);
+            tip = chainstate.m_chain.Tip();
+            // Target selection precedes this lock: a concurrent reorg must not
+            // turn an export into a snapshot of another block at the same height.
+            if (!tip || !target || target->nHeight > tip->nHeight || tip->GetAncestor(target->nHeight) != target) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "Snapshot target is no longer on the captured chain");
+            }
+            if (tip != target && node.chainman->m_blockman.IsPruneMode()) {
+                const auto* first = node.chainman->m_blockman.GetFirstBlock(*tip, BLOCK_HAVE_MASK);
+                if (first->nHeight > target->nHeight + 1) {
+                    throw JSONRPCError(RPC_MISC_ERROR, "Could not roll back to requested height since necessary block data is already pruned.");
+                }
+                prune_lock.emplace(node.chainman->m_blockman, name, target->nHeight + 1);
+            }
+            if (!chainstate.ForceFlushStateToDisk()) {
+                throw JSONRPCError(RPC_DATABASE_ERROR, "Unable to flush chainstate");
+            }
+            cursor = chainstate.CoinsDB().CursorWithCacheLock();
+        }
+        copy_cache.SetBestBlock(tip->GetBlockHash());
+        size_t coins_count{0};
+        while (cursor->Valid()) {
+            node.rpc_interruption_point();
+            COutPoint key;
+            Coin coin;
+            if (!cursor->GetKey(key) || !cursor->GetValue(coin)) {
+                throw JSONRPCError(RPC_DATABASE_ERROR, "Unable to read UTXO set");
+            }
+            copy_cache.AddCoin(key, std::move(coin), false);
+            if (++coins_count % 100'000 == 0 || copy_cache.DynamicMemoryUsage() >= 16 * 1024 * 1024) flush(copy_cache);
+            cursor->Next();
+        }
+        // Release the source DB before any rollback operation acquires cs_main.
+        cursor.reset();
+        flush(copy_cache);
+        LogInfo("UTXO set copy complete: %u coins", coins_count);
+    }
+
+    LogInfo("Rolling back temporary UTXO database from height %d to %d", tip->nHeight, target->nHeight);
+    CCoinsViewCache rollback_cache{&temp_db};
+    rollback_cache.SetBestBlock(tip->GetBlockHash());
+    const CBlockIndex* block_index{tip};
+    const size_t total_blocks{static_cast<size_t>(tip->nHeight - target->nHeight)};
+    size_t blocks_processed{0};
+    size_t last_progress{0};
+    while (block_index != target) {
+        node.rpc_interruption_point();
+        CBlock block;
+        if (!node.chainman->m_blockman.ReadBlock(block, *block_index)) {
+            throw JSONRPCError(RPC_INTERNAL_ERROR, strprintf("Failed to read block at height %d", block_index->nHeight));
+        }
+        const auto result{WITH_LOCK(::cs_main, return chainstate.DisconnectBlock(block, block_index, rollback_cache))};
+        if (result != DISCONNECT_OK) {
+            throw JSONRPCError(RPC_INTERNAL_ERROR, strprintf("Failed to roll back block at height %d", block_index->nHeight));
+        }
+        ++blocks_processed;
+        const size_t progress{blocks_processed * 100 / total_blocks};
+        if (progress >= last_progress + 5 || rollback_cache.DynamicMemoryUsage() >= 16 * 1024 * 1024) {
+            flush(rollback_cache);
+            last_progress = progress;
+        }
+        block_index = block_index->pprev;
+    }
+    CHECK_NONFATAL(rollback_cache.GetBestBlock() == target->GetBlockHash());
+    flush(rollback_cache);
+
+    auto stats{GetUTXOStats(&temp_db, node.chainman->m_blockman, CoinStatsHashType::HASH_SERIALIZED, node.rpc_interruption_point)};
+    if (!stats) throw JSONRPCError(RPC_INTERNAL_ERROR, "Unable to compute UTXO statistics");
+    auto cursor{temp_db.Cursor()};
+    return WriteUTXOSnapshot(chainstate, cursor.get(), &*stats, target, std::move(afile), path, tmppath, node.rpc_interruption_point);
 }
 
 std::tuple<std::unique_ptr<CCoinsViewCursor>, CCoinsStats, const CBlockIndex*>

@@ -116,6 +116,7 @@ void CCoinsViewDB::ResizeCache(size_t new_cache_size)
     // reset.
     if (!m_db_params.memory_only) {
         LOCK(m_db_mutex);
+        const std::lock_guard cursor_lock{m_cursor_mutex};
         // Have to do a reset first to get the original `m_db` state to release its
         // filesystem lock.
         m_db.reset();
@@ -294,6 +295,30 @@ std::unique_ptr<CCoinsViewCursor> CCoinsViewDB::Cursor() const
         i->keyTmp.first = 0; // Make sure Valid() and GetKey() return false
     }
     return i;
+}
+
+namespace {
+class CacheLockedCoinsCursor final : public CCoinsViewCursor
+{
+    // Destroy the iterator before releasing the cache-reopen lock.
+    std::unique_lock<std::mutex> m_lock;
+    std::unique_ptr<CCoinsViewCursor> m_cursor;
+public:
+    CacheLockedCoinsCursor(std::unique_lock<std::mutex> lock, std::unique_ptr<CCoinsViewCursor> cursor)
+        : CCoinsViewCursor(cursor->GetBestBlock()), m_lock(std::move(lock)), m_cursor(std::move(cursor)) {}
+    bool GetKey(COutPoint& key) const override { return m_cursor->GetKey(key); }
+    bool GetValue(Coin& coin) const override { return m_cursor->GetValue(coin); }
+    bool Valid() const override { return m_cursor->Valid(); }
+    void Next() override { m_cursor->Next(); }
+};
+}
+
+std::unique_ptr<CCoinsViewCursor> CCoinsViewDB::CursorWithCacheLock() const
+{
+    AssertLockHeld(cs_main);
+    std::unique_lock lock{m_cursor_mutex};
+    auto cursor{Cursor()};
+    return std::make_unique<CacheLockedCoinsCursor>(std::move(lock), std::move(cursor));
 }
 
 bool CCoinsViewDBCursor::GetKey(COutPoint &key) const

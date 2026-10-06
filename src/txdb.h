@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -53,6 +54,8 @@ protected:
     CoinsViewOptions m_options;
     //! Prevents compaction from using m_db while ResizeCache() replaces it.
     Mutex m_db_mutex;
+    //! Pins a database while an export copies its snapshot without cs_main.
+    mutable std::mutex m_cursor_mutex;
     std::unique_ptr<CDBWrapper> m_db;
     std::shared_future<void> m_compaction;
 public:
@@ -65,6 +68,9 @@ public:
     std::vector<uint256> GetHeadBlocks() const override;
     bool BatchWrite(CoinsViewCacheCursor& cursor, const uint256 &hashBlock) override;
     std::unique_ptr<CCoinsViewCursor> Cursor() const override;
+    /** Pin the DB against cache reopening. The caller must hold cs_main when
+     * creating the cursor, and destroy it before acquiring cs_main again. */
+    std::unique_ptr<CCoinsViewCursor> CursorWithCacheLock() const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     //! Whether an unsupported database format is used.
     bool NeedsUpgrade();

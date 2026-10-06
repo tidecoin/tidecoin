@@ -288,3 +288,23 @@ Some previously accepted connected groups exceeding the new cluster limits will 
 including when reloading unconfirmed transactions. Conversely, small chains longer than 25 entries
 can fit the new policy. Older peers may not relay them. These changes do not alter block consensus
 or transaction/wallet formats and require no reindex.
+
+### Mempool default on 32-bit builds
+
+The default mempool budget is now 500 MB on 32-bit builds, matching their existing
+maximum. The 64-bit default remains 1,024 MB, and the blocks-only default remains
+10 MB. The 32-bit cap also applies to inherited budgets when `-maxmempool` is
+omitted. These are local memory settings; consensus and cluster limits are unchanged.
+
+### Historical UTXO snapshot export
+
+`dumptxoutset` historical exports now copy the UTXO database and undo blocks in
+that temporary copy. They no longer invalidate the active chain or disconnect
+peers, and they work when a competing stale branch exists. Existing RPC arguments
+and snapshot formats are preserved. No reindex or consensus change is required.
+
+The temporary database requires additional disk space alongside the output file.
+Required block and undo data are protected from pruning during export; data that
+was already pruned remains unavailable. Only one export can run at a time.
+Cancellation is cooperative, and an abrupt shutdown can leave temporary files
+requiring manual cleanup. See [snapshot export documentation](assumeutxo.md).

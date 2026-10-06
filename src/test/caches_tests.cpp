@@ -149,6 +149,28 @@ BOOST_AUTO_TEST_CASE(mempool_option_byte_conversion)
     }
 }
 
+BOOST_AUTO_TEST_CASE(mempool_default_and_inherited_options)
+{
+    ArgsManager args;
+    const auto chainparams{CreateChainParams(args, ChainType::REGTEST)};
+    kernel::MemPoolOptions options;
+    const int64_t expected_bytes{sizeof(void*) == 4 ? 500'000'000 : 1'024'000'000};
+    BOOST_CHECK_EQUAL(options.max_size_bytes, expected_bytes);
+    BOOST_REQUIRE(ApplyArgsManOptions(args, *chainparams, options));
+    BOOST_CHECK_EQUAL(options.max_size_bytes, expected_bytes);
+
+    // A caller-provided budget must obey the limit even without an argument.
+    options.max_size_bytes = 500'000'000;
+    BOOST_CHECK(ApplyArgsManOptions(args, *chainparams, options));
+    options.max_size_bytes = 500'000'001;
+    BOOST_CHECK_EQUAL(ApplyArgsManOptions(args, *chainparams, options).has_value(), sizeof(void*) != 4);
+
+    // An explicit valid setting replaces an oversized inherited budget.
+    args.ForceSetArg("-maxmempool", "500");
+    BOOST_REQUIRE(ApplyArgsManOptions(args, *chainparams, options));
+    BOOST_CHECK_EQUAL(options.max_size_bytes, 500'000'000);
+}
+
 BOOST_AUTO_TEST_CASE(oversized_dbcache_warning)
 {
     // Division must precede multiplication even at the largest representable RAM size.
