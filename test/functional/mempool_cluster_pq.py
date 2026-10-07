@@ -102,6 +102,17 @@ class ClusterPQTest(BitcoinTestFramework):
                     row['measurements'].append(obs)
                     if decoded['weight'] <= 800000:
                         assert accepted['allowed'], obs
+                        if kind == 'bech32pq' and label == 'payment':
+                            # Warm caches with a valid witness-v1 transaction;
+                            # a different witness must still be verified.
+                            assert node.testmempoolaccept([signed['hex']], 0)[0]['allowed']
+                            invalid = tx_from_hex(signed['hex'])
+                            signature = bytearray(invalid.wit.vtxinwit[0].scriptWitness.stack[0])
+                            signature[0] ^= 0x80
+                            invalid.wit.vtxinwit[0].scriptWitness.stack[0] = bytes(signature)
+                            rejected = node.testmempoolaccept([invalid.serialize().hex()], 0)[0]
+                            assert not rejected['allowed'], rejected
+                            assert 'script' in rejected['reject-reason'], rejected
                         node.sendrawtransaction(signed['hex'], 0)
                     else:
                         assert_equal(accepted['reject-reason'], 'tx-size')

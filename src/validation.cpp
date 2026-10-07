@@ -276,6 +276,25 @@ bool CheckSequenceLocksAtTip(CBlockIndex* tip,
 // Returns the script flags which should be checked for a given block
 static unsigned int GetBlockScriptFlags(const CBlockIndex& block_index, const ChainstateManager& chainman);
 
+static constexpr unsigned int AUXPOW_SCRIPT_FLAGS{SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_SHA512};
+
+static unsigned int GetAuxpowScriptFlags(int height, const Consensus::Params& params)
+{
+    return height >= params.nAuxpowStartHeight ? AUXPOW_SCRIPT_FLAGS : 0;
+}
+
+static unsigned int GetMempoolScriptFlags(const CBlockIndex& tip, const ChainstateManager& chainman)
+{
+    return (GetBlockScriptFlags(tip, chainman) & ~AUXPOW_SCRIPT_FLAGS) |
+           GetAuxpowScriptFlags(tip.nHeight + 1, chainman.GetConsensus());
+}
+
+static bool AuxpowScriptFlagsChanged(const CBlockIndex* old_tip, const CBlockIndex* new_tip, const Consensus::Params& params)
+{
+    return GetAuxpowScriptFlags(old_tip ? old_tip->nHeight + 1 : 0, params) !=
+           GetAuxpowScriptFlags(new_tip ? new_tip->nHeight + 1 : 0, params);
+}
+
 static void LimitMempoolSize(CTxMemPool& pool, CCoinsViewCache& coins_cache)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main, pool.cs)
 {
@@ -308,7 +327,8 @@ static bool IsCurrentForFeeEstimation(Chainstate& active_chainstate) EXCLUSIVE_L
 
 void Chainstate::MaybeUpdateMempoolForReorg(
     DisconnectedBlockTransactions& disconnectpool,
-    bool fAddToMempool)
+    bool fAddToMempool,
+    bool recheck_scripts)
 {
     if (!m_mempool) return;
 
@@ -391,6 +411,18 @@ void Chainstate::MaybeUpdateMempoolForReorg(
                     return true;
                 }
             }
+        }
+        if (recheck_scripts) {
+            // A change of activation state can invalidate existing entries in
+            // either direction. Include unconfirmed parents in the coin view;
+            // removeForReorg also removes descendants of entries that fail.
+            CCoinsViewMemPool view_mempool{&CoinsTip(), *m_mempool};
+            const CCoinsViewCache view{&view_mempool};
+            if (!view.HaveInputs(tx)) return true;
+            PrecomputedTransactionData txdata;
+            TxValidationState state;
+            if (!CheckInputScripts(tx, state, view, GetMempoolScriptFlags(*m_chain.Tip(), m_chainman),
+                                   true, true, txdata, m_chainman.m_validation_cache)) return true;
         }
         // Transaction is still valid and cached LockPoints are updated.
         return false;
@@ -1194,11 +1226,7 @@ bool MemPoolAccept::PolicyScriptChecks(const ATMPArgs& args, Workspace& ws)
     const int next_height = tip ? tip->nHeight + 1 : 0;
     const Consensus::Params& consensus_params = m_active_chainstate.m_chainman.GetConsensus();
     unsigned int scriptVerifyFlags = STANDARD_SCRIPT_VERIFY_FLAGS;
-    if (next_height >= consensus_params.nAuxpowStartHeight) {
-        scriptVerifyFlags |= SCRIPT_VERIFY_PQ_STRICT;
-        scriptVerifyFlags |= SCRIPT_VERIFY_WITNESS_V1_512;
-        scriptVerifyFlags |= SCRIPT_VERIFY_SHA512;
-    }
+    scriptVerifyFlags |= GetAuxpowScriptFlags(next_height, consensus_params);
 
     // Check input scripts and signatures.
     // This is done last to help prevent CPU exhaustion denial-of-service attacks.
@@ -1222,25 +1250,16 @@ bool MemPoolAccept::ConsensusScriptChecks(const ATMPArgs& args, Workspace& ws)
     const Txid& hash = ws.m_hash;
     TxValidationState& state = ws.m_state;
 
-    // Check again against the current block tip's script verification
-    // flags to cache our script execution flags. This is, of course,
-    // useless if the next block has different script flags from the
-    // previous one, but because the cache tracks script flags for us it
-    // will auto-invalidate and we'll just have a few blocks of extra
-    // misses on soft-fork activation.
-    //
-    // This is also useful in case of bugs in the standard flags that cause
-    // transactions to pass as valid when they're actually invalid. For
-    // instance the STRICTENC flag was incorrectly allowing certain
-    // CHECKSIG NOT scripts to pass, even though they were invalid.
-    //
-    // There is a similar check in CreateNewBlock() to prevent creating
-    // invalid blocks (using TestBlockValidity), however allowing such
-    // transactions into the mempool can be exploited as a DoS attack.
-    unsigned int currentBlockScriptVerifyFlags{GetBlockScriptFlags(*m_active_chainstate.m_chain.Tip(), m_active_chainstate.m_chainman)};
-    if (!CheckInputsFromMempoolAndCache(tx, state, m_view, m_pool, currentBlockScriptVerifyFlags,
+    // Check consensus rules separately from policy and cache the script result.
+    // Retain the tip's flags for existing deployments, but use the next block's
+    // AuxPoW rules: activation enables signatures that the tip's rules reject.
+    // The complete-script cache includes flags, so results from different
+    // activation states remain separate.
+    const CBlockIndex& tip{*Assert(m_active_chainstate.m_chain.Tip())};
+    const unsigned int consensus_flags{GetMempoolScriptFlags(tip, m_active_chainstate.m_chainman)};
+    if (!CheckInputsFromMempoolAndCache(tx, state, m_view, m_pool, consensus_flags,
                                         ws.m_precomputed_txdata, m_active_chainstate.CoinsTip(), GetValidationCache())) {
-        LogPrintf("BUG! PLEASE REPORT THIS! CheckInputScripts failed against latest-block but not STANDARD flags %s, %s\n", hash.ToString(), state.ToString());
+        LogPrintf("BUG! PLEASE REPORT THIS! CheckInputScripts failed against consensus but not STANDARD flags %s, %s\n", hash.ToString(), state.ToString());
         return Assume(false);
     }
 
@@ -2354,12 +2373,8 @@ static unsigned int GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
         flags |= SCRIPT_VERIFY_NULLDUMMY;
     }
 
-    // Enforce post-quantum strict signatures after auxpow activation height.
-    if (block_index.nHeight >= consensusparams.nAuxpowStartHeight) {
-        flags |= SCRIPT_VERIFY_PQ_STRICT;
-        flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-        flags |= SCRIPT_VERIFY_SHA512;
-    }
+    // Activate additional PQ schemes, strict Falcon verification and new scripts.
+    flags |= GetAuxpowScriptFlags(block_index.nHeight, consensusparams);
 
     return flags;
 }
@@ -3321,7 +3336,7 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex*
         if (!DisconnectTip(state, &disconnectpool)) {
             // This is likely a fatal error, but keep the mempool consistent,
             // just in case. Only remove from the mempool in this case.
-            MaybeUpdateMempoolForReorg(disconnectpool, false);
+            MaybeUpdateMempoolForReorg(disconnectpool, false, AuxpowScriptFlagsChanged(pindexOldTip, m_chain.Tip(), m_chainman.GetConsensus()));
 
             // If we're unable to disconnect a block during normal operation,
             // then that is a failure of our local system -- we should abort
@@ -3365,7 +3380,7 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex*
                     // A system error occurred (disk space, database error, ...).
                     // Make the mempool consistent with the current tip, just in case
                     // any observers try to use it before shutdown.
-                    MaybeUpdateMempoolForReorg(disconnectpool, false);
+                    MaybeUpdateMempoolForReorg(disconnectpool, false, AuxpowScriptFlagsChanged(pindexOldTip, m_chain.Tip(), m_chainman.GetConsensus()));
                     return false;
                 }
             } else {
@@ -3379,10 +3394,11 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex*
         }
     }
 
-    if (fBlocksDisconnected) {
+    const bool recheck_scripts{AuxpowScriptFlagsChanged(pindexOldTip, m_chain.Tip(), m_chainman.GetConsensus())};
+    if (fBlocksDisconnected || recheck_scripts) {
         // If any blocks were disconnected, disconnectpool may be non empty.  Add
         // any disconnected transactions back to the mempool.
-        MaybeUpdateMempoolForReorg(disconnectpool, true);
+        MaybeUpdateMempoolForReorg(disconnectpool, true, recheck_scripts);
     }
     if (m_mempool) m_mempool->check(this->CoinsTip(), this->m_chain.Height() + 1);
 
@@ -3697,7 +3713,8 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* pinde
         // transactions back to the mempool if disconnecting was successful,
         // and we're not doing a very deep invalidation (in which case
         // keeping the mempool up to date is probably futile anyway).
-        MaybeUpdateMempoolForReorg(disconnectpool, /* fAddToMempool = */ (++disconnected <= 10) && ret);
+        MaybeUpdateMempoolForReorg(disconnectpool, /*fAddToMempool=*/(++disconnected <= 10) && ret,
+                                  AuxpowScriptFlagsChanged(disconnected_tip, m_chain.Tip(), m_chainman.GetConsensus()));
         if (!ret) return false;
         CBlockIndex* new_tip{m_chain.Tip()};
         assert(disconnected_tip->pprev == new_tip);

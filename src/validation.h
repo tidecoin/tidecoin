@@ -834,10 +834,13 @@ protected:
      *
      * Passing fAddToMempool=false will skip trying to add the transactions back,
      * and instead just erase from the mempool as needed.
+     * Passing recheck_scripts=true also checks existing entries against the new
+     * next-block script rules when AuxPoW activation state changes.
      */
     void MaybeUpdateMempoolForReorg(
         DisconnectedBlockTransactions& disconnectpool,
-        bool fAddToMempool) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
+        bool fAddToMempool,
+        bool recheck_scripts) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
 
     /** Check warning conditions and do some notifications on new chain tip set. */
     void UpdateTip(const CBlockIndex* pindexNew)

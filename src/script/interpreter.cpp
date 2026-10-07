@@ -1430,10 +1430,24 @@ bool GenericTransactionSignatureChecker<T>::VerifyPostQuantumSignature(const std
 }
 
 template <class T>
+bool GenericTransactionSignatureChecker<T>::VerifyPostQuantumSignature512(const std::vector<unsigned char>& vchSig, const CPubKey& pubkey, const uint512& sighash) const
+{
+    // Witness v1 always uses strict verification, regardless of m_allow_legacy.
+    return pubkey.Verify512(sighash, vchSig, /*legacy_mode=*/false);
+}
+
+template <class T>
 bool GenericTransactionSignatureChecker<T>::CheckPostQuantumSignature(const std::vector<unsigned char>& vchSigIn, const std::vector<unsigned char>& vchPubKey, const CScript& scriptCode, SigVersion sigversion) const
 {
     CPubKey pubkey(vchPubKey);
     if (!pubkey.IsValid()) {
+        return false;
+    }
+
+    // Legacy verification mode is selected before AuxPoW activation, when only
+    // Falcon-512 may authorize signatures. Check eligibility before either
+    // verification hook can consult its cache, including the 512-bit hook.
+    if (m_allow_legacy && pubkey[0] != pq::kSchemePrefixFalcon512) {
         return false;
     }
 
@@ -1455,7 +1469,7 @@ bool GenericTransactionSignatureChecker<T>::CheckPostQuantumSignature(const std:
             return false;
         }
         uint512 sighash = SignatureHash512(scriptCode, *txTo, nIn, nHashType, amount, this->txdata);
-        if (!pubkey.Verify512(sighash, vchSig)) {
+        if (!VerifyPostQuantumSignature512(vchSig, pubkey, sighash)) {
             return false;
         }
         return true;

@@ -29,6 +29,8 @@ FUZZ_TARGET(script_flags)
 
         unsigned int fuzzed_flags;
         ds >> fuzzed_flags;
+        // Activation flags can both enable and restrict script behavior.
+        fuzzed_flags &= ~(SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_SHA512);
 
         std::vector<CTxOut> spent_outputs;
         for (unsigned i = 0; i < tx.vin.size(); ++i) {
@@ -45,7 +47,8 @@ FUZZ_TARGET(script_flags)
 
         for (unsigned i = 0; i < tx.vin.size(); ++i) {
             const CTxOut& prevout = txdata.m_spent_outputs.at(i);
-            const TransactionSignatureChecker checker{&tx, i, prevout.nValue, txdata, MissingDataBehavior::ASSERT_FAIL};
+            const bool allow_legacy{!(verify_flags & SCRIPT_VERIFY_PQ_STRICT)};
+            const TransactionSignatureChecker checker{&tx, i, prevout.nValue, txdata, MissingDataBehavior::ASSERT_FAIL, allow_legacy};
 
             ScriptError serror;
             const bool ret = VerifyScript(tx.vin.at(i).scriptSig, prevout.scriptPubKey, &tx.vin.at(i).scriptWitness, verify_flags, checker, &serror);

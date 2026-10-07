@@ -290,7 +290,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_single_scheme_p2wsh_and_wrapped)
         pq::SchemeId::MLDSA_87,
     };
 
-    const unsigned int flags = SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH;
+    const unsigned int flags = SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_PQ_STRICT;
     constexpr CAmount amount{1};
     const std::vector<std::pair<int, int>> cases{{1, 1}, {2, 3}, {3, 5}, {15, 15}, {20, 20}};
 
@@ -345,7 +345,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_mixed_scheme)
     const CScript witness_script = GetScriptForMultisig(/*nRequired=*/2, pubs);
     const CScript script_pubkey = GetScriptForDestination(WitnessV0ScriptHash(witness_script));
 
-    const unsigned int flags = SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH;
+    const unsigned int flags = SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_PQ_STRICT;
     const bool allow_legacy = !(flags & SCRIPT_VERIFY_PQ_STRICT);
     constexpr CAmount amount{1};
 
@@ -621,7 +621,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_committed_hash_single_scheme)
         pq::SchemeId::MLDSA_65,
         pq::SchemeId::MLDSA_87,
     };
-    const unsigned int flags = SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH;
+    const unsigned int flags = SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_PQ_STRICT;
     constexpr CAmount amount{1};
     const std::vector<std::pair<int, int>> cases{{1, 1}, {2, 3}, {3, 5}, {15, 15}, {20, 20}};
 
@@ -664,7 +664,7 @@ BOOST_AUTO_TEST_CASE(pq_multisig_committed_hash_mixed_scheme)
         }
     }
 
-    const unsigned int flags = SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH;
+    const unsigned int flags = SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_PQ_STRICT;
     constexpr CAmount amount{1};
 
     const auto keys3 = MakeKeys(schemes3, /*tag_base=*/0xD0);

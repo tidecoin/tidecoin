@@ -38,8 +38,10 @@ Post-Quantum Cryptography
 Multi-scheme signature support
 ------------------------------
 
-Tidecoin supports five NIST-standardized post-quantum signature schemes,
-all active on the network:
+Tidecoin supports five post-quantum signature schemes. Before AuxPoW activation,
+only Falcon-512 can authorize transaction signatures. Falcon-1024 and the three
+ML-DSA schemes become eligible at the configured AuxPoW activation height, when
+strict Falcon verification also starts. AuxPoW remains disabled on mainnet.
 
 | Scheme | Prefix | Standard | Signature size |
 |--------|--------|----------|----------------|
@@ -49,9 +51,10 @@ all active on the network:
 | ML-DSA-65 | 0x0A | NIST FIPS 204 | 3,309 bytes |
 | ML-DSA-87 | 0x0B | NIST FIPS 204 | 4,627 bytes |
 
-Falcon-512 has been the default scheme since genesis (December 27, 2020). All
-five schemes are available for new addresses. No ECDSA exists anywhere in the
-protocol.
+Falcon-512 has been the default scheme since genesis (December 27, 2020). Wallet
+address generation follows scheme activation. This release corrects early
+acceptance of additional schemes in transaction and block validation; current
+public-key prefix and length parsing is unchanged.
 
 Legacy and strict Falcon verification
 --------------------------------------
@@ -295,6 +298,14 @@ The default mempool budget is now 500 MB on 32-bit builds, matching their existi
 maximum. The 64-bit default remains 1,024 MB, and the blocks-only default remains
 10 MB. The 32-bit cap also applies to inherited budgets when `-maxmempool` is
 omitted. These are local memory settings; consensus and cluster limits are unchanged.
+
+### Witness-v1 signature verification cache
+
+PQ witness-v1 signatures now use the existing bounded individual-signature cache,
+avoiding repeated verification of the same valid signature. Cache entries use the
+full 512-bit signature hash and a separate domain from 256-bit signature checks.
+Strict verification, consensus rules, transaction formats and cache-size settings
+are unchanged.
 
 ### Historical UTXO snapshot export
 

@@ -109,8 +109,8 @@ enum : uint32_t {
     //
     SCRIPT_VERIFY_CONST_SCRIPTCODE = (1U << 12),
 
-    // Reject legacy Falcon-512 signatures (pre-auxpow format).
-    //
+    // Activate additional PQ schemes and reject legacy Falcon-512 signatures.
+    // Without this flag, only Falcon-512 may authorize signature checks.
     SCRIPT_VERIFY_PQ_STRICT = (1U << 13),
 
     // Enable witness v1 64-byte scripthash validation (post-auxpow).
@@ -241,11 +241,14 @@ private:
     unsigned int nIn;
     const CAmount amount;
     const PrecomputedTransactionData* txdata;
+    // Preactivation mode: Falcon-512 only, with legacy verification permitted.
+    // Chain-connected callers derive this from SCRIPT_VERIFY_PQ_STRICT.
     const bool m_allow_legacy;
     mutable SigHashCache m_sighash_cache;
 
 protected:
     virtual bool VerifyPostQuantumSignature(const std::vector<unsigned char>& vchSig, const CPubKey& vchPubKey, const uint256& sighash) const;
+    virtual bool VerifyPostQuantumSignature512(const std::vector<unsigned char>& vchSig, const CPubKey& vchPubKey, const uint512& sighash) const;
     bool AllowLegacy() const { return m_allow_legacy; }
 
 public:

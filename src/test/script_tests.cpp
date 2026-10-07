@@ -147,7 +147,7 @@ void DoTest(const CScript& scriptPubKey, const CScript& scriptSig, const CScript
         uint32_t combined_flags{expect ? (flags & ~extra_flags) : (flags | extra_flags)};
         // Activation-style flags can intentionally change script semantics.
         // Keep them fixed in monotonicity fuzz checks.
-        if ((combined_flags ^ flags) & (SCRIPT_VERIFY_SHA512 | SCRIPT_VERIFY_WITNESS_V1_512)) continue;
+        if ((combined_flags ^ flags) & (SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_SHA512 | SCRIPT_VERIFY_WITNESS_V1_512)) continue;
         // Weed out some invalid flag combinations.
         if (combined_flags & SCRIPT_VERIFY_CLEANSTACK && ~combined_flags & (SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS)) continue;
         if (combined_flags & SCRIPT_VERIFY_WITNESS && ~combined_flags & SCRIPT_VERIFY_P2SH) continue;

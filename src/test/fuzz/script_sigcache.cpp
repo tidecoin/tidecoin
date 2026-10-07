@@ -42,7 +42,11 @@ FUZZ_TARGET(script_sigcache, .init = initialize_script_sigcache)
     const auto pub_key = ConsumeDeserializable<CPubKey>(fuzzed_data_provider);
     if (pub_key) {
         if (!random_bytes.empty()) {
-            (void)caching_transaction_signature_checker.VerifyPostQuantumSignature(random_bytes, *pub_key, ConsumeUInt256(fuzzed_data_provider));
+            if (fuzzed_data_provider.ConsumeBool()) {
+                (void)caching_transaction_signature_checker.VerifyPostQuantumSignature512(random_bytes, *pub_key, ConsumeUInt512(fuzzed_data_provider));
+            } else {
+                (void)caching_transaction_signature_checker.VerifyPostQuantumSignature(random_bytes, *pub_key, ConsumeUInt256(fuzzed_data_provider));
+            }
         }
     }
 }

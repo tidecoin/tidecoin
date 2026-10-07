@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <addresstype.h>
 #include <consensus/validation.h>
 #include <key.h>
 #include <random.h>
@@ -12,6 +13,8 @@
 #include <txmempool.h>
 #include <util/chaintype.h>
 #include <validation.h>
+
+#include <algorithm>
 
 #include <boost/test/unit_test.hpp>
 
@@ -27,6 +30,254 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
                        std::vector<CScriptCheck>* pvChecks = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 BOOST_AUTO_TEST_SUITE(txvalidationcache_tests)
+
+BOOST_FIXTURE_TEST_CASE(pq_scheme_activation, BasicTestingSetup)
+{
+    CKey falcon;
+    falcon.MakeNewKey(pq::SchemeId::FALCON_512);
+    for (const auto* scheme : pq::kKnownSchemes) {
+        BOOST_TEST_CONTEXT(scheme->name) {
+            CKey key;
+            key.MakeNewKey(scheme->id);
+            const auto pubkey = ToByteVector(key.GetPubKey());
+            const bool is_falcon{scheme->id == pq::SchemeId::FALCON_512};
+            for (const auto version : {SigVersion::BASE, SigVersion::WITNESS_V0, SigVersion::WITNESS_V1_512}) {
+                for (const auto opcode : {OP_CHECKSIG, OP_CHECKSIGVERIFY, OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY}) {
+                    const bool multisig{opcode == OP_CHECKMULTISIG || opcode == OP_CHECKMULTISIGVERIFY};
+                    const bool verify{opcode == OP_CHECKSIGVERIFY || opcode == OP_CHECKMULTISIGVERIFY};
+                    for (bool inspect_false : {false, true}) {
+                        if (verify && inspect_false) continue;
+                        CScript script;
+                        if (multisig) script << OP_1;
+                        script << pubkey;
+                        if (multisig) script << OP_1;
+                        script << opcode;
+                        if (verify) script << OP_TRUE;
+                        if (inspect_false) script << OP_NOT;
+                        CMutableTransaction mtx;
+                        mtx.vin.resize(1);
+                        mtx.vout.emplace_back(9'000, CScript{} << OP_TRUE);
+                        constexpr CAmount amount{10'000};
+                        std::vector<unsigned char> sig;
+                        if (version == SigVersion::WITNESS_V1_512) {
+                            BOOST_REQUIRE(key.Sign512(SignatureHash512(script, mtx, 0, SIGHASH_ALL, amount), sig));
+                        } else {
+                            BOOST_REQUIRE(key.Sign(SignatureHash(script, mtx, 0, SIGHASH_ALL, amount, version), sig));
+                        }
+                        sig.push_back(SIGHASH_ALL);
+                        const CTransaction tx{mtx};
+                        SignatureCache cache{1 << 20};
+                        PrecomputedTransactionData txdata;
+                        // Populate caches after activation, then revisit the same
+                        // signature before activation, including the 512-bit path.
+                        for (bool active : {true, false, true}) {
+                            const unsigned int flags{active ? SCRIPT_VERIFY_PQ_STRICT : SCRIPT_VERIFY_NONE};
+                            CachingTransactionSignatureChecker checker{&tx, 0, amount, true, cache, txdata, !active};
+                            std::vector<std::vector<unsigned char>> stack;
+                            if (multisig) stack.emplace_back();
+                            stack.push_back(sig);
+                            ScriptError error;
+                            const bool success{EvalScript(stack, script, flags, checker, version, &error)};
+                            const bool eligible{active || is_falcon};
+                            BOOST_CHECK_EQUAL(success, !verify || eligible);
+                            if (success) {
+                                BOOST_REQUIRE_EQUAL(stack.size(), 1U);
+                                BOOST_CHECK_EQUAL(!stack.back().empty(), inspect_false ? !eligible : eligible);
+                            }
+                            if (!eligible) {
+                                stack.clear();
+                                if (multisig) stack.emplace_back();
+                                stack.push_back(sig);
+                                BOOST_CHECK(!EvalScript(stack, script, flags | SCRIPT_VERIFY_NULLFAIL, checker, version, &error));
+                                BOOST_CHECK_EQUAL(error, SCRIPT_ERR_SIG_NULLFAIL);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // An unavailable key is a failed match, so multisig may continue
+            // to a later Falcon-512 key. CHECKMULTISIG examines the last key first.
+            const CScript mixed = CScript{} << OP_1 << ToByteVector(falcon.GetPubKey()) << pubkey << OP_2 << OP_CHECKMULTISIG;
+            CMutableTransaction mtx;
+            mtx.vin.resize(1);
+            mtx.vout.emplace_back(1, CScript{} << OP_TRUE);
+            std::vector<unsigned char> sig;
+            BOOST_REQUIRE(falcon.Sign(SignatureHash(mixed, mtx, 0, SIGHASH_ALL, 0, SigVersion::BASE), sig));
+            sig.push_back(SIGHASH_ALL);
+            MutableTransactionSignatureChecker checker{&mtx, 0, 0, MissingDataBehavior::ASSERT_FAIL, true};
+            ScriptError error;
+            BOOST_CHECK(VerifyScript(CScript{} << OP_0 << sig, mixed, nullptr, SCRIPT_VERIFY_NONE, checker, &error));
+
+            // Merely storing a key, or skipping its signature opcode, does not
+            // require that scheme to be active.
+            const CScript skipped = CScript{} << OP_0 << OP_IF << pubkey << OP_CHECKSIG << OP_ENDIF << OP_TRUE;
+            BOOST_CHECK(VerifyScript(CScript{}, skipped, nullptr, SCRIPT_VERIFY_NONE, checker, &error));
+            const CScript empty_sig = CScript{} << pubkey << OP_CHECKSIG << OP_NOT;
+            BOOST_CHECK(VerifyScript(CScript{} << OP_0, empty_sig, nullptr, SCRIPT_VERIFY_NULLFAIL, checker, &error));
+        }
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(pq_scheme_activation_script_cache, BasicTestingSetup)
+{
+    for (const auto* scheme : pq::kKnownSchemes) {
+        for (bool witness : {false, true}) {
+            BOOST_TEST_CONTEXT(scheme->name << " witness=" << witness) {
+                CKey key;
+                key.MakeNewKey(scheme->id);
+                const CScript script = CScript{} << ToByteVector(key.GetPubKey()) << OP_CHECKSIG;
+                const CTxOut prevout{10'000, witness ? GetScriptForDestination(WitnessV0ScriptHash{script}) : script};
+                CMutableTransaction mtx;
+                mtx.vin.resize(1);
+                mtx.vin[0].prevout = COutPoint{Txid::FromUint256(uint256{1}), 0};
+                mtx.vout.emplace_back(9'000, CScript{} << OP_TRUE);
+                std::vector<unsigned char> sig;
+                BOOST_REQUIRE(key.Sign(SignatureHash(script, mtx, 0, SIGHASH_ALL, prevout.nValue, witness ? SigVersion::WITNESS_V0 : SigVersion::BASE), sig));
+                sig.push_back(SIGHASH_ALL);
+                if (witness) {
+                    mtx.vin[0].scriptWitness.stack = {sig, {script.begin(), script.end()}};
+                } else {
+                    mtx.vin[0].scriptSig << sig;
+                }
+                const CTransaction tx{mtx};
+                CCoinsView dummy;
+                CCoinsViewCache coins{&dummy};
+                coins.AddCoin(tx.vin[0].prevout, Coin{prevout, 1, false}, false);
+                ValidationCache cache{1 << 20, 1 << 20};
+                PrecomputedTransactionData txdata;
+                LOCK(cs_main);
+                for (bool active : {false, true, true, false}) {
+                    TxValidationState state;
+                    const unsigned int flags{SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS | (active ? SCRIPT_VERIFY_PQ_STRICT : SCRIPT_VERIFY_NONE)};
+                    const bool expected{active || scheme->id == pq::SchemeId::FALCON_512};
+                    BOOST_CHECK_EQUAL(CheckInputScripts(tx, state, coins, flags, true, true, txdata, cache), expected);
+                }
+            }
+        }
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(pq512_signature_cache, BasicTestingSetup)
+{
+    for (const auto* scheme : pq::kKnownSchemes) {
+        BOOST_TEST_CONTEXT(scheme->name) {
+            CKey key, other_key;
+            key.MakeNewKey(scheme->id);
+            other_key.MakeNewKey(scheme->id);
+            const auto pubkey = key.GetPubKey();
+            uint512 hash;
+            hash.begin()[0] = 1;
+            hash.begin()[63] = 2;
+            std::vector<unsigned char> sig;
+            BOOST_REQUIRE(key.Sign512(hash, sig));
+            SignatureCache cache{1 << 20};
+            PrecomputedTransactionData txdata;
+            CachingTransactionSignatureChecker store{nullptr, 0, 0, true, cache, txdata};
+            CachingTransactionSignatureChecker no_store{nullptr, 0, 0, false, cache, txdata};
+            uint256 entry;
+            cache.ComputeEntryPQ512(entry, hash, sig, pubkey);
+            BOOST_CHECK(!cache.Get(entry, false));
+            BOOST_CHECK(no_store.VerifyPostQuantumSignature512(sig, pubkey, hash));
+            BOOST_CHECK(!cache.Get(entry, false));
+            BOOST_CHECK(store.VerifyPostQuantumSignature512(sig, pubkey, hash));
+            BOOST_REQUIRE(cache.Get(entry, false));
+            BOOST_CHECK(store.VerifyPostQuantumSignature512(sig, pubkey, hash));
+            // A hit with store=false is usable and marked discardable, not
+            // necessarily removed immediately by the cuckoo cache.
+            BOOST_CHECK(no_store.VerifyPostQuantumSignature512(sig, pubkey, hash));
+
+            // Every digest byte, including the entire second half, binds the entry.
+            for (size_t i = 0; i < hash.size(); ++i) {
+                auto changed = hash;
+                changed.begin()[i] ^= 1;
+                uint256 changed_entry;
+                cache.ComputeEntryPQ512(changed_entry, changed, sig, pubkey);
+                BOOST_CHECK(changed_entry != entry);
+                BOOST_CHECK(!cache.Get(changed_entry, false));
+            }
+            auto changed = hash;
+            changed.begin()[63] ^= 1;
+            BOOST_CHECK(!store.VerifyPostQuantumSignature512(sig, pubkey, changed));
+            uint256 changed_entry;
+            cache.ComputeEntryPQ512(changed_entry, changed, sig, pubkey);
+            BOOST_CHECK(!cache.Get(changed_entry, false));
+            BOOST_CHECK(!store.VerifyPostQuantumSignature512(sig, other_key.GetPubKey(), hash));
+            cache.ComputeEntryPQ512(changed_entry, hash, sig, other_key.GetPubKey());
+            BOOST_CHECK(!cache.Get(changed_entry, false));
+
+            auto invalid_sig = sig;
+            invalid_sig[0] ^= 0x80;
+            BOOST_CHECK(!store.VerifyPostQuantumSignature512(invalid_sig, pubkey, hash));
+            BOOST_CHECK(!store.VerifyPostQuantumSignature512(invalid_sig, pubkey, hash));
+            cache.ComputeEntryPQ512(changed_entry, hash, invalid_sig, pubkey);
+            BOOST_CHECK(!cache.Get(changed_entry, false));
+
+            uint256 hash256;
+            std::copy_n(hash.begin(), hash256.size(), hash256.begin());
+            for (bool legacy : {false, true}) {
+                cache.ComputeEntryPQ(changed_entry, hash256, sig, pubkey, legacy);
+                BOOST_CHECK(changed_entry != entry);
+                BOOST_CHECK(!cache.Get(changed_entry, false));
+                CachingTransactionSignatureChecker checker{nullptr, 0, 0, true, cache, txdata, legacy};
+                BOOST_CHECK(!checker.VerifyPostQuantumSignature(sig, pubkey, hash256));
+                BOOST_CHECK(checker.VerifyPostQuantumSignature512(sig, pubkey, hash));
+                BOOST_CHECK(!checker.VerifyPostQuantumSignature512(invalid_sig, pubkey, hash));
+            }
+        }
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(pq512_script_cache_integration, BasicTestingSetup)
+{
+    for (const auto* scheme : pq::kKnownSchemes) {
+        BOOST_TEST_CONTEXT(scheme->name) {
+            CKey key;
+            key.MakeNewKey(scheme->id);
+            const auto pubkey = key.GetPubKey();
+            const CScript script = CScript{} << ToByteVector(pubkey) << OP_CHECKSIG;
+            const CTxOut prevout{10'000, GetScriptForDestination(WitnessV1ScriptHash512{script})};
+            CMutableTransaction mtx;
+            mtx.vin.resize(1);
+            mtx.vin[0].prevout = COutPoint{Txid::FromUint256(uint256{1}), 0};
+            mtx.vout.emplace_back(9'000, CScript{} << OP_TRUE);
+            const auto hash = SignatureHash512(script, mtx, 0, SIGHASH_ALL, prevout.nValue);
+            std::vector<unsigned char> sig;
+            BOOST_REQUIRE(key.Sign512(hash, sig));
+            auto script_sig = sig;
+            script_sig.push_back(SIGHASH_ALL);
+            mtx.vin[0].scriptWitness.stack = {script_sig, {script.begin(), script.end()}};
+            const CTransaction tx{mtx};
+            CCoinsView dummy;
+            CCoinsViewCache coins{&dummy};
+            coins.AddCoin(tx.vin[0].prevout, Coin{prevout, 1, false}, false);
+            ValidationCache cache{1 << 20, 1 << 20};
+            PrecomputedTransactionData txdata;
+            TxValidationState state;
+            constexpr unsigned int flags{SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_PQ_STRICT};
+            LOCK(cs_main);
+            // Like policy checks: populate signatures, not the whole-script cache.
+            BOOST_REQUIRE(CheckInputScripts(tx, state, coins, flags | SCRIPT_VERIFY_CLEANSTACK, true, false, txdata, cache));
+            uint256 entry;
+            cache.m_signature_cache.ComputeEntryPQ512(entry, hash, sig, pubkey);
+            BOOST_REQUIRE(cache.m_signature_cache.Get(entry, false));
+            // Different flags still require script checks despite signature hits.
+            std::vector<CScriptCheck> checks;
+            BOOST_REQUIRE(CheckInputScripts(tx, state, coins, flags, true, true, txdata, cache, &checks));
+            BOOST_REQUIRE_EQUAL(checks.size(), 1U);
+            BOOST_CHECK(!checks.front()().has_value());
+            BOOST_REQUIRE(CheckInputScripts(tx, state, coins, flags, true, true, txdata, cache));
+            checks.clear();
+            BOOST_REQUIRE(CheckInputScripts(tx, state, coins, flags, false, false, txdata, cache, &checks));
+            BOOST_CHECK(checks.empty());
+            // Mutated witnesses cannot borrow the complete-script cache entry.
+            mtx.vin[0].scriptWitness.stack[0][0] ^= 0x80;
+            PrecomputedTransactionData invalid_data;
+            TxValidationState invalid_state;
+            BOOST_CHECK(!CheckInputScripts(CTransaction{mtx}, invalid_state, coins, flags, true, true, invalid_data, cache));
+        }
+    }
+}
 
 BOOST_FIXTURE_TEST_CASE(tx_mempool_block_doublespend, Dersig100Setup)
 {

@@ -105,6 +105,7 @@ BASE_SCRIPTS = [
     'mining_getblocktemplate_longpoll.py',
     'auxpow_mining.py',
     'feature_auxpow_activation.py',
+    'feature_pq_scheme_activation.py',
     'auxpow_invalidpow.py',
     'auxpow_zerohash.py',
     'p2p_segwit.py',
