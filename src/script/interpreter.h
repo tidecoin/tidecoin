@@ -35,8 +35,10 @@ enum
 
 /** Script verification flags.
  *
- *  All flags are intended to be soft forks: the set of acceptable scripts under
- *  flags (A | B) is a subset of the acceptable scripts under flag (A).
+ *  Most flags only add restrictions. PQ_STRICT, WITNESS_V1_512 and SHA512
+ *  instead select activation rules and can change acceptance in either
+ *  direction. Comparisons that add or remove restrictions must hold these
+ *  three flags fixed.
  */
 enum : uint32_t {
     SCRIPT_VERIFY_NONE      = 0,

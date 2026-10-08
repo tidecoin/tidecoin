@@ -1650,6 +1650,15 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
     // There is intentionally no return statement here, to be able to use "control reaches end of non-void function" warnings to detect gaps in the logic above.
 }
 
+/** Recognize witness programs under the candidate's rules. The structural
+ * classifier also describes v1-512 outputs before their interpretation activates. */
+static bool IsWitnessProgramForFlags(const CScript& script, unsigned int flags, int& version, std::vector<unsigned char>& program)
+{
+    if (!script.IsWitnessProgram(version, program)) return false;
+    return version != 1 || program.size() != WITNESS_V1_SCRIPTHASH_512_SIZE ||
+           (flags & SCRIPT_VERIFY_WITNESS_V1_512) != 0;
+}
+
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, unsigned int flags, const BaseSignatureChecker& checker, ScriptError* serror)
 {
     static const CScriptWitness emptyWitness;
@@ -1684,7 +1693,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
     int witnessversion;
     std::vector<unsigned char> witnessprogram;
     if (flags & SCRIPT_VERIFY_WITNESS) {
-        if (scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram)) {
+        if (IsWitnessProgramForFlags(scriptPubKey, flags, witnessversion, witnessprogram)) {
             hadWitness = true;
             if (scriptSig.size() != 0) {
                 // The scriptSig must be _exactly_ CScript(), otherwise we reintroduce malleability.
@@ -1728,7 +1737,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
 
         // P2SH witness program
         if (flags & SCRIPT_VERIFY_WITNESS) {
-            if (pubKey2.IsWitnessProgram(witnessversion, witnessprogram)) {
+            if (IsWitnessProgramForFlags(pubKey2, flags, witnessversion, witnessprogram)) {
                 hadWitness = true;
                 if (scriptSig != CScript() << std::vector<unsigned char>(pubKey2.begin(), pubKey2.end())) {
                     // The scriptSig must be _exactly_ a single push of the redeemScript. Otherwise we
@@ -1803,7 +1812,7 @@ size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey,
 
     int witnessversion;
     std::vector<unsigned char> witnessprogram;
-    if (scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram)) {
+    if (IsWitnessProgramForFlags(scriptPubKey, flags, witnessversion, witnessprogram)) {
         return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty);
     }
 
@@ -1815,7 +1824,7 @@ size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey,
             scriptSig.GetOp(pc, opcode, data);
         }
         CScript subscript(data.begin(), data.end());
-        if (subscript.IsWitnessProgram(witnessversion, witnessprogram)) {
+        if (IsWitnessProgramForFlags(subscript, flags, witnessversion, witnessprogram)) {
             return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty);
         }
     }

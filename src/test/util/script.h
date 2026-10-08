@@ -33,4 +33,8 @@ static const std::vector<std::vector<uint8_t>> P2WSH_EMPTY_TWO_STACK{{static_cas
 /** Flags that are not forbidden by an assert in script validation */
 bool IsValidFlagCombination(unsigned flags);
 
+/** Add restrictions to a failing case or remove them from a passing case,
+ * while keeping flags that change activation rules fixed. */
+unsigned ScriptFlagsForComparison(unsigned flags, unsigned requested_changes, bool success);
+
 #endif // BITCOIN_TEST_UTIL_SCRIPT_H

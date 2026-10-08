@@ -387,6 +387,77 @@ BOOST_AUTO_TEST_CASE(processnewblockheaders_prechecked_still_runs_contextual_che
     BOOST_CHECK_EQUAL(bad_state.GetRejectReason(), "time-too-old");
 }
 
+BOOST_AUTO_TEST_CASE(header_versions_follow_candidate_activation_height)
+{
+    auto& consensus = const_cast<Consensus::Params&>(Params().GetConsensus());
+    ScopedConsensusMutation consensus_guard{consensus};
+    consensus.nAuxpowStartHeight = 4;
+    consensus.SegwitHeight = 1;
+    consensus.fStrictChainId = true;
+
+    auto& chainman = *m_node.chainman;
+    auto check_version = [&](int32_t version, bool valid, const std::string& reason) {
+        const auto* prev = WITH_LOCK(cs_main, return chainman.ActiveChain().Tip());
+        const int height = prev->nHeight + 1;
+        for (bool prechecked : {false, true}) {
+            // Use a fresh header for each path: an already indexed header
+            // would return early without running contextual checks again.
+            auto header = Block(prev->GetBlockHash())->GetBlockHeader();
+            header.nVersion = version;
+            header.nBits = GetNextWorkRequired(prev, &header, consensus);
+            header.nNonce = 0;
+            while (!CheckProofOfWork(header, consensus, height)) ++header.nNonce;
+
+            // Proof checking without ancestry must defer ordinary version-bit
+            // interpretation. Both acceptance paths must enforce it later.
+            BOOST_REQUIRE(chainman.HasValidHeadersProofOfWork({header}));
+            BOOST_REQUIRE(chainman.HasValidHeadersProofOfWork({header}, height));
+            BlockValidationState state;
+            const bool accepted = prechecked
+                ? chainman.ProcessNewBlockHeadersPrechecked({{header}}, state)
+                : chainman.ProcessNewBlockHeaders({{header}}, true, state);
+            BOOST_CHECK_EQUAL(accepted, valid);
+            if (!valid) BOOST_CHECK_EQUAL(state.GetRejectReason(), reason);
+        }
+    };
+
+    // The minimum is conditional on witness activation, not just AuxPoW.
+    consensus.SegwitHeight = 2;
+    check_version(4, true, "");
+    consensus.SegwitHeight = 1;
+    consensus.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
+    check_version(4, false, "bad-version(0x00000004)");
+    check_version(0x20080004, true, "");
+    consensus.nAuxpowStartHeight = 4;
+
+    for (int height = 1; height <= 5; ++height) {
+        const bool active = height >= consensus.nAuxpowStartHeight;
+        check_version(4, active, "bad-version(0x00000004)");
+        check_version(0x20000000, true, "");
+        check_version(0x20000001, true, "");
+        if (!active) {
+            check_version(0x1fe00004, false, "bad-version(0x1fe00004)");
+            check_version(INT32_MIN + 4, false, "bad-version(0x80000004)");
+            check_version(0x40000000, true, "");
+        }
+        for (int bit = 16; bit <= 20; ++bit) {
+            check_version(0x20000004 | (1 << bit), !active, "auxpow-chainid");
+        }
+        check_version(0x201f0004, !active, "auxpow-chainid");
+        if (active) {
+            consensus.fStrictChainId = false;
+            check_version(0x20080004, true, "");
+            consensus.fStrictChainId = true;
+        }
+
+        const auto prev_hash = WITH_LOCK(cs_main, return chainman.ActiveChain().Tip()->GetBlockHash());
+        bool new_block{false};
+        BOOST_REQUIRE(chainman.ProcessNewBlock(GoodBlock(prev_hash), true, true, &new_block));
+        BOOST_REQUIRE(new_block);
+        BOOST_CHECK_EQUAL(WITH_LOCK(cs_main, return chainman.ActiveChain().Height()), height);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(processnewblockheaders_prechecked_enforces_pow_activation_boundary)
 {
     auto& consensus = const_cast<Consensus::Params&>(Params().GetConsensus());

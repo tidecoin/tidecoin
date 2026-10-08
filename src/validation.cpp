@@ -63,6 +63,7 @@
 #include <util/trace.h>
 #include <util/translation.h>
 #include <validationinterface.h>
+#include <versionbits.h>
 
 #include <algorithm>
 #include <atomic>
@@ -965,7 +966,11 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(TxValidationResult::TX_WITNESS_MUTATED, "bad-witness-nonstandard");
     }
 
-    int64_t nSigOpsCost = GetTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS);
+    // Count witness-v1 signature operations under the same next-block rules
+    // used by PolicyScriptChecks, including the first activation block.
+    const unsigned int sigop_flags = STANDARD_SCRIPT_VERIFY_FLAGS |
+        GetAuxpowScriptFlags(m_active_chainstate.m_chain.Height() + 1, m_active_chainstate.m_chainman.GetConsensus());
+    int64_t nSigOpsCost = GetTransactionSigOpCost(tx, m_view, sigop_flags);
     // The graph uses signed 32-bit individual weights. Check before narrowing,
     // including room for weight-to-vsize rounding. This is local pool policy;
     // a disconnected transaction may be omitted without invalidating its block.
@@ -3970,8 +3975,6 @@ static bool CheckAuxPowContext(const CBlockHeader& block, BlockValidationState& 
             if (chain_id != consensusParams.nAuxpowChainId) {
                 return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "auxpow-chainid", "auxpow chain id mismatch");
             }
-        } else if (block.nVersion & CPureBlockHeader::MASK_AUXPOW_CHAINID_SHIFTED) {
-            return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "auxpow-chainid", "chain id set without auxpow flag");
         }
     }
 
@@ -4365,6 +4368,15 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
         return state.Invalid(BlockValidationResult::BLOCK_TIME_FUTURE, "time-too-new", "block timestamp too far in the future");
     }
 
+    // Before AuxPoW activation, preserve the historical witness-era minimum
+    // using the complete signed version, not the AuxPoW base version.
+    if (!UsePostAuxpowPowRules(consensusParams, nHeight) &&
+        DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_SEGWIT) &&
+        block.nVersion < VERSIONBITS_TOP_BITS) {
+        return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, strprintf("bad-version(0x%08x)", block.nVersion),
+                             strprintf("rejected nVersion=0x%08x block before AuxPoW activation", block.nVersion));
+    }
+
     const int32_t baseVer = block.GetBaseVersion();
 
     // Reject blocks with outdated base version
@@ -4376,6 +4388,13 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
     }
 
     if (UsePostAuxpowPowRules(consensusParams, nHeight)) {
+        // Ordinary preactivation headers may use these bits as part of their
+        // version. Their new meaning requires the candidate height, so this
+        // check belongs here rather than in height-independent proof checks.
+        if (consensusParams.fStrictChainId && !block.IsAuxpow() &&
+            (block.nVersion & CPureBlockHeader::MASK_AUXPOW_CHAINID_SHIFTED)) {
+            return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "auxpow-chainid", "chain id set without auxpow flag");
+        }
         if (!CPureBlockHeader::IsValidBaseVersion(baseVer)) {
             return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, strprintf("bad-version(0x%08x)", baseVer),
                                  strprintf("rejected nVersion=0x%08x (base=%d) block", block.nVersion, baseVer));

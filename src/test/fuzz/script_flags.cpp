@@ -29,8 +29,6 @@ FUZZ_TARGET(script_flags)
 
         unsigned int fuzzed_flags;
         ds >> fuzzed_flags;
-        // Activation flags can both enable and restrict script behavior.
-        fuzzed_flags &= ~(SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_SHA512);
 
         std::vector<CTxOut> spent_outputs;
         for (unsigned i = 0; i < tx.vin.size(); ++i) {
@@ -54,16 +52,13 @@ FUZZ_TARGET(script_flags)
             const bool ret = VerifyScript(tx.vin.at(i).scriptSig, prevout.scriptPubKey, &tx.vin.at(i).scriptWitness, verify_flags, checker, &serror);
             assert(ret == (serror == SCRIPT_ERR_OK));
 
-            // Verify that removing flags from a passing test or adding flags to a failing test does not change the result
-            if (ret) {
-                verify_flags &= ~fuzzed_flags;
-            } else {
-                verify_flags |= fuzzed_flags;
-            }
-            if (!IsValidFlagCombination(verify_flags)) return;
+            // Compare restrictions within the same activation rules. Keep the
+            // original flags for every input, independent of earlier results.
+            const unsigned comparison_flags = ScriptFlagsForComparison(verify_flags, fuzzed_flags, ret);
+            if (!IsValidFlagCombination(comparison_flags)) continue;
 
             ScriptError serror_fuzzed;
-            const bool ret_fuzzed = VerifyScript(tx.vin.at(i).scriptSig, prevout.scriptPubKey, &tx.vin.at(i).scriptWitness, verify_flags, checker, &serror_fuzzed);
+            const bool ret_fuzzed = VerifyScript(tx.vin.at(i).scriptSig, prevout.scriptPubKey, &tx.vin.at(i).scriptWitness, comparison_flags, checker, &serror_fuzzed);
             assert(ret_fuzzed == (serror_fuzzed == SCRIPT_ERR_OK));
 
             assert(ret_fuzzed == ret);

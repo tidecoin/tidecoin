@@ -23,6 +23,7 @@
 #include <streams.h>
 #include <test/util/json.h>
 #include <test/util/random.h>
+#include <test/util/script.h>
 #include <test/util/setup_common.h>
 #include <test/util/transaction_utils.h>
 #include <uint512.h>
@@ -144,13 +145,8 @@ void DoTest(const CScript& scriptPubKey, const CScript& scriptSig, const CScript
     // Verify that removing flags from a passing test or adding flags to a failing test does not change the result.
     for (int i = 0; i < 16; ++i) {
         uint32_t extra_flags(m_rng.randbits(16));
-        uint32_t combined_flags{expect ? (flags & ~extra_flags) : (flags | extra_flags)};
-        // Activation-style flags can intentionally change script semantics.
-        // Keep them fixed in monotonicity fuzz checks.
-        if ((combined_flags ^ flags) & (SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_SHA512 | SCRIPT_VERIFY_WITNESS_V1_512)) continue;
-        // Weed out some invalid flag combinations.
-        if (combined_flags & SCRIPT_VERIFY_CLEANSTACK && ~combined_flags & (SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS)) continue;
-        if (combined_flags & SCRIPT_VERIFY_WITNESS && ~combined_flags & SCRIPT_VERIFY_P2SH) continue;
+        const uint32_t combined_flags{ScriptFlagsForComparison(flags, extra_flags, expect)};
+        if (!IsValidFlagCombination(combined_flags)) continue;
         const bool combined_allow_legacy = !(combined_flags & SCRIPT_VERIFY_PQ_STRICT);
         MutableTransactionSignatureChecker combined_checker(&tx, 0, txCredit.vout[0].nValue, MissingDataBehavior::ASSERT_FAIL, combined_allow_legacy);
         BOOST_CHECK_MESSAGE(VerifyScript(scriptSig, scriptPubKey, &scriptWitness, combined_flags, combined_checker, &err) == expect, message + strprintf(" (with flags %x)", combined_flags));
@@ -1143,11 +1139,11 @@ BOOST_AUTO_TEST_CASE(script_build)
                                    .PushWitRedeem()
                                    .ScriptError(SCRIPT_ERR_EVAL_FALSE));
     tests.push_back(TestBuilder(CScript() << ToByteVector(pubkey0) << OP_CHECKSIG,
-                                "PQ WIT-V1512-DISCOURAGED v1_512", SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH |
+                                "PQ WIT-V1512-PREACTIVATION v1_512", SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH |
                                 SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM, false, WitnessMode::SH, 1, 1)
                                    .PushWitSig(key0, 1, SIGHASH_ALL, 32, 32, SigVersion::WITNESS_V1_512)
                                    .PushWitRedeem()
-                                   .ScriptError(SCRIPT_ERR_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM));
+                                   .ScriptError(SCRIPT_ERR_WITNESS_UNEXPECTED));
     tests.push_back(TestBuilder(CScript() << ToByteVector(pubkey0),
                                 "PQ WIT-V1512-WRONG-LEN v1_512", witness_v1_512_flags, false, WitnessMode::PKH, 1, 1)
                                    .PushWitSig(key0, 1, SIGHASH_ALL, 32, 32, SigVersion::WITNESS_V1_512)
@@ -1848,6 +1844,39 @@ BOOST_AUTO_TEST_CASE(script_HasValidOps)
     BOOST_CHECK(!script.HasValidOps());
 }
 
+BOOST_AUTO_TEST_CASE(script_flag_comparisons_preserve_activation)
+{
+    constexpr std::array<unsigned, 3> activation_flags{
+        SCRIPT_VERIFY_PQ_STRICT, SCRIPT_VERIFY_WITNESS_V1_512, SCRIPT_VERIFY_SHA512,
+    };
+    constexpr unsigned activation_mask{SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_SHA512};
+    for (unsigned combination = 0; combination < 8; ++combination) {
+        unsigned flags{SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_NULLFAIL};
+        for (unsigned bit = 0; bit < activation_flags.size(); ++bit) {
+            if (combination & (1U << bit)) flags |= activation_flags[bit];
+        }
+        for (bool success : {false, true}) {
+            for (unsigned changes : {~0U, activation_mask, unsigned{SCRIPT_VERIFY_NULLFAIL}, unsigned{SCRIPT_VERIFY_MINIMALDATA}}) {
+                const unsigned compared{ScriptFlagsForComparison(flags, changes, success)};
+                BOOST_CHECK_EQUAL(compared & activation_mask, flags & activation_mask);
+                const unsigned restricted{success ? flags & ~changes : flags | changes};
+                BOOST_CHECK_EQUAL(compared & ~activation_mask, restricted & ~activation_mask);
+            }
+        }
+    }
+
+    // The same script can change in either direction when SHA512 activates.
+    // The generic restriction comparison must not cross that boundary.
+    const CScript sig = CScript() << OP_1;
+    for (bool after : {false, true}) {
+        const unsigned flags{after ? SCRIPT_VERIFY_SHA512 : SCRIPT_VERIFY_NONE};
+        DoTest(CScript() << OP_SHA512 << OP_SIZE << 64 << OP_EQUAL, sig, {}, flags,
+               "SHA512 enables a previously failing script", after ? SCRIPT_ERR_OK : SCRIPT_ERR_EVAL_FALSE);
+        DoTest(CScript() << OP_SHA512 << OP_1 << OP_EQUAL, sig, {}, flags,
+               "SHA512 changes a previously passing script", after ? SCRIPT_ERR_EVAL_FALSE : SCRIPT_ERR_OK);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(script_op_sha512)
 {
     const std::vector<unsigned char> input{0x01, 0x02, 0x03};
@@ -2000,22 +2029,112 @@ BOOST_AUTO_TEST_CASE(pq_falcon_legacy_boundary_fixture_spans_strict_and_legacy_b
     BOOST_CHECK_LT(sqnorm, legacy_bound);
 }
 
-BOOST_AUTO_TEST_CASE(script_witness_v1_512_preauxpow_policy)
+BOOST_AUTO_TEST_CASE(script_witness_v1_512_activation)
 {
+    const unsigned int before{SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS};
+    const unsigned int after{before | SCRIPT_VERIFY_WITNESS_V1_512};
     const CScript witness_script = CScript() << OP_TRUE;
     std::vector<unsigned char> program(WITNESS_V1_SCRIPTHASH_512_SIZE);
     CSHA512().Write(witness_script.data(), witness_script.size()).Finalize(program.data());
-
-    const CScript script_pub_key = CScript() << OP_1 << program;
+    const CScript witness_program = CScript() << OP_1 << program;
     CScriptWitness witness;
     witness.stack.emplace_back(witness_script.begin(), witness_script.end());
+    const CScriptWitness empty_witness;
 
-    ScriptError err = SCRIPT_ERR_OK;
-    BOOST_CHECK(VerifyScript(CScript(), script_pub_key, &witness, SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_P2SH, BaseSignatureChecker(), &err));
+    // Structural description remains independent of activation for address and
+    // script-description callers. Consensus recognition uses the selected flags.
+    int version;
+    std::vector<unsigned char> decoded;
+    BOOST_REQUIRE(witness_program.IsWitnessProgram(version, decoded));
+    BOOST_CHECK_EQUAL(version, 1);
+    BOOST_CHECK(decoded == program);
 
-    err = SCRIPT_ERR_OK;
-    BOOST_CHECK(!VerifyScript(CScript(), script_pub_key, &witness, STANDARD_SCRIPT_VERIFY_FLAGS, BaseSignatureChecker(), &err));
-    BOOST_CHECK_EQUAL(err, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM);
+    for (const bool wrapped : {false, true}) {
+        const CScript output = wrapped ? GetScriptForDestination(ScriptHash(witness_program)) : witness_program;
+        const CScript canonical_sig = wrapped ? CScript() << ToByteVector(witness_program) : CScript();
+        CScript extra_sig = CScript() << OP_TRUE;
+        if (wrapped) extra_sig << ToByteVector(witness_program);
+        auto check = [&](const CScript& sig, const CScriptWitness& wit, unsigned int flags, ScriptError expected) {
+            ScriptError err{SCRIPT_ERR_UNKNOWN_ERROR};
+            BOOST_CHECK_EQUAL(VerifyScript(sig, output, &wit, flags, BaseSignatureChecker(), &err), expected == SCRIPT_ERR_OK);
+            BOOST_CHECK_EQUAL(err, expected);
+        };
+
+        // Before activation this is ordinary script, not an undefined witness
+        // version. Extra scriptSig pushes are permitted by consensus.
+        check(canonical_sig, empty_witness, before, SCRIPT_ERR_OK);
+        check(extra_sig, empty_witness, before, SCRIPT_ERR_OK);
+        check(canonical_sig, witness, before, SCRIPT_ERR_WITNESS_UNEXPECTED);
+        check(extra_sig, witness, before, SCRIPT_ERR_WITNESS_UNEXPECTED);
+        check(canonical_sig, witness, before | SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM, SCRIPT_ERR_WITNESS_UNEXPECTED);
+        check(canonical_sig, witness, STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_CLEANSTACK);
+
+        // The exact same output enforces the SHA-512 witness script at activation.
+        check(canonical_sig, witness, after, SCRIPT_ERR_OK);
+        check(canonical_sig, witness, STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_WITNESS_V1_512, SCRIPT_ERR_OK);
+        check(canonical_sig, empty_witness, after, SCRIPT_ERR_WITNESS_PROGRAM_WITNESS_EMPTY);
+        check(extra_sig, witness, after, wrapped ? SCRIPT_ERR_WITNESS_MALLEATED_P2SH : SCRIPT_ERR_WITNESS_MALLEATED);
+        CScriptWitness wrong_witness;
+        wrong_witness.stack.emplace_back(1, OP_FALSE);
+        check(canonical_sig, wrong_witness, after, SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH);
+
+        // Selecting older rules again restores ordinary script interpretation.
+        check(extra_sig, empty_witness, before, SCRIPT_ERR_OK);
+        check(canonical_sig, witness, before, SCRIPT_ERR_WITNESS_UNEXPECTED);
+    }
+
+    // Zero and negative-zero programs fail ordinary boolean evaluation.
+    for (const unsigned char last : {0x00, 0x80}) {
+        std::vector<unsigned char> value(64, 0);
+        value.back() = last;
+        const CScript script = CScript() << OP_1 << value;
+        for (const unsigned int flags : {before, after}) {
+            ScriptError err{SCRIPT_ERR_UNKNOWN_ERROR};
+            BOOST_CHECK(!VerifyScript(CScript(), script, &witness, flags, BaseSignatureChecker(), &err));
+            BOOST_CHECK_EQUAL(err, SCRIPT_ERR_EVAL_FALSE);
+        }
+    }
+
+    // Existing 2-40-byte unknown witness programs retain their previous behavior.
+    for (const int version_number : {1, 2, 16}) {
+        for (const size_t length : {2, 20, 32, 40}) {
+            const CScript script = CScript() << CScript::EncodeOP_N(version_number) << std::vector<unsigned char>(length, 1);
+            ScriptError err{SCRIPT_ERR_UNKNOWN_ERROR};
+            BOOST_CHECK(VerifyScript(CScript(), script, &witness, before, BaseSignatureChecker(), &err));
+            BOOST_CHECK(!VerifyScript(CScript(), script, &witness, before | SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM, BaseSignatureChecker(), &err));
+            BOOST_CHECK_EQUAL(err, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM);
+            const bool valid_after{version_number != 1};
+            BOOST_CHECK_EQUAL(VerifyScript(CScript(), script, &witness, after, BaseSignatureChecker(), &err), valid_after);
+            BOOST_CHECK_EQUAL(err, valid_after ? SCRIPT_ERR_OK : SCRIPT_ERR_WITNESS_PROGRAM_WRONG_LENGTH);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(script_witness_v1_512_sigop_activation)
+{
+    const unsigned int before{SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS};
+    const unsigned int after{before | SCRIPT_VERIFY_WITNESS_V1_512};
+    const CScript witness_script = CScript() << OP_CHECKSIG << OP_2 << OP_CHECKMULTISIG;
+    CScriptWitness witness;
+    witness.stack.emplace_back(witness_script.begin(), witness_script.end());
+    std::vector<unsigned char> program(64);
+    CSHA512().Write(witness_script.data(), witness_script.size()).Finalize(program.data());
+    const CScript direct = CScript() << OP_1 << program;
+    const CScript wrapped = GetScriptForDestination(ScriptHash(direct));
+    const CScript script_sig = CScript() << ToByteVector(direct);
+    for (const bool p2sh : {false, true}) {
+        const auto& output = p2sh ? wrapped : direct;
+        const CScript sig = p2sh ? script_sig : CScript();
+        BOOST_CHECK_EQUAL(CountWitnessSigOps(sig, output, &witness, before), 0U);
+        BOOST_CHECK_EQUAL(CountWitnessSigOps(sig, output, &witness, after), 3U);
+        BOOST_CHECK_EQUAL(CountWitnessSigOps(sig, output, nullptr, after), 0U);
+        BOOST_CHECK_EQUAL(CountWitnessSigOps(sig, output, &witness, after & ~SCRIPT_VERIFY_WITNESS), 0U);
+        BOOST_CHECK_EQUAL(CountWitnessSigOps(sig, output, &witness, before), 0U);
+    }
+    // Witness-v0 accounting remains active on both sides of this transition.
+    const CScript v0 = GetScriptForDestination(WitnessV0ScriptHash(witness_script));
+    BOOST_CHECK_EQUAL(CountWitnessSigOps(CScript(), v0, &witness, before), 3U);
+    BOOST_CHECK_EQUAL(CountWitnessSigOps(CScript(), v0, &witness, after), 3U);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

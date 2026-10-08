@@ -265,14 +265,16 @@ void ParsePrevouts(const UniValue& prevTxsUnival, FlatSigningProvider* keystore,
                 std::vector<unsigned char> scriptData(!ws.isNull() ? ParseHexV(ws, "witnessScript") : ParseHexV(rs, "redeemScript"));
                 CScript script(scriptData.begin(), scriptData.end());
                 keystore->scripts.emplace(CScriptID(script), script);
-                if (is_p2wsh512) {
-                    // WITNESS_V1_SCRIPTHASH_512 lookups use RIPEMD160(witness_program).
-                    keystore->scripts.emplace(CScriptID{RIPEMD160(witness_program)}, script);
-                }
                 // Automatically also add the P2WSH wrapped version of the script (to deal with P2SH-P2WSH).
                 // This is done for redeemScript only for compatibility, it is encouraged to use the explicit witnessScript field instead.
                 CScript witness_output_script{GetScriptForDestination(WitnessV0ScriptHash(script))};
                 keystore->scripts.emplace(CScriptID(witness_output_script), witness_output_script);
+                const WitnessV1ScriptHash512 witness_hash512{script};
+                const CScript witness_output_script512{GetScriptForDestination(witness_hash512)};
+                keystore->scripts.emplace(CScriptID(witness_output_script512), witness_output_script512);
+                // Both direct and P2SH-wrapped v1 lookups use RIPEMD160 of
+                // the SHA-512 witness program, rather than CScriptID(script).
+                keystore->scripts.emplace(CScriptID{RIPEMD160(witness_hash512)}, script);
 
                 if (!ws.isNull() && !rs.isNull()) {
                     // if both witnessScript and redeemScript are provided,
@@ -282,8 +284,11 @@ void ParsePrevouts(const UniValue& prevTxsUnival, FlatSigningProvider* keystore,
                     if (ws.get_str() != rs.get_str()) {
                         std::vector<unsigned char> redeemScriptData(ParseHexV(rs, "redeemScript"));
                         CScript redeemScript(redeemScriptData.begin(), redeemScriptData.end());
-                        if (redeemScript != witness_output_script) {
+                        if (redeemScript != witness_output_script && redeemScript != witness_output_script512) {
                             throw JSONRPCError(RPC_INVALID_PARAMETER, "redeemScript does not correspond to witnessScript");
+                        }
+                        if (is_p2sh && scriptPubKey != GetScriptForDestination(ScriptHash(redeemScript))) {
+                            throw JSONRPCError(RPC_INVALID_PARAMETER, "redeemScript/witnessScript does not match scriptPubKey");
                         }
                     }
                 }
@@ -291,13 +296,15 @@ void ParsePrevouts(const UniValue& prevTxsUnival, FlatSigningProvider* keystore,
                 if (is_p2sh) {
                     const CTxDestination p2sh{ScriptHash(script)};
                     const CTxDestination p2sh_p2wsh{ScriptHash(witness_output_script)};
+                    const CTxDestination p2sh_p2wsh512{ScriptHash(witness_output_script512)};
                     if (scriptPubKey == GetScriptForDestination(p2sh)) {
                         // traditional p2sh; arguably an error if
                         // we got here with rs.IsNull(), because
                         // that means the p2sh script was specified
                         // via witnessScript param, but for now
                         // we'll just quietly accept it
-                    } else if (scriptPubKey == GetScriptForDestination(p2sh_p2wsh)) {
+                    } else if (scriptPubKey == GetScriptForDestination(p2sh_p2wsh) ||
+                               scriptPubKey == GetScriptForDestination(p2sh_p2wsh512)) {
                         // p2wsh encoded as p2sh; ideally the witness
                         // script was specified in the witnessScript
                         // param, but also support specifying it via
