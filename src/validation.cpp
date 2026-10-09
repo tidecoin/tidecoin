@@ -2413,7 +2413,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // is enforced in ContextualCheckBlockHeader(); we wouldn't want to
     // re-enforce that rule here (at least until we make it impossible for
     // the clock to go backward).
-    if (!CheckBlock(block, state, params.GetConsensus(), !fJustCheck, !fJustCheck)) {
+    if (!CheckBlock(block, state, params.GetConsensus(), !fJustCheck, !fJustCheck, pindex->nHeight)) {
         if (state.GetResult() == BlockValidationResult::BLOCK_MUTATED) {
             // We don't write down blocks to disk if they may have been
             // corrupted, so this should be impossible unless we're having hardware
@@ -3956,11 +3956,13 @@ static bool CheckAuxPowContext(const CBlockHeader& block, BlockValidationState& 
     const bool has_auxpow = static_cast<bool>(block.auxpow);
     const bool auxpow_flag = block.IsAuxpow();
 
+    // These failures belong to one proof. Another proof for the same 80-byte
+    // header can still be valid, so they must not set BLOCK_FAILED_VALID.
     if (auxpow_flag && !has_auxpow) {
-        return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "auxpow-missing", "auxpow flag set but auxpow missing");
+        return state.Invalid(BlockValidationResult::BLOCK_MUTATED, "auxpow-missing", "auxpow flag set but auxpow missing");
     }
     if (!auxpow_flag && has_auxpow) {
-        return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "auxpow-unexpected", "auxpow present without auxpow flag");
+        return state.Invalid(BlockValidationResult::BLOCK_MUTATED, "auxpow-unexpected", "auxpow present without auxpow flag");
     }
 
     if (height && !UsePostAuxpowPowRules(consensusParams, *height)) {
@@ -3980,10 +3982,10 @@ static bool CheckAuxPowContext(const CBlockHeader& block, BlockValidationState& 
 
     if (auxpow_flag) {
         if (!block.auxpow->check(block.GetHash(), block.GetChainId(), consensusParams)) {
-            return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "auxpow-invalid", "auxpow check failed");
+            return state.Invalid(BlockValidationResult::BLOCK_MUTATED, "auxpow-invalid", "auxpow check failed");
         }
         if (!CheckProofOfWork(block.auxpow->getParentBlockHash(), block.nBits, consensusParams)) {
-            return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "auxpow-parent-pow", "auxpow parent proof of work failed");
+            return state.Invalid(BlockValidationResult::BLOCK_MUTATED, "auxpow-parent-pow", "auxpow parent proof of work failed");
         }
     }
 
@@ -4095,14 +4097,10 @@ static bool CheckWitnessMalleation(const CBlock& block, bool expect_witness_comm
 
 bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW, bool fCheckMerkleRoot, std::optional<int> height)
 {
-    // These are checks that are independent of context.
+    // A cached success includes work verification at the established height.
+    // Callers must clear cached checks if they modify the block.
 
-    if (block.fChecked) {
-        if (fCheckPOW && height) {
-            return CheckBlockHeader(block, state, consensusParams, fCheckPOW, height);
-        }
-        return true;
-    }
+    if (block.fChecked) return true;
 
     // Check that the header is valid (particularly PoW).  This is mostly
     // redundant with the call in AcceptBlockHeader.
@@ -4120,9 +4118,17 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
     // Note that witness malleability is checked in ContextualCheckBlock, so no
     // checks that use witness data may be performed here.
 
-    // Size limits
-    if (block.vtx.empty() || block.vtx.size() * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT || ::GetSerializeSize(TX_NO_WITNESS(block)) * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT)
+    // Size limits. An empty transaction list or too many transactions is
+    // committed by the merkle root. The serialized-size limit also includes
+    // the AuxPoW proof, which is not committed by the header hash.
+    if (block.vtx.empty() || block.vtx.size() * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT) {
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-length", "size limits failed");
+    }
+    if (::GetSerializeSize(TX_NO_WITNESS(block)) * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT) {
+        const auto result = block.IsAuxpow() ? BlockValidationResult::BLOCK_MUTATED
+                                              : BlockValidationResult::BLOCK_CONSENSUS;
+        return state.Invalid(result, "bad-blk-length", "size limits failed");
+    }
 
     // First transaction must be coinbase, the rest must not be
     if (block.vtx.empty() || !block.vtx[0]->IsCoinBase())
@@ -4153,7 +4159,9 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
     if (nSigOps * WITNESS_SCALE_FACTOR > MAX_BLOCK_SIGOPS_COST)
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "out-of-bounds SigOpCount");
 
-    if (fCheckPOW && fCheckMerkleRoot && !height)
+    // A height-less preliminary check may accept either work algorithm and
+    // must not authorize reuse when this block's actual height becomes known.
+    if (fCheckPOW && fCheckMerkleRoot && height)
         block.fChecked = true;
 
     return true;
@@ -4459,15 +4467,19 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     // coinbase witness, it would be possible for the weight to be too
     // large by filling up the coinbase witness, which doesn't change
     // the block hash, so we couldn't mark the block as permanently
-    // failed).
+    // failed). An AuxPoW proof is also outside the header hash, including
+    // a proof with no parent-coinbase witness, so that failure stays
+    // BLOCK_MUTATED as well.
     if (GetBlockWeight(block) > MAX_BLOCK_WEIGHT) {
-        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-weight", strprintf("%s : weight limit failed", __func__));
+        const auto result = block.IsAuxpow() ? BlockValidationResult::BLOCK_MUTATED
+                                              : BlockValidationResult::BLOCK_CONSENSUS;
+        return state.Invalid(result, "bad-blk-weight", strprintf("%s : weight limit failed", __func__));
     }
 
     return true;
 }
 
-bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValidationState& state, CBlockIndex** ppindex, bool min_pow_checked, bool proof_prevalidated)
+bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValidationState& state, CBlockIndex** ppindex, bool min_pow_checked, std::optional<int> proof_checked_height)
 {
     AssertLockHeld(cs_main);
 
@@ -4501,7 +4513,11 @@ bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValida
         }
         const int height = pindexPrev->nHeight + 1;
 
-        if (!proof_prevalidated && !CheckBlockHeader(block, state, GetConsensus(), /*fCheckPOW=*/true, height)) {
+        // The internal prechecked caller verified work at this exact height,
+        // including the received AuxPoW proof and activation rule. Buffered
+        // headers no longer retain that proof. Other callers check it here.
+        if ((proof_checked_height != height) &&
+            !CheckBlockHeader(block, state, GetConsensus(), /*fCheckPOW=*/true, height)) {
             LogDebug(BCLog::VALIDATION, "%s: Consensus::CheckBlockHeader: %s, %s\n", __func__, hash.ToString(), state.ToString());
             return false;
         }
@@ -4522,14 +4538,14 @@ bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValida
     return true;
 }
 
-bool ChainstateManager::ProcessNewBlockHeadersImpl(std::span<const CBlockHeader> headers, bool min_pow_checked, bool proof_prevalidated, BlockValidationState& state, const CBlockIndex** ppindex)
+bool ChainstateManager::ProcessNewBlockHeadersImpl(std::span<const CBlockHeader> headers, bool min_pow_checked, std::optional<int> proof_start_height, BlockValidationState& state, const CBlockIndex** ppindex)
 {
     AssertLockNotHeld(cs_main);
     {
         LOCK(cs_main);
         for (const CBlockHeader& header : headers) {
             CBlockIndex *pindex = nullptr; // Use a temp pindex instead of ppindex to avoid a const_cast
-            bool accepted{AcceptBlockHeader(header, state, &pindex, min_pow_checked, proof_prevalidated)};
+            bool accepted{AcceptBlockHeader(header, state, &pindex, min_pow_checked, proof_start_height)};
             CheckBlockIndex();
 
             if (!accepted) {
@@ -4538,6 +4554,7 @@ bool ChainstateManager::ProcessNewBlockHeadersImpl(std::span<const CBlockHeader>
             if (ppindex) {
                 *ppindex = pindex;
             }
+            if (proof_start_height) ++*proof_start_height;
         }
     }
     if (NotifyHeaderTip()) {
@@ -4554,12 +4571,12 @@ bool ChainstateManager::ProcessNewBlockHeadersImpl(std::span<const CBlockHeader>
 
 bool ChainstateManager::ProcessNewBlockHeaders(std::span<const CBlockHeader> headers, bool min_pow_checked, BlockValidationState& state, const CBlockIndex** ppindex)
 {
-    return ProcessNewBlockHeadersImpl(headers, min_pow_checked, /*proof_prevalidated=*/false, state, ppindex);
+    return ProcessNewBlockHeadersImpl(headers, min_pow_checked, /*proof_start_height=*/std::nullopt, state, ppindex);
 }
 
-bool ChainstateManager::ProcessNewBlockHeadersPrechecked(std::span<const CBlockHeader> headers, BlockValidationState& state, const CBlockIndex** ppindex)
+bool ChainstateManager::ProcessNewBlockHeadersPrechecked(std::span<const CBlockHeader> headers, int start_height, BlockValidationState& state, const CBlockIndex** ppindex)
 {
-    return ProcessNewBlockHeadersImpl(headers, /*min_pow_checked=*/true, /*proof_prevalidated=*/true, state, ppindex);
+    return ProcessNewBlockHeadersImpl(headers, /*min_pow_checked=*/true, start_height, state, ppindex);
 }
 
 void ChainstateManager::ReportHeadersPresync(const arith_uint256& work, int64_t height, int64_t timestamp)
@@ -4598,7 +4615,7 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     CBlockIndex *pindexDummy = nullptr;
     CBlockIndex *&pindex = ppindex ? *ppindex : pindexDummy;
 
-    bool accepted_header{AcceptBlockHeader(block, state, &pindex, min_pow_checked, /*proof_prevalidated=*/false)};
+    bool accepted_header{AcceptBlockHeader(block, state, &pindex, min_pow_checked, /*proof_checked_height=*/std::nullopt)};
     CheckBlockIndex();
 
     if (!accepted_header)
@@ -4640,7 +4657,7 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
 
     const CChainParams& params{GetParams()};
 
-    if (!CheckBlock(block, state, params.GetConsensus()) ||
+    if (!CheckBlock(block, state, params.GetConsensus(), /*fCheckPOW=*/true, /*fCheckMerkleRoot=*/true, pindex->nHeight) ||
         !ContextualCheckBlock(block, state, *this, pindex->pprev)) {
         if (Assume(state.IsInvalid())) {
             ActiveChainstate().InvalidBlockFound(pindex, state);
@@ -4706,7 +4723,13 @@ bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& blo
         // malleability that cause CheckBlock() to fail; see e.g. CVE-2012-2459 and
         // https://lists.linuxfoundation.org/pipermail/bitcoin-dev/2019-February/016697.html.  Because CheckBlock() is
         // not very expensive, the anti-DoS benefits of caching failure (of a definitely-invalid block) are not substantial.
-        bool ret = CheckBlock(*block, state, GetConsensus());
+        // A known predecessor fixes the required work algorithm, even if this
+        // header was indexed by an earlier version of the node.
+        const CBlockIndex* prev = m_blockman.LookupBlockIndex(block->hashPrevBlock);
+        const std::optional<int> height = block->GetHash() == GetConsensus().hashGenesisBlock
+            ? std::make_optional(0)
+            : (prev ? std::make_optional(prev->nHeight + 1) : std::nullopt);
+        bool ret = CheckBlock(*block, state, GetConsensus(), /*fCheckPOW=*/true, /*fCheckMerkleRoot=*/true, height);
         if (ret) {
             // Store to disk
             ret = AcceptBlock(block, state, &pindex, force_processing, nullptr, new_block, min_pow_checked);
@@ -4941,7 +4964,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
             return VerifyDBResult::CORRUPTED_BLOCK_DB;
         }
         // check level 1: verify block validity
-        if (nCheckLevel >= 1 && !CheckBlock(block, state, consensus_params)) {
+        if (nCheckLevel >= 1 && !CheckBlock(block, state, consensus_params, /*fCheckPOW=*/true, /*fCheckMerkleRoot=*/true, pindex->nHeight)) {
             LogPrintf("Verification error: found bad block at %d, hash=%s (%s)\n",
                       pindex->nHeight, pindex->GetBlockHash().ToString(), state.ToString());
             return VerifyDBResult::CORRUPTED_BLOCK_DB;

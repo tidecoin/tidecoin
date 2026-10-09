@@ -22,8 +22,7 @@ constexpr size_t HEADER_COMMITMENT_PERIOD{632};
 //! received and validated against commitments.
 constexpr size_t REDOWNLOAD_BUFFER_SIZE{15009}; // 15009/632 = ~23.7 commitments
 
-// Our memory analysis assumes 48 bytes for a CompressedHeader (so we should
-// re-calculate parameters if we compress further)
+// Waiting entries contain only fixed-size header fields, with no proof allocations.
 static_assert(sizeof(CompressedHeader) == 48);
 
 HeadersSyncState::HeadersSyncState(NodeId id, const Consensus::Params& consensus_params,
@@ -120,7 +119,9 @@ HeadersSyncState::ProcessingResult HeadersSyncState::ProcessNextHeaders(const
 
         if (ret.success) {
             // Return any headers that are ready for acceptance.
+            const int64_t first_height = m_redownload_buffer_last_height - static_cast<int64_t>(m_redownloaded_headers.size()) + 1;
             ret.pow_validated_headers = PopHeadersReadyForAcceptance();
+            if (!ret.pow_validated_headers.empty()) ret.checked_start_height = static_cast<int>(first_height);
 
             // If we hit our target blockhash, then all remaining headers will be
             // returned and we can clear any leftover internal state.
@@ -220,6 +221,7 @@ bool HeadersSyncState::ValidateAndProcessSingleHeader(const CBlockHeader& curren
 
     m_current_chain_work += GetBlockProof(CBlockIndex(current));
     m_last_header_received = current;
+    m_last_header_received.auxpow.reset(); // Subsequent sync checks use only the header fields.
     m_current_height = next_height;
 
     // Update window-aware buffers with the accepted header.

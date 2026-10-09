@@ -16,9 +16,12 @@
 
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <vector>
 
-// A compressed CBlockHeader, which leaves out the prevhash
+// Header fields for the waiting buffer, omitting the predecessor hash and
+// AuxPoW proof. The caller checks work at the exact height before buffering.
+// Reconstructed AuxPoW headers are for prechecked acceptance, not serialization.
 struct CompressedHeader {
     // header
     int32_t nVersion{0};
@@ -116,6 +119,20 @@ public:
         FINAL
     };
 
+    /** Next height if prev continues the current pass; otherwise no height. */
+    std::optional<int> GetNextHeight(const uint256& prev) const
+    {
+        int64_t height;
+        if (m_download_state == State::PRESYNC && prev == m_last_header_received.GetHash()) {
+            height = m_current_height + 1;
+        } else if (m_download_state == State::REDOWNLOAD && prev == m_redownload_buffer_last_hash) {
+            height = m_redownload_buffer_last_height + 1;
+        } else {
+            return std::nullopt;
+        }
+        return static_cast<int>(height);
+    }
+
     /** Return the current state of our download */
     State GetState() const { return m_download_state; }
 
@@ -142,6 +159,8 @@ public:
     /** Result data structure for ProcessNextHeaders. */
     struct ProcessingResult {
         std::vector<CBlockHeader> pow_validated_headers;
+        /** Actual starting height of a nonempty released batch, saved before finalization. */
+        std::optional<int> checked_start_height;
         bool success{false};
         bool request_more{false};
     };
@@ -151,10 +170,9 @@ public:
      * received_headers: headers that were received over the network for processing.
      *                   Assumes the caller has already verified the headers
      *                   are continuous, and has checked that each header
-     *                   satisfies the proof-of-work target included in the
-     *                   header (but not necessarily verified that the
-     *                   proof-of-work target is correct and passes consensus
-     *                   rules).
+     *                   satisfies proof-of-work and AuxPoW activation checks
+     *                   at its exact height (but not necessarily that the
+     *                   proof-of-work target is the required difficulty).
      * full_headers_message: true if the message was at max capacity,
      *                       indicating more headers may be available
      * ProcessingResult.pow_validated_headers: will be filled in with any

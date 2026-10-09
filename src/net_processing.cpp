@@ -655,11 +655,11 @@ private:
     bool CheckHeadersAreContinuous(const std::vector<CBlockHeader>& headers) const;
     /** Try to continue a low-work headers sync that has already begun.
      * Assumes the caller has already verified the headers connect, and has
-     * checked that each header satisfies the proof-of-work target included in
-     * the header.
+     * checked work, including AuxPoW activation, at each header's exact height.
      *  @param[in]  peer                            The peer we're syncing with.
      *  @param[in]  pfrom                           CNode of the peer
      *  @param[in,out] headers                      The headers to be processed.
+     *  @param[in,out] checked_height               Replaced with the first released header's height on success.
      *  @return     True if the passed in headers were successfully processed
      *              as the continuation of a low-work headers sync in progress;
      *              false otherwise.
@@ -672,7 +672,7 @@ private:
      *              acceptance by the caller).
      */
     bool IsContinuationOfLowWorkHeadersSync(Peer& peer, CNode& pfrom,
-            std::vector<CBlockHeader>& headers)
+            std::vector<CBlockHeader>& headers, std::optional<int>& checked_height)
         EXCLUSIVE_LOCKS_REQUIRED(peer.m_headers_sync_mutex, !m_headers_presync_mutex, g_msgproc_mutex);
     /** Check work on a headers chain to be processed, and if insufficient,
      * initiate our anti-DoS headers sync mechanism.
@@ -2561,7 +2561,7 @@ bool PeerManagerImpl::CheckHeadersAreContinuous(const std::vector<CBlockHeader>&
     return true;
 }
 
-bool PeerManagerImpl::IsContinuationOfLowWorkHeadersSync(Peer& peer, CNode& pfrom, std::vector<CBlockHeader>& headers)
+bool PeerManagerImpl::IsContinuationOfLowWorkHeadersSync(Peer& peer, CNode& pfrom, std::vector<CBlockHeader>& headers, std::optional<int>& checked_height)
 {
     if (peer.m_headers_sync) {
         auto result = peer.m_headers_sync->ProcessNextHeaders(headers, headers.size() == m_opts.max_headers_result);
@@ -2633,6 +2633,7 @@ bool PeerManagerImpl::IsContinuationOfLowWorkHeadersSync(Peer& peer, CNode& pfro
             // We only overwrite the headers passed in if processing was
             // successful.
             headers.swap(result.pow_validated_headers);
+            checked_height = result.checked_start_height;
         }
 
         return result.success;
@@ -2675,7 +2676,8 @@ bool PeerManagerImpl::TryLowWorkHeadersSync(Peer& peer, CNode& pfrom, const CBlo
             // Now a HeadersSyncState object for tracking this synchronization
             // is created, process the headers using it as normal. Failures are
             // handled inside of IsContinuationOfLowWorkHeadersSync.
-            (void)IsContinuationOfLowWorkHeadersSync(peer, pfrom, headers);
+            std::optional<int> ignored_height;
+            (void)IsContinuationOfLowWorkHeadersSync(peer, pfrom, headers, ignored_height);
         } else {
             LogDebug(BCLog::NET, "Ignoring low-work chain (height=%u) from peer=%d\n", chain_start_header->nHeight + headers.size(), pfrom.GetId());
         }
@@ -2864,7 +2866,13 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
     // anti-DoS criteria (note: this check is required before passing any
     // headers into HeadersSyncState).
     std::optional<int> start_height;
+    // Message processing serializes changes to this peer's sync state. Match
+    // its predecessor before checking work outside either lock.
     {
+        LOCK(peer.m_headers_sync_mutex);
+        if (peer.m_headers_sync) start_height = peer.m_headers_sync->GetNextHeight(headers[0].hashPrevBlock);
+    }
+    if (!start_height) {
         LOCK(cs_main);
         if (const CBlockIndex* prev = m_chainman.m_blockman.LookupBlockIndex(headers[0].hashPrevBlock)) {
             start_height = prev->nHeight + 1;
@@ -2892,7 +2900,7 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
     {
         LOCK(peer.m_headers_sync_mutex);
 
-        already_validated_work = IsContinuationOfLowWorkHeadersSync(peer, pfrom, headers);
+        already_validated_work = IsContinuationOfLowWorkHeadersSync(peer, pfrom, headers, start_height);
 
         // The headers we passed in may have been:
         // - untouched, perhaps if no headers-sync was in progress, or some
@@ -2910,14 +2918,10 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
 
         have_headers_sync = !!peer.m_headers_sync;
     }
-    std::optional<int> process_start_height;
     const CBlockIndex* chain_start_header{nullptr};
     {
         LOCK(cs_main);
         chain_start_header = m_chainman.m_blockman.LookupBlockIndex(headers[0].hashPrevBlock);
-        if (chain_start_header != nullptr) {
-            process_start_height = chain_start_header->nHeight + 1;
-        }
     }
     bool headers_connect_blockindex{chain_start_header != nullptr};
 
@@ -2974,8 +2978,8 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
 
     // Now process all the headers.
     BlockValidationState state;
-    const bool processed{process_start_height.has_value()
-                             ? m_chainman.ProcessNewBlockHeadersPrechecked(headers, state, &pindexLast)
+    const bool processed{start_height.has_value()
+                             ? m_chainman.ProcessNewBlockHeadersPrechecked(headers, *start_height, state, &pindexLast)
                              : m_chainman.ProcessNewBlockHeaders(headers, /*min_pow_checked=*/true, state, &pindexLast)};
     if (!processed) {
         if (state.IsInvalid()) {

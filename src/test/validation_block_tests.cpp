@@ -4,7 +4,9 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <auxpow.h>
 #include <chainparams.h>
+#include <coins.h>
 #include <consensus/merkle.h>
 #include <consensus/validation.h>
 #include <node/miner.h>
@@ -13,6 +15,7 @@
 #include <script/sign.h>
 #include <script/signingprovider.h>
 #include <script/solver.h>
+#include <streams.h>
 #include <test/util/random.h>
 #include <test/util/script.h>
 #include <test/util/setup_common.h>
@@ -370,7 +373,7 @@ BOOST_AUTO_TEST_CASE(processnewblockheaders_prechecked_still_runs_contextual_che
 
     BOOST_CHECK(Assert(m_node.chainman)->HasValidHeadersProofOfWork({{good_header}}, height));
     BlockValidationState state;
-    BOOST_CHECK(Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{good_header}}, state));
+    BOOST_CHECK(Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{good_header}}, height, state));
 
     CBlockHeader bad_header{good_header};
     bad_header.nTime = prev_index->GetMedianTimePast();
@@ -382,9 +385,138 @@ BOOST_AUTO_TEST_CASE(processnewblockheaders_prechecked_still_runs_contextual_che
     BOOST_CHECK(Assert(m_node.chainman)->HasValidHeadersProofOfWork({{bad_header}}, height));
 
     BlockValidationState bad_state;
-    BOOST_CHECK(!Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{bad_header}}, bad_state));
+    BOOST_CHECK(!Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{bad_header}}, height, bad_state));
     BOOST_CHECK(bad_state.IsInvalid());
     BOOST_CHECK_EQUAL(bad_state.GetRejectReason(), "time-too-old");
+}
+
+BOOST_AUTO_TEST_CASE(prechecked_auxpow_accepts_fields_after_proof_verification)
+{
+    auto& chainman = *m_node.chainman;
+    const auto& consensus = Params().GetConsensus();
+    auto header = GoodBlock(Params().GenesisBlock().GetHash())->GetBlockHeader();
+    header.SetBaseVersion(4, consensus.nAuxpowChainId);
+    header.SetAuxpowVersion(true);
+    const auto child_hash = header.GetHash();
+    std::vector<unsigned char> root(child_hash.begin(), child_hash.end());
+    std::reverse(root.begin(), root.end());
+    std::vector<unsigned char> commitment(std::begin(pchMergedMiningHeader), std::end(pchMergedMiningHeader));
+    commitment.insert(commitment.end(), root.begin(), root.end());
+    commitment.push_back(1); // One leaf, followed by the remaining size bytes and nonce.
+    commitment.insert(commitment.end(), 7, 0);
+    CMutableTransaction coinbase;
+    coinbase.vin.resize(1);
+    coinbase.vin[0].prevout.SetNull();
+    coinbase.vin[0].scriptSig = CScript{} << commitment;
+    CPureBlockHeader parent;
+    parent.nVersion = 1;
+    parent.hashMerkleRoot = coinbase.GetHash().ToUint256();
+    while (!CheckProofOfWork(parent.GetScryptPoWHash(), header.nBits, consensus)) ++parent.nNonce;
+    DataStream proof;
+    proof << TX_WITH_WITNESS(coinbase) << uint256{} << std::vector<uint256>{} << int32_t{0}
+          << std::vector<uint256>{} << int32_t{0} << parent;
+    header.auxpow = std::make_shared<CAuxPow>();
+    proof >> *header.auxpow;
+    const int height{1};
+    BOOST_REQUIRE(chainman.HasValidHeadersProofOfWork({header}, height));
+    header.auxpow.reset();
+
+    // Only the internal path for a completed exact-height check can accept
+    // these fields. A normal caller must still supply a valid proof.
+    BOOST_CHECK(!chainman.HasValidHeadersProofOfWork({header}, height));
+    BlockValidationState ordinary_state;
+    BOOST_CHECK(!chainman.ProcessNewBlockHeaders({{header}}, true, ordinary_state));
+    BOOST_CHECK_EQUAL(ordinary_state.GetRejectReason(), "auxpow-missing");
+    BlockValidationState wrong_height_state;
+    BOOST_CHECK(!chainman.ProcessNewBlockHeadersPrechecked({{header}}, height + 1, wrong_height_state));
+    BOOST_CHECK_EQUAL(wrong_height_state.GetRejectReason(), "auxpow-missing");
+    BlockValidationState checked_state;
+    BOOST_CHECK(chainman.ProcessNewBlockHeadersPrechecked({{header}}, height, checked_state));
+}
+
+BOOST_AUTO_TEST_CASE(block_cache_requires_a_full_check_at_known_height)
+{
+    CBlock block{*GoodBlock(Params().GenesisBlock().GetHash())};
+    const auto& consensus = Params().GetConsensus();
+    BlockValidationState state;
+    BOOST_REQUIRE(CheckBlock(block, state, consensus));
+    BOOST_CHECK(!block.fChecked);
+    BOOST_REQUIRE(CheckBlock(block, state, consensus, false, true, 1));
+    BOOST_CHECK(!block.fChecked);
+    BOOST_REQUIRE(CheckBlock(block, state, consensus, true, false, 1));
+    BOOST_CHECK(!block.fChecked);
+    BOOST_REQUIRE(CheckBlock(block, state, consensus, true, true, 1));
+    BOOST_CHECK(block.fChecked);
+    BOOST_REQUIRE(CheckBlock(block, state, consensus, true, true, 1));
+    block.SetNull();
+    BOOST_CHECK(!block.fChecked);
+}
+
+BOOST_AUTO_TEST_CASE(ordinary_work_is_checked_at_the_candidate_height)
+{
+    auto& consensus = const_cast<Consensus::Params&>(Params().GetConsensus());
+    ScopedConsensusMutation consensus_guard{consensus};
+    consensus.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
+    auto& chainman = *m_node.chainman;
+    const auto first = GoodBlock(Params().GenesisBlock().GetHash());
+    BOOST_REQUIRE(chainman.ProcessNewBlock(first, true, true, nullptr));
+    const auto* prev = WITH_LOCK(cs_main, return chainman.ActiveChain().Tip());
+    const int height = prev->nHeight + 1;
+    BOOST_REQUIRE_EQUAL(height, 2);
+
+    for (bool activated : {false, true}) {
+        consensus.nAuxpowStartHeight = activated ? height : Consensus::AUXPOW_DISABLED;
+        // Regtest genesis uses scrypt; height 1 uses yespower in both cases.
+        // Verify the opposite algorithm at a real height where it is allowed.
+        const int checked_height = activated ? 1 : 0;
+        auto block = Block(prev->GetBlockHash());
+        chainman.GenerateCoinbaseCommitment(*block, prev);
+        block->hashMerkleRoot = BlockMerkleRoot(*block);
+        block->nBits = GetNextWorkRequired(prev, block.get(), consensus);
+        block->nNonce = 0;
+        while (CheckProofOfWork(*block, consensus, height) ||
+               !CheckProofOfWork(*block, consensus, checked_height)) {
+            ++block->nNonce;
+        }
+        const auto header = block->GetBlockHeader();
+        BOOST_REQUIRE(chainman.HasValidHeadersProofOfWork({header}));
+        BOOST_REQUIRE(chainman.HasValidHeadersProofOfWork({header}, checked_height));
+        BOOST_REQUIRE(!chainman.HasValidHeadersProofOfWork({header}, height));
+
+        BlockValidationState header_state;
+        BOOST_CHECK(!chainman.ProcessNewBlockHeaders({{header}}, true, header_state));
+        BOOST_CHECK_EQUAL(header_state.GetRejectReason(), "high-hash");
+        BlockValidationState prechecked_state;
+        BOOST_CHECK(!chainman.ProcessNewBlockHeadersPrechecked({{header}}, checked_height, prechecked_state));
+        BOOST_CHECK_EQUAL(prechecked_state.GetRejectReason(), "high-hash");
+
+        // Reproduce an index entry left by the earlier header-sync path, and
+        // a successful height-independent body check. Neither may authorize
+        // the wrong algorithm during block acceptance or connection.
+        BlockValidationState preliminary_state;
+        BOOST_REQUIRE(CheckBlock(*block, preliminary_state, consensus));
+        BOOST_REQUIRE(!block->fChecked);
+        CBlockIndex* index{nullptr};
+        {
+            LOCK(cs_main);
+            index = chainman.m_blockman.AddToBlockIndex(header, chainman.m_best_header);
+        }
+        BOOST_REQUIRE(index);
+        BOOST_REQUIRE_EQUAL(index->nHeight, height);
+        BOOST_CHECK(!chainman.ProcessNewBlock(block, true, true, nullptr));
+        {
+            LOCK(cs_main);
+            BOOST_CHECK(chainman.ActiveChain().Tip() == prev);
+            CCoinsViewCache view{&chainman.ActiveChainstate().CoinsTip()};
+            BlockValidationState connect_state;
+            BOOST_CHECK(!chainman.ActiveChainstate().ConnectBlock(*block, connect_state, index, view));
+            BOOST_CHECK_EQUAL(connect_state.GetRejectReason(), "high-hash");
+            BlockValidationState accept_state;
+            BOOST_CHECK(!chainman.AcceptBlock(block, accept_state, nullptr, true, nullptr, nullptr, true));
+            BOOST_CHECK_EQUAL(accept_state.GetRejectReason(), "high-hash");
+            BOOST_CHECK(!(index->nStatus & BLOCK_HAVE_DATA));
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(header_versions_follow_candidate_activation_height)
@@ -414,7 +546,7 @@ BOOST_AUTO_TEST_CASE(header_versions_follow_candidate_activation_height)
             BOOST_REQUIRE(chainman.HasValidHeadersProofOfWork({header}, height));
             BlockValidationState state;
             const bool accepted = prechecked
-                ? chainman.ProcessNewBlockHeadersPrechecked({{header}}, state)
+                ? chainman.ProcessNewBlockHeadersPrechecked({{header}}, height, state)
                 : chainman.ProcessNewBlockHeaders({{header}}, true, state);
             BOOST_CHECK_EQUAL(accepted, valid);
             if (!valid) BOOST_CHECK_EQUAL(state.GetRejectReason(), reason);
@@ -557,7 +689,7 @@ BOOST_AUTO_TEST_CASE(processnewblockheaders_prechecked_enforces_pow_activation_b
     BOOST_CHECK(Assert(m_node.chainman)->HasValidHeadersProofOfWork({{good_header}}, consensus.nAuxpowStartHeight));
 
     BlockValidationState good_state;
-    BOOST_CHECK(Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{good_header}}, good_state));
+    BOOST_CHECK(Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{good_header}}, consensus.nAuxpowStartHeight, good_state));
     BOOST_CHECK(good_state.IsValid());
 
     BOOST_CHECK(Assert(m_node.chainman)->ProcessNewBlock(post_auxpow_block, /*force_processing=*/true, /*min_pow_checked=*/true, &ignored));
@@ -567,7 +699,7 @@ BOOST_AUTO_TEST_CASE(processnewblockheaders_prechecked_enforces_pow_activation_b
     BOOST_CHECK(Assert(m_node.chainman)->HasValidHeadersProofOfWork({{bad_header}}, consensus.nAuxpowStartHeight));
 
     BlockValidationState bad_state;
-    BOOST_CHECK(!Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{bad_header}}, bad_state));
+    BOOST_CHECK(!Assert(m_node.chainman)->ProcessNewBlockHeadersPrechecked({{bad_header}}, consensus.nAuxpowStartHeight, bad_state));
     BOOST_CHECK(bad_state.IsInvalid());
     BOOST_CHECK_EQUAL(bad_state.GetRejectReason(), "bad-diffbits");
 }

@@ -55,6 +55,68 @@ void HeadersGeneratorSetup::GenerateHeaders(std::vector<CBlockHeader>& headers,
 
 BOOST_FIXTURE_TEST_SUITE(headers_sync_chainwork_tests, HeadersGeneratorSetup)
 
+BOOST_AUTO_TEST_CASE(compressed_header_preserves_fields_without_proof)
+{
+    CBlockHeader header;
+    header.nVersion = 4;
+    header.SetAuxpowVersion(true);
+    header.nTime = 123;
+    header.nBits = 0x207fffff;
+    header.nNonce = 7;
+    header.hashMerkleRoot = uint256{0x11};
+    header.auxpow = std::make_shared<CAuxPow>();
+
+    CompressedHeader compressed{header};
+    const uint256 prev{0xaa};
+    CBlockHeader full = compressed.GetFullHeader(prev);
+
+    BOOST_CHECK(full.IsAuxpow());
+    BOOST_CHECK(!full.auxpow);
+    BOOST_CHECK_EQUAL(full.nNonce, header.nNonce);
+    BOOST_CHECK(full.hashMerkleRoot == header.hashMerkleRoot);
+    BOOST_CHECK(full.hashPrevBlock == prev);
+}
+
+BOOST_AUTO_TEST_CASE(sync_tracks_height_without_retaining_proofs)
+{
+    const auto* start = WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip());
+    std::vector<CBlockHeader> headers;
+    GenerateHeaders(headers, 1, start->GetBlockHash(), 4, start->nTime, uint256{1}, start->nBits);
+    headers[0].SetAuxpowVersion(true);
+    headers[0].auxpow = std::make_shared<CAuxPow>();
+    std::weak_ptr<CAuxPow> proof = headers[0].auxpow;
+    const auto work = start->nChainWork + GetBlockProof(CBlockIndex(headers[0]));
+    HeadersSyncState sync{0, Params().GetConsensus(), start, work};
+    BOOST_REQUIRE(sync.GetNextHeight(start->GetBlockHash()));
+    BOOST_CHECK_EQUAL(*sync.GetNextHeight(start->GetBlockHash()), 1);
+    BOOST_CHECK(!sync.GetNextHeight(uint256{123}));
+
+    // This unit exercises bookkeeping; the caller performs proof checks.
+    auto first = sync.ProcessNextHeaders(headers, true);
+    BOOST_REQUIRE(first.success);
+    BOOST_CHECK(!first.checked_start_height);
+    BOOST_CHECK(sync.GetState() == HeadersSyncState::State::REDOWNLOAD);
+    headers[0].auxpow.reset();
+    BOOST_CHECK(proof.expired()); // The first-pass reference must be gone too.
+    BOOST_REQUIRE(sync.GetNextHeight(start->GetBlockHash()));
+    BOOST_CHECK_EQUAL(*sync.GetNextHeight(start->GetBlockHash()), 1);
+    BOOST_CHECK(!sync.GetNextHeight(headers[0].GetHash()));
+
+    headers[0].auxpow = std::make_shared<CAuxPow>();
+    proof = headers[0].auxpow;
+    auto second = sync.ProcessNextHeaders(headers, true);
+    BOOST_REQUIRE(second.success);
+    BOOST_REQUIRE(second.checked_start_height);
+    BOOST_CHECK_EQUAL(*second.checked_start_height, 1);
+    BOOST_REQUIRE_EQUAL(second.pow_validated_headers.size(), 1U);
+    BOOST_CHECK(second.pow_validated_headers[0].GetHash() == headers[0].GetHash());
+    BOOST_CHECK(!second.pow_validated_headers[0].auxpow);
+    headers[0].auxpow.reset();
+    BOOST_CHECK(proof.expired());
+    BOOST_CHECK(sync.GetState() == HeadersSyncState::State::FINAL);
+    BOOST_CHECK(!sync.GetNextHeight(start->GetBlockHash()));
+}
+
 // In this test, we construct two sets of headers from genesis, one with
 // sufficient chain work and one without.
 // 1. We deliver the first set of headers and verify that the headers sync state

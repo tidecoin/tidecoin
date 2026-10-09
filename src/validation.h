@@ -386,7 +386,9 @@ public:
 
 /** Functions for validating blocks and updating the block tree */
 
-/** Context-independent validity checks */
+/** Check block structure and work. A supplied height must be established from
+ * the predecessor/index, not a guess. Only a full check at a known height sets
+ * fChecked; modifying the block requires clearing its cached checks. */
 bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true, bool fCheckMerkleRoot = true, std::optional<int> height = std::nullopt);
 
 /**
@@ -973,11 +975,11 @@ private:
         BlockValidationState& state,
         CBlockIndex** ppindex,
         bool min_pow_checked,
-        bool proof_prevalidated) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+        std::optional<int> proof_checked_height) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     bool ProcessNewBlockHeadersImpl(
         std::span<const CBlockHeader> headers,
         bool min_pow_checked,
-        bool proof_prevalidated,
+        std::optional<int> proof_start_height,
         BlockValidationState& state,
         const CBlockIndex** ppindex) LOCKS_EXCLUDED(cs_main);
     friend Chainstate;
@@ -1256,9 +1258,12 @@ public:
     /**
      * Process incoming block headers that were already fully proof-validated
      * at exact heights by the network header pipeline. Contextual header
-     * checks and block-index insertion still run here.
+     * checks and block-index insertion still run here. start_height is the
+     * height used to check the first header, not one inferred after buffering.
+     * This internal path trusts that check, including each AuxPoW proof and
+     * activation rule. Buffered headers may omit the already-checked proofs.
      */
-    bool ProcessNewBlockHeadersPrechecked(std::span<const CBlockHeader> headers, BlockValidationState& state, const CBlockIndex** ppindex = nullptr) LOCKS_EXCLUDED(cs_main);
+    bool ProcessNewBlockHeadersPrechecked(std::span<const CBlockHeader> headers, int start_height, BlockValidationState& state, const CBlockIndex** ppindex = nullptr) LOCKS_EXCLUDED(cs_main);
 
     /**
      * Sufficiently validate a block for disk storage (and store on disk).
