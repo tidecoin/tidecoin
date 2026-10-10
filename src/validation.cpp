@@ -3158,7 +3158,7 @@ bool Chainstate::ConnectTip(
     const auto time_1{SteadyClock::now()};
     if (!block_to_connect) {
         std::shared_ptr<CBlock> pblockNew = std::make_shared<CBlock>();
-        if (!m_blockman.ReadBlock(*pblockNew, *pindexNew)) {
+        if (!m_blockman.ReadBlockForValidation(*pblockNew, *pindexNew)) {
             return FatalError(m_chainman.GetNotifications(), state, _("Failed to read block."));
         }
         block_to_connect = std::move(pblockNew);
@@ -4095,8 +4095,10 @@ static bool CheckWitnessMalleation(const CBlock& block, bool expect_witness_comm
     return true;
 }
 
-bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW, bool fCheckMerkleRoot, std::optional<int> height)
+static bool CheckBlockImpl(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams,
+                           bool fCheckPOW, bool fCheckMerkleRoot, std::optional<int> height, bool ordinary_header_checked)
 {
+    assert(!ordinary_header_checked || (fCheckPOW && height && !block.IsAuxpow()));
     // A cached success includes work verification at the established height.
     // Callers must clear cached checks if they modify the block.
 
@@ -4104,7 +4106,7 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
 
     // Check that the header is valid (particularly PoW).  This is mostly
     // redundant with the call in AcceptBlockHeader.
-    if (!CheckBlockHeader(block, state, consensusParams, fCheckPOW, height))
+    if (!ordinary_header_checked && !CheckBlockHeader(block, state, consensusParams, fCheckPOW, height))
         return false;
 
     // Check the merkle root.
@@ -4165,6 +4167,12 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
         block.fChecked = true;
 
     return true;
+}
+
+bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams,
+                bool fCheckPOW, bool fCheckMerkleRoot, std::optional<int> height)
+{
+    return CheckBlockImpl(block, state, consensusParams, fCheckPOW, fCheckMerkleRoot, height, false);
 }
 
 void ChainstateManager::UpdateUncommittedBlockStructures(CBlock& block, const CBlockIndex* pindexPrev) const
@@ -4479,8 +4487,9 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     return true;
 }
 
-bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValidationState& state, CBlockIndex** ppindex, bool min_pow_checked, std::optional<int> proof_checked_height)
+bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValidationState& state, CBlockIndex** ppindex, bool min_pow_checked, std::optional<int> proof_checked_height, bool* ordinary_header_checked)
 {
+    if (ordinary_header_checked) *ordinary_header_checked = false;
     AssertLockHeld(cs_main);
 
     // Check for duplicate
@@ -4520,6 +4529,9 @@ bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValida
             !CheckBlockHeader(block, state, GetConsensus(), /*fCheckPOW=*/true, height)) {
             LogDebug(BCLog::VALIDATION, "%s: Consensus::CheckBlockHeader: %s, %s\n", __func__, hash.ToString(), state.ToString());
             return false;
+        }
+        if (ordinary_header_checked && proof_checked_height != height && !block.IsAuxpow()) {
+            *ordinary_header_checked = true;
         }
         if (!ContextualCheckBlockHeader(block, state, m_blockman, *this, pindexPrev)) {
             LogDebug(BCLog::VALIDATION, "%s: Consensus::ContextualCheckBlockHeader: %s, %s\n", __func__, hash.ToString(), state.ToString());
@@ -4615,7 +4627,9 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     CBlockIndex *pindexDummy = nullptr;
     CBlockIndex *&pindex = ppindex ? *ppindex : pindexDummy;
 
-    bool accepted_header{AcceptBlockHeader(block, state, &pindex, min_pow_checked, /*proof_checked_height=*/std::nullopt)};
+    bool ordinary_header_checked{false};
+    bool accepted_header{AcceptBlockHeader(block, state, &pindex, min_pow_checked,
+                                          /*proof_checked_height=*/std::nullopt, &ordinary_header_checked)};
     CheckBlockIndex();
 
     if (!accepted_header)
@@ -4657,7 +4671,7 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
 
     const CChainParams& params{GetParams()};
 
-    if (!CheckBlock(block, state, params.GetConsensus(), /*fCheckPOW=*/true, /*fCheckMerkleRoot=*/true, pindex->nHeight) ||
+    if (!CheckBlockImpl(block, state, params.GetConsensus(), /*fCheckPOW=*/true, /*fCheckMerkleRoot=*/true, pindex->nHeight, ordinary_header_checked) ||
         !ContextualCheckBlock(block, state, *this, pindex->pprev)) {
         if (Assume(state.IsInvalid())) {
             ActiveChainstate().InvalidBlockFound(pindex, state);
@@ -4959,7 +4973,10 @@ VerifyDBResult CVerifyDB::VerifyDB(
         }
         CBlock block;
         // check level 0: read from disk
-        if (!chainstate.m_blockman.ReadBlock(block, *pindex)) {
+        const bool read_ok = nCheckLevel >= 1
+            ? chainstate.m_blockman.ReadBlockForValidation(block, *pindex)
+            : chainstate.m_blockman.ReadBlock(block, *pindex);
+        if (!read_ok) {
             LogPrintf("Verification error: ReadBlock failed at %d, hash=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString());
             return VerifyDBResult::CORRUPTED_BLOCK_DB;
         }
@@ -5025,7 +5042,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
             m_notifications.progress(_("Verifying blocks…"), percentageDone, false);
             pindex = chainstate.m_chain.Next(pindex);
             CBlock block;
-            if (!chainstate.m_blockman.ReadBlock(block, *pindex)) {
+            if (!chainstate.m_blockman.ReadBlockForValidation(block, *pindex)) {
                 LogPrintf("Verification error: ReadBlock failed at %d, hash=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }

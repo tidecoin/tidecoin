@@ -1021,6 +1021,18 @@ bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationSt
 
 bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash, const std::optional<int> expected_height) const
 {
+    return ReadBlockImpl(block, pos, expected_hash, expected_height, true);
+}
+
+bool BlockManager::ReadBlockForValidation(CBlock& block, const CBlockIndex& index) const
+{
+    const FlatFilePos pos{WITH_LOCK(cs_main, return index.GetBlockPos())};
+    return ReadBlockImpl(block, pos, index.GetBlockHash(), index.nHeight, false);
+}
+
+bool BlockManager::ReadBlockImpl(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash,
+                                 std::optional<int> expected_height, bool check_ordinary_work) const
+{
     block.SetNull();
 
     // Open history file to read
@@ -1049,12 +1061,12 @@ bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::o
             LogError("Errors in auxpow parent PoW at %s while reading block", pos.ToString());
             return false;
         }
-    } else if (expected_height) {
+    } else if (check_ordinary_work && expected_height) {
         if (!CheckProofOfWork(block, GetConsensus(), *expected_height)) {
             LogError("Errors in block header at %s while reading block", pos.ToString());
             return false;
         }
-    } else if (!CheckProofOfWorkAny(block, GetConsensus())) {
+    } else if (check_ordinary_work && !CheckProofOfWorkAny(block, GetConsensus())) {
         LogError("Errors in block header at %s while reading block", pos.ToString());
         return false;
     }

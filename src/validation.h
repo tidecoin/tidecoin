@@ -975,7 +975,7 @@ private:
         BlockValidationState& state,
         CBlockIndex** ppindex,
         bool min_pow_checked,
-        std::optional<int> proof_checked_height) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+        std::optional<int> proof_checked_height, bool* ordinary_header_checked = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     bool ProcessNewBlockHeadersImpl(
         std::span<const CBlockHeader> headers,
         bool min_pow_checked,

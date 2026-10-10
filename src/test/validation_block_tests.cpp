@@ -434,6 +434,90 @@ BOOST_AUTO_TEST_CASE(prechecked_auxpow_accepts_fields_after_proof_verification)
     BOOST_CHECK(chainman.ProcessNewBlockHeadersPrechecked({{header}}, height, checked_state));
 }
 
+// Preserve ordinary-work rejection across disk boundaries.
+BOOST_AUTO_TEST_CASE(work_optimization_disk_boundary_both_algorithms)
+{
+    auto& chainman = *m_node.chainman;
+    auto& consensus = const_cast<Consensus::Params&>(Params().GetConsensus());
+    ScopedConsensusMutation restore{consensus};
+    consensus.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
+    const auto first = GoodBlock(Params().GenesisBlock().GetHash());
+    BOOST_REQUIRE(chainman.ProcessNewBlock(first, true, true, nullptr));
+    const auto* prev = WITH_LOCK(cs_main, return chainman.ActiveChain().Tip());
+    for (bool activated : {false, true}) {
+        consensus.nAuxpowStartHeight = activated ? 2 : Consensus::AUXPOW_DISABLED;
+        auto block = Block(prev->GetBlockHash());
+        chainman.GenerateCoinbaseCommitment(*block, prev);
+        block->hashMerkleRoot = BlockMerkleRoot(*block);
+        block->nBits = GetNextWorkRequired(prev, block.get(), consensus);
+        while (CheckProofOfWork(*block, consensus, 2) || !CheckProofOfWork(*block, consensus, activated ? 1 : 0)) ++block->nNonce;
+        const auto hash = block->GetHash();
+        const FlatFilePos pos = chainman.m_blockman.WriteBlock(*block, 2);
+        BOOST_REQUIRE(!pos.IsNull());
+        CBlockIndex index(block->GetBlockHeader());
+        index.phashBlock = &hash;
+        index.pprev = const_cast<CBlockIndex*>(prev);
+        index.nHeight = 2;
+        index.nStatus |= BLOCK_HAVE_DATA;
+        index.nFile = pos.nFile;
+        index.nDataPos = pos.nPos;
+        CBlock decoded;
+        BOOST_CHECK(!chainman.m_blockman.ReadBlock(decoded, index));
+        BOOST_CHECK(!decoded.fChecked);
+        BOOST_REQUIRE(chainman.m_blockman.ReadBlockForValidation(decoded, index));
+        BOOST_CHECK(!decoded.fChecked);
+        BlockValidationState check_state;
+        BOOST_CHECK(!CheckBlock(decoded, check_state, consensus, true, true, 2));
+        BOOST_CHECK_EQUAL(check_state.GetRejectReason(), "high-hash");
+        {
+            LOCK(cs_main);
+            CCoinsViewCache view(&chainman.ActiveChainstate().CoinsTip());
+            const auto old_best = view.GetBestBlock();
+            BlockValidationState connect_state;
+            BOOST_CHECK(!chainman.ActiveChainstate().ConnectBlock(decoded, connect_state, &index, view));
+            BOOST_CHECK_EQUAL(connect_state.GetRejectReason(), "high-hash");
+            BOOST_CHECK(view.GetBestBlock() == old_best);
+        }
+        index.phashBlock = &uint256::ONE;
+        BOOST_CHECK(!chainman.m_blockman.ReadBlockForValidation(decoded, index));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(work_optimization_acceptance_preserves_body_checks_and_cache)
+{
+    auto& chainman = *m_node.chainman;
+    const auto genesis = Params().GenesisBlock().GetHash();
+    // Valid ordinary header, bad body: the reused header check must not bypass the body.
+    auto invalid = std::make_shared<CBlock>(*GoodBlock(genesis));
+    invalid->vtx.clear();
+    invalid->fChecked = false;
+    invalid->m_checked_merkle_root = false;
+    invalid->m_checked_witness_commitment = false;
+    {
+        LOCK(cs_main);
+        BlockValidationState state;
+        BOOST_CHECK(!chainman.AcceptBlock(invalid, state, nullptr, true, nullptr, nullptr, true));
+        BOOST_CHECK(state.IsInvalid());
+        BOOST_CHECK(!invalid->fChecked);
+    }
+    auto valid = std::make_shared<CBlock>(*GoodBlock(genesis));
+    valid->fChecked = false;
+    {
+        LOCK(cs_main);
+        BlockValidationState state;
+        BOOST_REQUIRE(chainman.AcceptBlock(valid, state, nullptr, true, nullptr, nullptr, true));
+        BOOST_CHECK(valid->fChecked);
+        const CBlockIndex* index = chainman.m_blockman.LookupBlockIndex(valid->GetHash());
+        BOOST_REQUIRE(index);
+        CBlock decoded;
+        BOOST_REQUIRE(chainman.m_blockman.ReadBlockForValidation(decoded, *index));
+        BOOST_CHECK(!decoded.fChecked);
+        BlockValidationState full_state;
+        BOOST_REQUIRE(CheckBlock(decoded, full_state, Params().GetConsensus(), true, true, index->nHeight));
+        BOOST_CHECK(decoded.fChecked);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(block_cache_requires_a_full_check_at_known_height)
 {
     CBlock block{*GoodBlock(Params().GenesisBlock().GetHash())};

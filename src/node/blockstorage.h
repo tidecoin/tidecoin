@@ -416,6 +416,11 @@ public:
      */
     void UnlinkPrunedFiles(const std::set<int>& setFilesToPrune) const;
 
+    /** Decode for immediate CheckBlock/ConnectBlock validation. Ordinary work
+     * is deferred to that caller; AuxPoW read checks and hash identity remain.
+     * Do not use for retrieval, disconnection, recovery, or checklevel 0. */
+    bool ReadBlockForValidation(CBlock& block, const CBlockIndex& index) const;
+
     /** Functions for disk access for blocks */
     bool ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash, const std::optional<int> expected_height = std::nullopt) const;
     bool ReadBlock(CBlock& block, const CBlockIndex& index) const;
@@ -423,6 +428,11 @@ public:
     bool ReadRawBlock(std::vector<std::byte>& block, const FlatFilePos& pos) const;
 
     bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const;
+
+private:
+    bool ReadBlockImpl(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash,
+                       std::optional<int> expected_height, bool check_ordinary_work) const;
+public:
 
     void CleanupBlockRevFiles() const;
 };
