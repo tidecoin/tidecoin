@@ -191,6 +191,7 @@ BASE_SCRIPTS = [
     'tool_tidecoin_chainstate.py',
     'tool_wallet.py',
     'tool_utils.py',
+    'tool_tx_signing.py',
     'wallet_txn_clone.py',
     'wallet_txn_clone.py --segwit',
     'rpc_getchaintips.py',

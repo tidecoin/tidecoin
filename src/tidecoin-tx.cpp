@@ -13,6 +13,7 @@
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <core_io.h>
+#include <hash.h>
 #include <key_io.h>
 #include <policy/policy.h>
 #include <primitives/transaction.h>
@@ -53,7 +54,8 @@ static void SetupBitcoinTxArgs(ArgsManager &argsman)
     argsman.AddArg("-create", "Create new, empty TX.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-json", "Select JSON output", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-txid", "Output only the hex-encoded transaction id of the resultant transaction.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-verify", "Verify input scripts using prevtxs register and output a boolean result.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-verify", "Verify input scripts using prevtxs and the selected -rules. This does not check chain state or transaction eligibility.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-rules=<pre-auxpow|post-auxpow>", "Script rules for the intended spend. Required for sign and -verify; there is no default. Network selection and supplied scripts do not select activation rules.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     SetupChainParamsBaseOptions(argsman);
 
     argsman.AddArg("delin=N", "Delete input N from TX", ArgsManager::ALLOW_ANY, OptionsCategory::COMMANDS);
@@ -75,7 +77,7 @@ static void SetupBitcoinTxArgs(ArgsManager &argsman)
     argsman.AddArg("replaceable(=N)", "Sets Replace-By-Fee (RBF) opt-in sequence number for input N. "
         "If N is not provided, the command attempts to opt-in all available inputs for RBF. "
         "If the transaction has no inputs, this option is ignored.", ArgsManager::ALLOW_ANY, OptionsCategory::COMMANDS);
-    argsman.AddArg("sign=SIGHASH-FLAGS", "Add zero or more signatures to transaction. "
+    argsman.AddArg("sign=SIGHASH-FLAGS", "Add zero or more signatures to transaction using -rules. "
         "This command requires JSON registers:"
         "prevtxs=JSON object, "
         "privatekeys=JSON object. "
@@ -616,29 +618,74 @@ static void AddPrevTxsToView(CCoinsViewCache& view, const UniValue& prevtxsObj)
     }
 }
 
-static unsigned int GetScriptVerifyFlagsFromPrevTxs(const UniValue& prevtxsObj)
+static unsigned int GetScriptVerifyFlags()
 {
+    const std::string rules{gArgs.GetArg("-rules", "")};
+    if (rules != "pre-auxpow" && rules != "post-auxpow") {
+        throw std::runtime_error("Specify -rules=pre-auxpow or -rules=post-auxpow for signing and verification");
+    }
     unsigned int script_verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
-    for (unsigned int previdx = 0; previdx < prevtxsObj.size(); ++previdx) {
-        const UniValue& prevOut = prevtxsObj[previdx];
-        std::vector<unsigned char> pkData(ParseHexUV(prevOut["scriptPubKey"], "scriptPubKey"));
-        CScript script_pub_key(pkData.begin(), pkData.end());
-        int witness_version{0};
-        std::vector<unsigned char> witness_program;
-        if (script_pub_key.IsWitnessProgram(witness_version, witness_program) &&
-            witness_version == 1 &&
-            witness_program.size() == WITNESS_V1_SCRIPTHASH_512_SIZE) {
-            script_verify_flags |= SCRIPT_VERIFY_PQ_STRICT;
-            script_verify_flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-            script_verify_flags |= SCRIPT_VERIFY_SHA512;
-            break;
-        }
+    if (rules == "post-auxpow") {
+        script_verify_flags |= SCRIPT_VERIFY_PQ_STRICT;
+        script_verify_flags |= SCRIPT_VERIFY_WITNESS_V1_512;
+        script_verify_flags |= SCRIPT_VERIFY_SHA512;
     }
     return script_verify_flags;
 }
 
+// Match the script forms accepted by signrawtransactionwithkey. Missing scripts
+// remain allowed here: this utility can partially sign, or reuse input data.
+static void AddPrevTxScripts(FlatSigningProvider& keystore, const UniValue& prevOut, const CScript& script_pub_key)
+{
+    const bool is_p2sh{script_pub_key.IsPayToScriptHash()};
+    const bool is_p2wsh{script_pub_key.IsPayToWitnessScriptHash()};
+    int version{0};
+    std::vector<unsigned char> program;
+    const bool is_p2wsh512{script_pub_key.IsWitnessProgram(version, program) &&
+                          version == 1 && program.size() == WITNESS_V1_SCRIPTHASH_512_SIZE};
+    if (!is_p2sh && !is_p2wsh && !is_p2wsh512) return;
+
+    const UniValue& rs{prevOut["redeemScript"]};
+    const UniValue& ws{prevOut["witnessScript"]};
+    if (rs.isNull() && ws.isNull()) return;
+    const auto script_data{ParseHexUV(ws.isNull() ? rs : ws, ws.isNull() ? "redeemScript" : "witnessScript")};
+    const CScript script{script_data.begin(), script_data.end()};
+    if (script.size() > MAX_SCRIPT_ELEMENT_SIZE) {
+        throw std::runtime_error("redeemScript/witnessScript exceeds maximum script element size");
+    }
+    const CScript witness_v0{GetScriptForDestination(WitnessV0ScriptHash(script))};
+    const WitnessV1ScriptHash512 hash512{script};
+    const CScript witness_v1{GetScriptForDestination(hash512)};
+
+    if (!rs.isNull() && !ws.isNull()) {
+        const auto redeem_data{ParseHexUV(rs, "redeemScript")};
+        const CScript redeem{redeem_data.begin(), redeem_data.end()};
+        if (redeem != script) {
+            if (redeem != witness_v0 && redeem != witness_v1) {
+                throw std::runtime_error("redeemScript does not correspond to witnessScript");
+            }
+            if (is_p2sh && script_pub_key != GetScriptForDestination(ScriptHash(redeem))) {
+                throw std::runtime_error("redeemScript/witnessScript does not match scriptPubKey");
+            }
+        }
+    }
+    const bool matches{is_p2sh ? (script_pub_key == GetScriptForDestination(ScriptHash(script)) ||
+                                 script_pub_key == GetScriptForDestination(ScriptHash(witness_v0)) ||
+                                 script_pub_key == GetScriptForDestination(ScriptHash(witness_v1))) :
+                               script_pub_key == (is_p2wsh ? witness_v0 : witness_v1)};
+    if (!matches) {
+        throw std::runtime_error("redeemScript/witnessScript does not match scriptPubKey");
+    }
+    keystore.scripts.emplace(CScriptID(script), script);
+    keystore.scripts.emplace(CScriptID(witness_v0), witness_v0);
+    keystore.scripts.emplace(CScriptID(witness_v1), witness_v1);
+    keystore.scripts.emplace(CScriptID{RIPEMD160(hash512)}, script);
+}
+
 static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
 {
+    const unsigned int script_verify_flags{GetScriptVerifyFlags()};
+    const bool allow_legacy{!(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT)};
     int nHashType = SIGHASH_ALL;
 
     if (flagStr.size() > 0)
@@ -654,7 +701,7 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
 
     if (!registers.count("privatekeys"))
         throw std::runtime_error("privatekeys register variable must be set.");
-    FillableSigningProvider tempKeystore;
+    FlatSigningProvider tempKeystore;
     UniValue keysObj = registers["privatekeys"];
 
     for (unsigned int kidx = 0; kidx < keysObj.size(); kidx++) {
@@ -664,32 +711,27 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
         if (!key.IsValid()) {
             throw std::runtime_error("privatekey not valid");
         }
-        tempKeystore.AddKey(key);
+        const CPubKey pubkey{key.GetPubKey()};
+        tempKeystore.keys.emplace(pubkey.GetID(), key);
+        tempKeystore.pubkeys.emplace(pubkey.GetID(), pubkey);
+        // Preserve FillableSigningProvider's implicit P2SH-P2WPKH support.
+        const CScript witness_key{GetScriptForDestination(WitnessV0KeyHash(pubkey.GetID()))};
+        tempKeystore.scripts.emplace(CScriptID(witness_key), witness_key);
     }
 
     // Add previous txouts given in the RPC call:
     if (!registers.count("prevtxs"))
         throw std::runtime_error("prevtxs register variable must be set.");
     UniValue prevtxsObj = registers["prevtxs"];
-    const unsigned int script_verify_flags = GetScriptVerifyFlagsFromPrevTxs(prevtxsObj);
-    const bool allow_legacy = !(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT);
     AddPrevTxsToView(view, prevtxsObj);
     for (unsigned int previdx = 0; previdx < prevtxsObj.size(); previdx++) {
         const UniValue& prevOut = prevtxsObj[previdx];
         std::vector<unsigned char> pkData(ParseHexUV(prevOut["scriptPubKey"], "scriptPubKey"));
         CScript scriptPubKey(pkData.begin(), pkData.end());
-        // if redeemScript given and private keys given,
-        // add redeemScript to the tempKeystore so it can be signed:
-        if ((scriptPubKey.IsPayToScriptHash() || scriptPubKey.IsPayToWitnessScriptHash()) &&
-            prevOut.exists("redeemScript")) {
-            UniValue v = prevOut["redeemScript"];
-            std::vector<unsigned char> rsData(ParseHexUV(v, "redeemScript"));
-            CScript redeemScript(rsData.begin(), rsData.end());
-            tempKeystore.AddCScript(redeemScript);
-        }
+        AddPrevTxScripts(tempKeystore, prevOut, scriptPubKey);
     }
 
-    const FillableSigningProvider& keystore = tempKeystore;
+    const FlatSigningProvider& keystore = tempKeystore;
 
     bool fHashSingle = ((nHashType & ~SIGHASH_ANYONECANPAY) == SIGHASH_SINGLE);
 
@@ -725,12 +767,12 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
 
 static void VerifyTx(const CTransaction& tx)
 {
+    const unsigned int script_verify_flags{GetScriptVerifyFlags()};
+    const bool allow_legacy{!(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT)};
     if (!registers.count("prevtxs")) {
         throw std::runtime_error("prevtxs register variable must be set.");
     }
     UniValue prevtxsObj = registers["prevtxs"];
-    const unsigned int script_verify_flags = GetScriptVerifyFlagsFromPrevTxs(prevtxsObj);
-    const bool allow_legacy = !(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT);
     CCoinsView viewDummy;
     CCoinsViewCache view(&viewDummy);
     AddPrevTxsToView(view, prevtxsObj);
@@ -864,6 +906,7 @@ static int CommandLineRawTx(int argc, char* argv[])
     std::string strPrint;
     int nRet = 0;
     try {
+        if (gArgs.IsArgSet("-rules")) GetScriptVerifyFlags();
         // Skip switches; Permit common stdin convention "-"
         while (argc > 1 && IsSwitchChar(argv[1][0]) &&
                (argv[1][1] != 0)) {
