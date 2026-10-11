@@ -22,6 +22,7 @@
 #include <util/check.h>
 #include <util/feefrac.h>
 #include <util/strencodings.h>
+#include <util/string.h>
 #include <util/time.h>
 #include <util/translation.h>
 #include <validation.h>
@@ -837,7 +838,7 @@ BOOST_AUTO_TEST_CASE(mining_option_validation)
     BOOST_CHECK_THROW(mining->createNewBlock(), std::runtime_error);
     m_node.args->ForceSetArg("-blockmaxweight", "12000");
     BOOST_REQUIRE(mining->createNewBlock());
-    m_node.args->ForceSetArg("-blockmaxweight", std::to_string(MAX_BLOCK_WEIGHT + 1));
+    m_node.args->ForceSetArg("-blockmaxweight", util::ToString(MAX_BLOCK_WEIGHT + 1));
     BOOST_CHECK_THROW(mining->createNewBlock(), std::runtime_error);
 }
 

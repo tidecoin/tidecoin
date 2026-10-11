@@ -3312,7 +3312,7 @@ UniValue WriteUTXOSnapshot(
     const fs::path& path,
     const fs::path& temppath,
     const std::function<void()>& interruption_point)
-{
+try {
     LOG_TIME_SECONDS(strprintf("writing UTXO snapshot at height %s (%s) to file %s (via %s)",
         tip->nHeight, tip->GetBlockHash().ToString(),
         fs::PathToString(path), fs::PathToString(temppath)));
@@ -3380,6 +3380,13 @@ UniValue WriteUTXOSnapshot(
     result.pushKV("txoutset_hash", maybe_stats->hashSerialized.ToString());
     result.pushKV("nchaintx", tip->m_chain_tx_count);
     return result;
+} catch (...) {
+    // A cancelled or failed export must close its partial output too. Keep the
+    // original error if closing also fails; the incomplete file is not published.
+    if (afile.fclose() != 0) {
+        LogError("Error closing incomplete snapshot %s: %s", fs::PathToString(temppath), SysErrorString(errno));
+    }
+    throw;
 }
 
 UniValue CreateUTXOSnapshot(

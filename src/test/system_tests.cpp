@@ -55,12 +55,16 @@ BOOST_AUTO_TEST_CASE(command_arguments)
 #ifdef ENABLE_EXTERNAL_SIGNER
 BOOST_AUTO_TEST_CASE(run_command)
 {
-    const auto executable{fs::PathToString(test::CopyMockProcess(m_args.GetDataDirBase() / "process space"))};
+    const auto executable{fs::PathToString(test::CopyMockProcess(m_args.GetDataDirBase() / fs::PathFromString("process space-\xc3\xa9")))};
     BOOST_CHECK(RunCommandParseJSON({}).isNull());
     BOOST_CHECK_THROW(RunCommandParseJSON({""}), std::invalid_argument);
     BOOST_CHECK_THROW(RunCommandParseJSON({executable, std::string{"x\0y", 3}}), std::invalid_argument);
 
-    const std::vector<std::string> values{"a b", "", "quote\"and'apostrophe", R"(C:\path\)", "unicode-\xc3\xa9", "$(echo unwanted);*"};
+    const std::vector<std::string> values{
+        "a b", "", "quote\"and'apostrophe", R"(C:\path\)", "unicode-\xc3\xa9", "$(echo unwanted);*",
+        "\"", "\\", R"(one\"two)", R"(two\\"three)", R"(space and trailing\)",
+        R"(\\server\share\)", "a\tb", "a\nb", "unicode-\xe4\xb8\xad-\xf0\x9f\x8c\x8a", "",
+    };
     auto command{std::vector<std::string>{executable, "echo"}};
     command.insert(command.end(), values.begin(), values.end());
     const auto result{RunCommandParseJSON(command)};

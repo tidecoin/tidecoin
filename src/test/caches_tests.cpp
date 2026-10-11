@@ -4,6 +4,7 @@
 #include <node/caches.h>
 #include <node/mempool_args.h>
 #include <util/byte_units.h>
+#include <util/string.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -61,10 +62,10 @@ BOOST_AUTO_TEST_CASE(cache_allocation_boundaries)
     for (const auto& test : cases) {
         for (const bool txindex : {false, true}) {
             for (const size_t indexes : {size_t{0}, size_t{1}, size_t{2}, size_t{3}, std::numeric_limits<size_t>::max()}) {
-                BOOST_TEST_CONTEXT("dbcache=" << (test.option ? std::to_string(*test.option) : "default")
+                BOOST_TEST_CONTEXT("dbcache=" << (test.option ? util::ToString(*test.option) : "default")
                                    << " txindex=" << txindex << " indexes=" << indexes) {
                     ArgsManager args;
-                    if (test.option) args.ForceSetArg("-dbcache", std::to_string(*test.option));
+                    if (test.option) args.ForceSetArg("-dbcache", util::ToString(*test.option));
                     args.ForceSetArg("-txindex", txindex ? "1" : "0");
                     const auto sizes{CalculateCacheSizes(args, indexes)};
                     size_t remaining{test.expected};
@@ -115,7 +116,7 @@ BOOST_AUTO_TEST_CASE(cache_option_bounds)
     constexpr int64_t max{std::numeric_limits<int64_t>::max()};
     constexpr int64_t max_dbcache_mib{max >> 20};
     for (const int64_t dbcache : {std::numeric_limits<int64_t>::min(), int64_t{-1}, int64_t{0}, int64_t{450}, max_dbcache_mib}) {
-        args.ForceSetArg("-dbcache", std::to_string(dbcache));
+        args.ForceSetArg("-dbcache", util::ToString(dbcache));
         for (const bool txindex : {false, true}) {
             args.ForceSetArg("-txindex", txindex ? "1" : "0");
             for (const size_t indexes : {size_t{0}, size_t{1}, size_t{3}}) {
@@ -127,7 +128,7 @@ BOOST_AUTO_TEST_CASE(cache_option_bounds)
         }
     }
     for (const int64_t dbcache : {max_dbcache_mib + 1, max}) {
-        args.ForceSetArg("-dbcache", std::to_string(dbcache));
+        args.ForceSetArg("-dbcache", util::ToString(dbcache));
         const auto result{CheckCacheOptions(args, /*max_mempool_bytes=*/0)};
         // Oversized options retain the existing 1 GiB clamp on 32-bit systems.
         BOOST_CHECK_EQUAL(result.has_value(), sizeof(void*) == 4);
@@ -141,7 +142,7 @@ BOOST_AUTO_TEST_CASE(mempool_option_byte_conversion)
     constexpr int64_t max_mb{std::numeric_limits<int64_t>::max() / 1'000'000};
     for (const int64_t mb : {std::numeric_limits<int64_t>::min(), int64_t{-1}, int64_t{0}, int64_t{9}, int64_t{500}, int64_t{501}, max_mb, max_mb + 1, std::numeric_limits<int64_t>::max()}) {
         kernel::MemPoolOptions options;
-        args.ForceSetArg("-maxmempool", std::to_string(mb));
+        args.ForceSetArg("-maxmempool", util::ToString(mb));
         const auto result{ApplyArgsManOptions(args, *chainparams, options)};
         const bool valid{mb >= 0 && mb <= (sizeof(void*) == 4 ? 500 : max_mb)};
         BOOST_CHECK_EQUAL(result.has_value(), valid);

@@ -458,9 +458,12 @@ BOOST_AUTO_TEST_CASE(work_optimization_disk_boundary_both_algorithms)
         index.phashBlock = &hash;
         index.pprev = const_cast<CBlockIndex*>(prev);
         index.nHeight = 2;
-        index.nStatus |= BLOCK_HAVE_DATA;
-        index.nFile = pos.nFile;
-        index.nDataPos = pos.nPos;
+        {
+            LOCK(cs_main);
+            index.nStatus |= BLOCK_HAVE_DATA;
+            index.nFile = pos.nFile;
+            index.nDataPos = pos.nPos;
+        }
         CBlock decoded;
         BOOST_CHECK(!chainman.m_blockman.ReadBlock(decoded, index));
         BOOST_CHECK(!decoded.fChecked);

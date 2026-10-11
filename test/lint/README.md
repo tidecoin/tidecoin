@@ -153,7 +153,10 @@ Usage: test/lint/git-subtree-check.sh [-r] DIR [COMMIT]
 
 - `DIR` is the subtree prefix within the repository.
 - `COMMIT` is the commit to check (defaults to `HEAD` if omitted).
-- `-r` checks that the subtree commit exists in the upstream repository.
+- `-r` checks that the imported base matches the upstream subtree commit.
+- Intentional local changes must exactly match the full diff recorded in
+  `test/lint/subtree-patches/<DIR>.patch`. File contents and modes are checked;
+  unrecorded changes fail. The upstream base is still checked with `-r`.
 
 For a full `-r` check, fetch the corresponding upstream subtree remotes:
 - `src/crc32c`: https://github.com/bitcoin-core/crc32c-subtree.git (branch `bitcoin-fork`)

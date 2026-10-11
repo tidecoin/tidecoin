@@ -24,7 +24,9 @@
 
 #include <array>
 #include <any>
+#include <cstdio>
 #include <tuple>
+#include <vector>
 
 #include <boost/test/unit_test.hpp>
 
@@ -131,6 +133,9 @@ BOOST_AUTO_TEST_CASE(descriptor_range_expansion)
     BOOST_REQUIRE_EQUAL(descs.size(), 1U);
     BOOST_REQUIRE_EQUAL(second.size(), 1U);
     descs.push_back(std::move(second.front()));
+    for (const auto& range : std::vector<std::pair<int64_t, int64_t>>{{-1, 0}, {1, 0}, {0, int64_t{INT32_MAX} + 1}}) {
+        BOOST_CHECK_THROW(ExpandDescriptorRange(descs, range, provider, provider, false), NonFatalCheckError);
+    }
     for (const bool expand_priv : {false, true}) {
         const auto single = ExpandDescriptorRange(descs, {1, 1}, provider, provider, expand_priv);
         BOOST_REQUIRE(single.has_value());
@@ -864,6 +869,7 @@ BOOST_FIXTURE_TEST_CASE(historical_snapshot_isolation_and_interruption, TestChai
         AutoFile file{fsbridge::fopen(path, "wb")};
         BOOST_CHECK_EXCEPTION(CreateRolledBackUTXOSnapshot(m_node, chainstate, target, std::move(file), path, path),
                               std::runtime_error, [](const auto& e) { return std::string{e.what()} == "cancel export"; });
+        if (stop == total_calls) BOOST_CHECK(file.IsNull()); // Interrupted after output began.
         check_cleanup();
     }
     m_node.rpc_interruption_point = [] {};
@@ -883,5 +889,75 @@ BOOST_FIXTURE_TEST_CASE(historical_snapshot_isolation_and_interruption, TestChai
     BOOST_CHECK_EQUAL(result["txoutset_hash"].get_str(), baseline["txoutset_hash"].get_str());
     check_cleanup();
 }
+
+#ifdef __linux__
+BOOST_FIXTURE_TEST_CASE(snapshot_output_failures, TestChain100Setup)
+{
+    auto& chainstate = m_node.chainman->ActiveChainstate();
+    const auto* target = WITH_LOCK(cs_main, return chainstate.m_chain.Tip());
+    mineBlocks(10);
+    const auto* tip = WITH_LOCK(cs_main, return chainstate.m_chain.Tip());
+    const auto path = m_args.GetDataDirNet() / "failed-snapshot.dat";
+    const auto incomplete = m_args.GetDataDirNet() / "failed-snapshot.dat.incomplete";
+    for (bool historical : {false, true}) {
+        for (int mode : {0, 1, 2}) {
+            // /dev/full fails immediately without buffering, or at close with
+            // enough buffering for this small snapshot. Mode 2 interrupts after
+            // the metadata write, so closing fails while handling cancellation.
+            std::vector<char> buffer(1024 * 1024);
+            auto* output = fsbridge::fopen("/dev/full", "wb");
+            BOOST_REQUIRE(output);
+            AutoFile file{output};
+            BOOST_REQUIRE_EQUAL(std::setvbuf(output, buffer.data(), mode == 0 ? _IONBF : _IOFBF, buffer.size()), 0);
+            m_node.rpc_interruption_point = [&] {
+                if (mode == 2 && file.tell() > 0) throw std::runtime_error("cancel export");
+            };
+            const auto write = [&] {
+                if (historical) {
+                    return CreateRolledBackUTXOSnapshot(m_node, chainstate, target, std::move(file), path, incomplete);
+                }
+                return CreateUTXOSnapshot(m_node, chainstate, std::move(file), path, incomplete);
+            };
+            if (mode == 2) {
+                BOOST_CHECK_EXCEPTION(write(), std::runtime_error, [](const auto& e) { return std::string{e.what()} == "cancel export"; });
+            } else {
+                BOOST_CHECK_EXCEPTION(write(), std::ios_base::failure, [&](const auto& e) {
+                    return std::string{e.what()}.find(mode == 0 ? "AutoFile::write: write failed" : "Error closing") != std::string::npos;
+                });
+            }
+            BOOST_CHECK(file.IsNull());
+            m_node.rpc_interruption_point = [] {};
+            BOOST_CHECK(WITH_LOCK(cs_main, return chainstate.m_chain.Tip() == tip));
+            for (const auto& entry : fs::directory_iterator(path.parent_path())) {
+                BOOST_CHECK(!fs::PathToString(entry.path().filename()).starts_with("temp_utxo_"));
+            }
+        }
+
+        // Exercise the RPC's publication boundary too: a failed export leaves
+        // its incomplete path in place and never renames it to the final name.
+        fs::create_symlink("/dev/full", incomplete);
+        JSONRPCRequest request;
+        request.context = &m_node;
+        request.strMethod = "dumptxoutset";
+        request.params = UniValue{UniValue::VARR};
+        request.params.push_back(fs::PathToString(path));
+        request.params.push_back(historical ? "rollback" : "latest");
+        if (historical) {
+            UniValue options{UniValue::VOBJ};
+            options.pushKV("rollback", target->nHeight);
+            request.params.push_back(options);
+        }
+        if (RPCIsInWarmup(nullptr)) SetRPCWarmupFinished();
+        BOOST_CHECK_THROW(tableRPC.execute(request), UniValue);
+        BOOST_CHECK(!fs::exists(path));
+        BOOST_CHECK(fs::is_symlink(incomplete));
+        fs::remove(incomplete);
+        BOOST_CHECK_NO_THROW(tableRPC.execute(request));
+        BOOST_CHECK(fs::exists(path));
+        BOOST_CHECK(!fs::exists(incomplete));
+        fs::remove(path);
+    }
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()

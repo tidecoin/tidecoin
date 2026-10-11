@@ -145,10 +145,13 @@ if(ENABLE_EXTERNAL_SIGNER)
   add_executable(tidecoin_mock_process mock_process.cpp)
   set_target_properties(tidecoin_mock_process PROPERTIES OUTPUT_NAME tidecoin-mock-process)
   target_link_libraries(tidecoin_mock_process PRIVATE core_interface univalue)
+  if(MINGW)
+    target_link_options(tidecoin_mock_process PRIVATE -municode)
+  endif()
   add_windows_application_manifest(tidecoin_mock_process)
   add_dependencies(test_tidecoin tidecoin_mock_process)
   set_property(SOURCE system_tests.cpp ${PROJECT_SOURCE_DIR}/src/wallet/test/walletload_tests.cpp
-    APPEND PROPERTY COMPILE_DEFINITIONS TEST_RUN_COMMAND_HELPER="$<TARGET_FILE:tidecoin_mock_process>"
+    APPEND PROPERTY COMPILE_DEFINITIONS TEST_RUN_COMMAND_HELPER="$<TARGET_FILE_NAME:tidecoin_mock_process>"
   )
 endif()
 

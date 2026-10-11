@@ -9,6 +9,7 @@
 #include <key_io.h>
 #include <test/util/setup_common.h>
 #include <util/strencodings.h>
+#include <util/string.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -53,7 +54,7 @@ BOOST_AUTO_TEST_CASE(pqhd_optional_expansion_cache)
     for (const int scheme : {7, 8, 9, 10, 11}) {
         FlatSigningProvider parsed;
         std::string error;
-        auto descs = Parse("wpkh(pqhd(" + provider.id().ToString() + ")/10007h/6868h/" + std::to_string(scheme) + "h/0h/0h/*h)", parsed, error);
+        auto descs = Parse("wpkh(pqhd(" + provider.id().ToString() + ")/10007h/6868h/" + util::ToString(scheme) + "h/0h/0h/*h)", parsed, error);
         BOOST_REQUIRE_EQUAL(descs.size(), 1U);
         const int before = provider.calls;
         FlatSigningProvider rejected;

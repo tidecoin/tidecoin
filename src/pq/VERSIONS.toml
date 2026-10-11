@@ -1,5 +1,5 @@
 schema_version = 1
-manifest_updated_on = "2026-02-19"
+manifest_updated_on = "2026-10-11"
 
 [upstream]
 pqclean_repo = "https://github.com/PQClean/PQClean"
@@ -7,6 +7,15 @@ default_upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
 
 [settings]
 ignored_upstream_files = ["Makefile", "Makefile.Microsoft_nmake"]
+
+[[patches]]
+id = "shared-fips202-cleanup"
+patch_file = "src/pq/patches/shared-fips202-cleanup.patch"
+summary = "Clear SHAKE and SHA-3 workspaces before release."
+reason = "Erase allocated states and temporary buffers after use and reset released context pointers."
+owner = "Tidecoin developers"
+consensus_impact = "none"
+files = ["src/pq/fips202.c"]
 
 [[patches]]
 id = "falcon-512-local-adaptations"
@@ -88,13 +97,13 @@ files = [
 [[components]]
 name = "shared-fips202"
 kind = "shared"
-status = "pristine"
+status = "patched"
 local_path = "src/pq"
 upstream_path = "common"
 include_files = ["fips202.c", "fips202.h"]
 upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
 import_commit = "11d6245a25b4b5e4cf519937a582e9e86cac6f26"
-local_patch_set = []
+local_patch_set = ["shared-fips202-cleanup"]
 notes = "Shared PQClean SHAKE/FIPS202 primitives used by vendored PQ components."
 
 [[components]]

@@ -102,27 +102,39 @@ class WalletSignerTest(BitcoinTestFramework):
                 for field in ('amount', 'script', 'sequence', 'locktime', 'input', 'version'):
                     bad = PSBT.from_base64(signed['psbt'])
                     tx = from_binary(CTransaction, bad.g.map[PSBT_GLOBAL_UNSIGNED_TX])
-                    if field == 'amount': tx.vout[0].nValue -= 1
-                    elif field == 'script': tx.vout[0].scriptPubKey = b'\x51'
-                    elif field == 'sequence': tx.vin[0].nSequence -= 1
-                    elif field == 'locktime': tx.nLockTime += 1
-                    elif field == 'input': tx.vin[0].prevout.n += 1
-                    else: tx.version += 1
+                    if field == 'amount':
+                        tx.vout[0].nValue -= 1
+                    elif field == 'script':
+                        tx.vout[0].scriptPubKey = b'\x51'
+                    elif field == 'sequence':
+                        tx.vin[0].nSequence -= 1
+                    elif field == 'locktime':
+                        tx.nLockTime += 1
+                    elif field == 'input':
+                        tx.vin[0].prevout.n += 1
+                    else:
+                        tx.version += 1
                     bad.g.map[PSBT_GLOBAL_UNSIGNED_TX] = tx.serialize()
                     reject(bad.to_base64())
                 for target in ('utxo', 'input_origin', 'output_origin', 'global', 'output', 'signature'):
                     bad = PSBT.from_base64(signed['psbt'])
                     if target == 'utxo':
-                        value = bytearray(bad.i[0].map[PSBT_IN_WITNESS_UTXO]); value[0] ^= 1
+                        value = bytearray(bad.i[0].map[PSBT_IN_WITNESS_UTXO])
+                        value[0] ^= 1
                         bad.i[0].map[PSBT_IN_WITNESS_UTXO] = bytes(value)
                     elif target.endswith('origin'):
                         records = (bad.i if target.startswith('input') else bad.o)[0].map
                         key = next(k for k in records if isinstance(k, bytes) and k.startswith(b'\xfc\x08tidecoin\x01'))
-                        value = bytearray(records[key]); value[0] ^= 1; records[key] = bytes(value)
-                    elif target == 'global': bad.g.map[b'\xaa'] = b'new metadata'
-                    elif target == 'output': bad.o[0].map[b'\xaa'] = b'new metadata'
+                        value = bytearray(records[key])
+                        value[0] ^= 1
+                        records[key] = bytes(value)
+                    elif target == 'global':
+                        bad.g.map[b'\xaa'] = b'new metadata'
+                    elif target == 'output':
+                        bad.o[0].map[b'\xaa'] = b'new metadata'
                     else:
-                        value = bytearray(bad.i[0].map[PSBT_IN_FINAL_SCRIPTWITNESS]); value[15] ^= 1
+                        value = bytearray(bad.i[0].map[PSBT_IN_FINAL_SCRIPTWITNESS])
+                        value[15] ^= 1
                         bad.i[0].map[PSBT_IN_FINAL_SCRIPTWITNESS] = bytes(value)
                     reject(bad.to_base64())
                     if target == 'signature':

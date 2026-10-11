@@ -64,7 +64,7 @@ fn get_linter_list() -> Vec<&'static Linter> {
             lint_fn: lint_doc_release_note_snippets
         },
         &Linter {
-            description: "Check that subtrees are pure subtrees",
+            description: "Check imported subtrees and recorded local patches",
             name: "subtree",
             lint_fn: lint_subtree
         },
@@ -247,7 +247,7 @@ fn get_pathspecs_default_excludes() -> Vec<String> {
 }
 
 fn lint_subtree() -> LintResult {
-    // This only checks that the trees are pure subtrees, it is not doing a full
+    // Check imported trees and exact recorded local patches, without a full
     // check with -r to not have to fetch all the remotes.
     let mut good = true;
     for subtree in get_subtrees() {

@@ -1306,7 +1306,7 @@ std::pair<int64_t, int64_t> ParseDescriptorRange(const UniValue& value)
 
 std::optional<std::vector<CScript>> ExpandDescriptorRange(const std::vector<std::unique_ptr<Descriptor>>& descs, std::pair<int64_t, int64_t> range, const SigningProvider& provider, FlatSigningProvider& out, bool expand_priv, const DescriptorExpandFn& expand)
 {
-    Assert(range.first >= 0 && range.first <= range.second && range.second <= INT32_MAX);
+    CHECK_NONFATAL(range.first >= 0 && range.first <= range.second && range.second <= INT32_MAX);
     std::vector<CScript> ret;
     // The increment after the inclusive INT32_MAX endpoint must remain representable.
     for (int64_t i = range.first; i <= range.second; ++i) {

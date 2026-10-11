@@ -59,7 +59,7 @@
     {"id": "WIT-V0-UNEXPECTED", "polarity": "fail"},
     {"id": "WIT-V0-WRONG-LEN", "polarity": "fail"},
     {"id": "WIT-V0-WRONG-VALUE", "polarity": "fail"},
-    {"id": "WIT-V1512-DISCOURAGED", "polarity": "fail"},
+    {"id": "WIT-V1512-PREACTIVATION", "polarity": "fail"},
     {"id": "WIT-V1512-MALLEATED", "polarity": "fail"},
     {"id": "WIT-V1512-MISMATCH", "polarity": "fail"},
     {"id": "WIT-V1512-SIGHASH-ALL", "polarity": "ok"},

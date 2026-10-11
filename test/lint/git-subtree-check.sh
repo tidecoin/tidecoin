@@ -12,7 +12,7 @@ while getopts "?hr" opt; do
       echo "Usage: $0 [-r] DIR [COMMIT]"
       echo "       $0 -?"
       echo ""
-      echo "Checks that a certain prefix is pure subtree, and optionally whether the"
+      echo "Checks the imported subtree and any recorded local patch, and whether the"
       echo "referenced commit is present in any fetched remote."
       echo ""
       echo "DIR is the prefix within the repository to check."
@@ -107,10 +107,22 @@ fi
 tree_commit=$(git show -s --format="%T" "$old")
 echo "$DIR in $COMMIT was last updated in commit $old (tree $tree_commit)"
 
-# ... and compare the actual tree with it
-if [ "$tree_actual_tree" != "$tree_commit" ]; then
+# Compare the entire delta, including file modes, against any recorded local
+# patch. Never exclude individual files or accept an unrecorded subtree change.
+patch_path="test/lint/subtree-patches/$DIR.patch"
+if git cat-file -e "$COMMIT:$patch_path" 2>/dev/null; then
+    patch_dir=$(mktemp -d)
+    trap 'rm -f "$patch_dir/actual" "$patch_dir/recorded"; rmdir "$patch_dir"' EXIT HUP INT TERM
+    git diff --no-ext-diff --no-renames --full-index "$tree_commit" "$tree_actual_tree" > "$patch_dir/actual" || exit 1
+    git show "$COMMIT:$patch_path" > "$patch_dir/recorded" || exit 1
+    if ! cmp "$patch_dir/actual" "$patch_dir/recorded"; then
+        echo "FAIL: subtree changes do not match $patch_path" >&2
+        exit 1
+    fi
+    echo "Local changes exactly match $patch_path"
+elif [ "$tree_actual_tree" != "$tree_commit" ]; then
     git diff "$tree_commit" "$tree_actual_tree" >&2
-    echo "FAIL: subtree directory was touched without subtree merge" >&2
+    echo "FAIL: subtree directory was touched without subtree merge or recorded patch" >&2
     exit 1
 fi
 
@@ -123,8 +135,8 @@ if [ "$check_remote" != "0" ]; then
     tree_subtree=$(git show -s --format="%T" "$rev")
     echo "$DIR in $COMMIT was last updated to upstream commit $rev (tree $tree_subtree)"
 
-    # ... and compare the actual tree with it
-    if [ "$tree_actual_tree" != "$tree_subtree" ]; then
+    # ... and compare the imported base tree with it
+    if [ "$tree_commit" != "$tree_subtree" ]; then
         echo "FAIL: subtree update commit differs from upstream tree!" >&2
         exit 1
     fi

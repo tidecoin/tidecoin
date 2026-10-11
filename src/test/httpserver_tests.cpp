@@ -7,6 +7,7 @@
 #include <rpc/protocol.h>
 #include <support/events.h>
 #include <util/signalinterrupt.h>
+#include <util/string.h>
 
 #include <event2/buffer.h>
 #include <event2/http.h>
@@ -60,7 +61,7 @@ BOOST_AUTO_TEST_CASE(handler_exceptions_preserve_server)
     bool initialized{false};
     for (int attempt{0}; attempt < 16 && !initialized; ++attempt) {
         port = 30000 + m_rng.randrange(20000);
-        gArgs.ForceSetArg("-rpcbind", "127.0.0.1:" + std::to_string(port));
+        gArgs.ForceSetArg("-rpcbind", "127.0.0.1:" + util::ToString(port));
         initialized = InitHTTPServer(interrupt);
     }
     BOOST_REQUIRE(initialized);

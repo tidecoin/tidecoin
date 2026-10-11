@@ -1,0 +1,211 @@
+diff --git a/db/autocompact_test.cc b/db/autocompact_test.cc
+index e6c97a05a6b7ff6954224fe62f1f2aec2d52f4a7..8cb0c375d2088dcb7adcbd42e0454a3a268ed5a9 100644
+--- a/db/autocompact_test.cc
++++ b/db/autocompact_test.cc
+@@ -54,8 +54,8 @@ static const int kValueSize = 200 * 1024;
+ static const int kTotalSize = 100 * 1024 * 1024;
+ static const int kCount = kTotalSize / kValueSize;
+ 
+-// Read through the first n keys repeatedly and check that they get
+-// compacted (verified by checking the size of the key space).
++// Read through the first n keys repeatedly and check that reads do not
++// trigger compaction (seek compaction is disabled in this fork).
+ void AutoCompactTest::DoReads(int n) {
+   std::string value(kValueSize, 'x');
+   DBImpl* dbi = reinterpret_cast<DBImpl*>(db_);
+@@ -76,25 +76,22 @@ void AutoCompactTest::DoReads(int n) {
+   const int64_t initial_size = Size(Key(0), Key(n));
+   const int64_t initial_other_size = Size(Key(n), Key(kCount));
+ 
+-  // Read until size drops significantly.
++  // Reads must not shrink the range by scheduling seek compaction.
+   std::string limit_key = Key(n);
+-  for (int read = 0; true; read++) {
+-    ASSERT_LT(read, 100) << "Taking too long to compact";
++  for (int read = 0; read < 100; read++) {
+     Iterator* iter = db_->NewIterator(ReadOptions());
+     for (iter->SeekToFirst();
+          iter->Valid() && iter->key().ToString() < limit_key; iter->Next()) {
+       // Drop data
+     }
+     delete iter;
+-    // Wait a little bit to allow any triggered compactions to complete.
+-    Env::Default()->SleepForMicroseconds(1000000);
+     uint64_t size = Size(Key(0), Key(n));
+     fprintf(stderr, "iter %3d => %7.3f MB [other %7.3f MB]\n", read + 1,
+             size / 1048576.0, Size(Key(n), Key(kCount)) / 1048576.0);
+-    if (size <= initial_size / 10) {
+-      break;
+-    }
+   }
++  // Give any background work a chance to run, even though none should.
++  Env::Default()->SleepForMicroseconds(1000000);
++  ASSERT_EQ(Size(Key(0), Key(n)), static_cast<uint64_t>(initial_size));
+ 
+   // Verify that the size of the key space not touched by the reads
+   // is pretty much unchanged.
+diff --git a/db/db_impl.cc b/db/db_impl.cc
+index 65e31724bcec1b6e80480d928f129b21be59fba1..10f523257c1b7a344070eb170cd90a0b349e1a6f 100644
+--- a/db/db_impl.cc
++++ b/db/db_impl.cc
+@@ -803,6 +803,7 @@ Status DBImpl::OpenCompactionOutputFile(CompactionState* compact) {
+     pending_outputs_.insert(file_number);
+     CompactionState::Output out;
+     out.number = file_number;
++    out.file_size = 0;
+     out.smallest.Clear();
+     out.largest.Clear();
+     compact->outputs.push_back(out);
+diff --git a/db/db_test.cc b/db/db_test.cc
+index 5ed9c1d75ebc2539f0ea43ddb9feb0bc02445983..6148f25f40196aa221c2b96545cafa23364945ca 100644
+--- a/db/db_test.cc
++++ b/db/db_test.cc
+@@ -735,15 +735,14 @@ TEST(DBTest, GetPicksCorrectFile) {
+   } while (ChangeOptions());
+ }
+ 
+-TEST(DBTest, GetEncountersEmptyLevel) {
++TEST(DBTest, GetDoesNotTriggerSeekCompaction) {
+   do {
+     // Arrange for the following to happen:
+     //   * sstable A in level 0
+     //   * nothing in level 1
+     //   * sstable B in level 2
+-    // Then do enough Get() calls to arrange for an automatic compaction
+-    // of sstable A.  A bug would cause the compaction to be marked as
+-    // occurring at level 1 (instead of the correct level 0).
++    // Repeated reads must not change the level layout, while manual
++    // compaction must still work.
+ 
+     // Step 1: First place sstables in levels 0 and 2
+     int compaction_count = 0;
+@@ -761,14 +760,18 @@ TEST(DBTest, GetEncountersEmptyLevel) {
+     ASSERT_EQ(NumTableFilesAtLevel(1), 0);
+     ASSERT_EQ(NumTableFilesAtLevel(2), 1);
+ 
+-    // Step 3: read a bunch of times
++    // Step 3: many read misses must not schedule any compaction.
+     for (int i = 0; i < 1000; i++) {
+       ASSERT_EQ("NOT_FOUND", Get("missing"));
+     }
+ 
+-    // Step 4: Wait for compaction to finish
+     DelayMilliseconds(1000);
++    ASSERT_EQ(NumTableFilesAtLevel(0), 1);
++    ASSERT_EQ(NumTableFilesAtLevel(1), 0);
++    ASSERT_EQ(NumTableFilesAtLevel(2), 1);
+ 
++    // Step 4: manual compaction still moves the L0 file down.
++    dbfull()->TEST_CompactRange(0, nullptr, nullptr);
+     ASSERT_EQ(NumTableFilesAtLevel(0), 0);
+   } while (ChangeOptions());
+ }
+@@ -1756,6 +1759,75 @@ TEST(DBTest, NonWritableFileSystem) {
+   env_->non_writable_.store(false, std::memory_order_release);
+ }
+ 
++TEST(DBTest, CompactionOutputFileError) {
++  class OutputErrorEnv : public EnvWrapper {
++   public:
++    explicit OutputErrorEnv(Env* base) : EnvWrapper(base) {}
++    std::atomic<bool> fail_output{false};
++    std::atomic<int> failed_outputs{0};
++
++    // Ensure a failed compaction is included in leveldb.stats even on clocks
++    // too coarse to measure the time spent attempting the open.
++    uint64_t NowMicros() override { return clock_.fetch_add(1000); }
++
++    Status NewWritableFile(const std::string& name, WritableFile** file) override {
++      if (fail_output.load() && name.find(".ldb") != std::string::npos) {
++        ++failed_outputs;
++        return Status::IOError("simulated compaction output open error");
++      }
++      return target()->NewWritableFile(name, file);
++    }
++
++   private:
++    std::atomic<uint64_t> clock_{0};
++  } error_env(env_);
++
++  Options options = CurrentOptions();
++  options.env = &error_env;
++  Reopen(&options);
++  ASSERT_OK(Put("foo", "bar"));
++  ASSERT_OK(dbfull()->TEST_CompactMemTable());
++  const int level = config::kMaxMemCompactLevel;
++  ASSERT_EQ(NumTableFilesAtLevel(level), 1);
++
++  error_env.fail_output.store(true);
++  dbfull()->TEST_CompactRange(level, nullptr, nullptr);
++  ASSERT_EQ(error_env.failed_outputs.load(), 1);
++  ASSERT_EQ(NumTableFilesAtLevel(level), 1);
++  ASSERT_EQ(NumTableFilesAtLevel(level + 1), 0);
++  ASSERT_EQ(Get("foo"), "bar");
++
++  // No output file was opened, so no bytes may be attributed to its level.
++  std::string stats;
++  ASSERT_TRUE(db_->GetProperty("leveldb.stats", &stats));
++  bool found = false;
++  for (size_t pos = 0; pos < stats.size();) {
++    int row_level, files;
++    double size_mb, seconds, read_mb, write_mb;
++    if (sscanf(stats.c_str() + pos, "%d %d %lf %lf %lf %lf", &row_level,
++               &files, &size_mb, &seconds, &read_mb, &write_mb) == 6 &&
++        row_level == level + 1) {
++      ASSERT_EQ(write_mb, 0.0);
++      found = true;
++    }
++    const size_t next = stats.find('\n', pos);
++    if (next == std::string::npos) break;
++    pos = next + 1;
++  }
++  ASSERT_TRUE(found);
++
++  error_env.fail_output.store(false);
++  Reopen(&options);
++  ASSERT_EQ(Get("foo"), "bar");
++  dbfull()->TEST_CompactRange(level, nullptr, nullptr);
++  ASSERT_EQ(NumTableFilesAtLevel(level), 0);
++  ASSERT_EQ(NumTableFilesAtLevel(level + 1), 1);
++  ASSERT_OK(Put("foo", "recovered"));
++  Reopen(&options);
++  ASSERT_EQ(Get("foo"), "recovered");
++  Close();  // The database must not outlive its local Env.
++}
++
+ TEST(DBTest, WriteSyncError) {
+   // Check that log sync errors cause the DB to disallow future writes.
+ 
+diff --git a/db/version_set.cc b/db/version_set.cc
+index cd07346ea8a029bdc57dc9ca7339f79060369521..73889e194d1f21f07ea9cec390dda73f38d3b1cf 100644
+--- a/db/version_set.cc
++++ b/db/version_set.cc
+@@ -400,16 +400,10 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
+   return state.found ? state.s : Status::NotFound(Slice());
+ }
+ 
+-bool Version::UpdateStats(const GetStats& stats) {
+-  FileMetaData* f = stats.seek_file;
+-  if (f != nullptr) {
+-    f->allowed_seeks--;
+-    if (f->allowed_seeks <= 0 && file_to_compact_ == nullptr) {
+-      file_to_compact_ = f;
+-      file_to_compact_level_ = stats.seek_file_level;
+-      return true;
+-    }
+-  }
++bool Version::UpdateStats(const GetStats& /*stats*/) {
++  // Disable automatic compactions triggered by read seek counters.
++  // The heuristic can cause severe write amplification on random-key databases.
++  // Size and manual compactions still run.
+   return false;
+ }
+ 
+@@ -661,6 +655,7 @@ class VersionSet::Builder {
+       // same as the compaction of 40KB of data.  We are a little
+       // conservative and allow approximately one seek for every 16KB
+       // of data before triggering a compaction.
++      // Seek compactions are disabled. See Version::UpdateStats.
+       f->allowed_seeks = static_cast<int>((f->file_size / 16384U));
+       if (f->allowed_seeks < 100) f->allowed_seeks = 100;
+ 

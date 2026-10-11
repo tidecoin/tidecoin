@@ -17,6 +17,7 @@
 #include <leveldb/env.h>
 
 #include <atomic>
+#include <util/string.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -216,7 +217,7 @@ BOOST_AUTO_TEST_CASE(chainstate_blockfile_failure_stops_flush)
         request.params = UniValue{UniValue::VARR};
         if (RPCIsInWarmup(nullptr)) SetRPCWarmupFinished();
         BOOST_CHECK_EXCEPTION(tableRPC.execute(request), UniValue, [](const UniValue& error) {
-            return error["code"].isNum() && error["code"].getValStr() == std::to_string(RPC_DATABASE_ERROR);
+            return error["code"].isNum() && error["code"].getValStr() == util::ToString(RPC_DATABASE_ERROR);
         });
         setup.Reopen();
         BOOST_CHECK(setup.m_node.chainman->ProcessNewBlock(std::make_shared<const CBlock>(block), true, true, nullptr));

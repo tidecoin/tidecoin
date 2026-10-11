@@ -1,8 +1,8 @@
 // Copyright (c) 2026-present The Tidecoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
-#ifndef TIDECOIN_PQ_CLEANSE_H
-#define TIDECOIN_PQ_CLEANSE_H
+#ifndef BITCOIN_PQ_CLEANSE_H
+#define BITCOIN_PQ_CLEANSE_H
 
 #include <stddef.h>
 
@@ -13,4 +13,4 @@ static inline void pq_cleanse(void *ptr, size_t len) {
     while (len--) *p++ = 0;
 }
 
-#endif
+#endif // BITCOIN_PQ_CLEANSE_H

@@ -19,6 +19,7 @@
 #include <test/util/mining.h>
 #include <util/chaintype.h>
 #include <util/fs_helpers.h>
+#include <util/string.h>
 #include <util/time.h>
 #include <validation.h>
 #include <validationinterface.h>
@@ -878,19 +879,20 @@ BOOST_AUTO_TEST_CASE(pqhd_consumption_survives_locked_topup_and_write_failure)
         const auto script{*scripts.begin()};
         const auto records{ReadRecords(wallet->GetDatabase())};
         Fault(*wallet) = {"write", DBKeys::WALLETDESCRIPTOR};
-        BOOST_CHECK_THROW(manager->MarkUnusedAddresses(script), std::runtime_error);
+        // Match transaction observation: the wallet lock precedes the manager lock.
+        WITH_LOCK(wallet->cs_wallet, BOOST_CHECK_THROW(manager->MarkUnusedAddresses(script), std::runtime_error));
         BOOST_CHECK(Fault(*wallet).hit);
         BOOST_CHECK_EQUAL(WITH_LOCK(manager->cs_desc_man, return manager->GetWalletDescriptor().next_index), 1);
         BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
         BOOST_CHECK(wallet->IsWalletRecoveryRequired());
         BOOST_CHECK(!wallet->CanGetAddresses(false));
         BOOST_CHECK(!wallet->CanGetAddresses(true));
-        BOOST_CHECK(!manager->GetNewDestination(OutputType::BECH32));
-        manager->ReturnDestination(0, internal, CNoDestination{});
+        WITH_LOCK(wallet->cs_wallet, BOOST_CHECK(!manager->GetNewDestination(OutputType::BECH32)));
+        WITH_LOCK(wallet->cs_wallet, manager->ReturnDestination(0, internal, CNoDestination{}));
         BOOST_CHECK_EQUAL(WITH_LOCK(manager->cs_desc_man, return manager->GetWalletDescriptor().next_index), 1);
         Fault(*wallet) = {};
         // Retrying the same consumption must persist the already-advanced index.
-        manager->MarkUnusedAddresses(script);
+        WITH_LOCK(wallet->cs_wallet, manager->MarkUnusedAddresses(script));
         // A successful retry of one output does not establish that the rest of
         // its transaction/block was processed. Recovery remains latched.
         BOOST_CHECK(wallet->IsWalletRecoveryRequired());
@@ -899,9 +901,9 @@ BOOST_AUTO_TEST_CASE(pqhd_consumption_survives_locked_topup_and_write_failure)
         manager = dynamic_cast<DescriptorScriptPubKeyMan*>(wallet->GetScriptPubKeyMan(OutputType::BECH32, internal));
         BOOST_REQUIRE(manager);
         BOOST_CHECK_EQUAL(WITH_LOCK(manager->cs_desc_man, return manager->GetWalletDescriptor().next_index), 1);
-        BOOST_CHECK(!manager->GetNewDestination(OutputType::BECH32));
+        WITH_LOCK(wallet->cs_wallet, BOOST_CHECK(!manager->GetNewDestination(OutputType::BECH32)));
         BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
-        const auto next{manager->GetNewDestination(OutputType::BECH32)};
+        const auto next{WITH_LOCK(wallet->cs_wallet, return manager->GetNewDestination(OutputType::BECH32))};
         BOOST_REQUIRE(next);
         BOOST_CHECK(GetScriptForDestination(*next) != script);
     }
@@ -1042,7 +1044,7 @@ BOOST_FIXTURE_TEST_CASE(pqhd_failed_observation_preserves_replay_checkpoint, Reg
             BOOST_REQUIRE(WalletBatch(wallet->GetDatabase()).ReadBestBlock(recovered));
             BOOST_CHECK_EQUAL(recovered.vHave.front(), later->GetHash());
             BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
-            const auto destination{manager->GetNewDestination(OutputType::BECH32)};
+            const auto destination{WITH_LOCK(wallet->cs_wallet, return manager->GetNewDestination(OutputType::BECH32))};
             BOOST_REQUIRE(destination);
             BOOST_CHECK(GetScriptForDestination(*destination) != used_script);
 
@@ -1072,22 +1074,22 @@ BOOST_AUTO_TEST_CASE(pqhd_allocation_and_return_check_descriptor_writes)
     auto* manager = dynamic_cast<DescriptorScriptPubKeyMan*>(wallet->GetScriptPubKeyMan(OutputType::BECH32, false));
     BOOST_REQUIRE(manager);
     const auto records{ReadRecords(wallet->GetDatabase())};
-    manager->ReturnDestination(-1, false, CNoDestination{});
-    manager->ReturnDestination(int64_t{1} << 32, false, CNoDestination{});
+    WITH_LOCK(wallet->cs_wallet, manager->ReturnDestination(-1, false, CNoDestination{}));
+    WITH_LOCK(wallet->cs_wallet, manager->ReturnDestination(int64_t{1} << 32, false, CNoDestination{}));
     BOOST_CHECK_EQUAL(WITH_LOCK(manager->cs_desc_man, return manager->GetWalletDescriptor().next_index), 0);
     BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
     // Skip the successful no-growth TopUp write and fail the reservation write.
     Fault(*wallet) = {"write", DBKeys::WALLETDESCRIPTOR, false, 1};
-    BOOST_CHECK(!manager->GetNewDestination(OutputType::BECH32));
+    BOOST_CHECK(!WITH_LOCK(wallet->cs_wallet, return manager->GetNewDestination(OutputType::BECH32)));
     BOOST_CHECK(Fault(*wallet).hit);
     BOOST_CHECK_EQUAL(WITH_LOCK(manager->cs_desc_man, return manager->GetWalletDescriptor().next_index), 0);
     BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
     Fault(*wallet) = {};
-    const auto reserved{manager->GetNewDestination(OutputType::BECH32)};
+    const auto reserved{WITH_LOCK(wallet->cs_wallet, return manager->GetNewDestination(OutputType::BECH32))};
     BOOST_REQUIRE(reserved);
     const auto reserved_records{ReadRecords(wallet->GetDatabase())};
     Fault(*wallet) = {"write", DBKeys::WALLETDESCRIPTOR};
-    BOOST_CHECK_NO_THROW(manager->ReturnDestination(0, false, *reserved));
+    BOOST_CHECK_NO_THROW(WITH_LOCK(wallet->cs_wallet, manager->ReturnDestination(0, false, *reserved)));
     BOOST_CHECK(Fault(*wallet).hit);
     BOOST_CHECK_EQUAL(WITH_LOCK(manager->cs_desc_man, return manager->GetWalletDescriptor().next_index), 1);
     BOOST_CHECK(reserved_records == ReadRecords(wallet->GetDatabase()));
@@ -1096,7 +1098,7 @@ BOOST_AUTO_TEST_CASE(pqhd_allocation_and_return_check_descriptor_writes)
     manager = dynamic_cast<DescriptorScriptPubKeyMan*>(wallet->GetScriptPubKeyMan(OutputType::BECH32, false));
     BOOST_REQUIRE(manager);
     BOOST_CHECK_EQUAL(WITH_LOCK(manager->cs_desc_man, return manager->GetWalletDescriptor().next_index), 1);
-    BOOST_CHECK(!manager->GetNewDestination(OutputType::BECH32));
+    BOOST_CHECK(!WITH_LOCK(wallet->cs_wallet, return manager->GetNewDestination(OutputType::BECH32)));
 }
 
 BOOST_AUTO_TEST_CASE(pqhd_topup_failure_restores_complete_state)
@@ -1657,7 +1659,7 @@ BOOST_AUTO_TEST_CASE(pqhd_nonzero_range_and_terminal_exhaustion)
     auto* reloaded = dynamic_cast<DescriptorScriptPubKeyMan*>(wallet->GetScriptPubKeyMan(descriptor_id));
     BOOST_REQUIRE(reloaded);
     BOOST_CHECK_EQUAL(reloaded->GetEndRange(), std::numeric_limits<int32_t>::max());
-    BOOST_CHECK(!reloaded->GetNewDestination(OutputType::BECH32));
+    BOOST_CHECK(!WITH_LOCK(wallet->cs_wallet, return reloaded->GetNewDestination(OutputType::BECH32)));
 }
 
 BOOST_AUTO_TEST_CASE(pqhd_cache_seed_mismatch_rejected_without_rewrite)
@@ -1710,7 +1712,7 @@ BOOST_AUTO_TEST_CASE(pqhd_cache_seed_mismatch_rejected_without_rewrite)
             BOOST_CHECK(wallet->IsLocked());
             BOOST_CHECK(!manager->IsCacheUsable());
             BOOST_CHECK(!manager->CanGetAddresses());
-            BOOST_CHECK(!manager->GetNewDestination(OutputType::BECH32));
+            BOOST_CHECK(!WITH_LOCK(wallet->cs_wallet, return manager->GetNewDestination(OutputType::BECH32)));
             BOOST_CHECK(WITH_LOCK(wallet->cs_wallet, return !manager->TopUp()));
             BOOST_CHECK(!manager->GetSigningProvider(zero, /*include_private=*/false));
             FlatSigningProvider provider;
@@ -1727,7 +1729,7 @@ BOOST_AUTO_TEST_CASE(pqhd_cache_seed_mismatch_rejected_without_rewrite)
         if (encrypted) BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
         manager = dynamic_cast<DescriptorScriptPubKeyMan*>(wallet->GetScriptPubKeyMan(OutputType::BECH32, false));
         BOOST_REQUIRE(manager);
-        BOOST_REQUIRE(manager->GetNewDestination(OutputType::BECH32));
+        BOOST_REQUIRE(WITH_LOCK(wallet->cs_wallet, return manager->GetNewDestination(OutputType::BECH32)));
     }
 }
 
@@ -1761,9 +1763,9 @@ BOOST_AUTO_TEST_CASE(pqhd_locked_reload_issues_cached_addresses_durably)
         BOOST_CHECK(!manager->IsCacheVerified());
         // Failed reservation must not consume a key, even before verification.
         Fault(*wallet) = {"write", DBKeys::WALLETDESCRIPTOR, false, 1};
-        BOOST_CHECK(!manager->GetNewDestination(OutputType::BECH32));
+        BOOST_CHECK(!WITH_LOCK(wallet->cs_wallet, return manager->GetNewDestination(OutputType::BECH32)));
         Fault(*wallet) = {};
-        const auto issued = manager->GetNewDestination(OutputType::BECH32);
+        const auto issued = WITH_LOCK(wallet->cs_wallet, return manager->GetNewDestination(OutputType::BECH32));
         BOOST_REQUIRE(issued);
         BOOST_CHECK(*issued == expected.at(i));
         BOOST_CHECK(!manager->IsCacheVerified());
@@ -1772,12 +1774,12 @@ BOOST_AUTO_TEST_CASE(pqhd_locked_reload_issues_cached_addresses_durably)
     wallet = Open(path);
     manager = dynamic_cast<DescriptorScriptPubKeyMan*>(wallet->GetScriptPubKeyMan(OutputType::BECH32, false));
     BOOST_REQUIRE(manager);
-    BOOST_CHECK(!manager->GetNewDestination(OutputType::BECH32));
+    BOOST_CHECK(!WITH_LOCK(wallet->cs_wallet, return manager->GetNewDestination(OutputType::BECH32)));
     BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
     BOOST_CHECK(manager->IsCacheVerified());
     BOOST_REQUIRE(WITH_LOCK(wallet->cs_wallet, return manager->TopUp(1)));
     BOOST_REQUIRE(wallet->Lock());
-    const auto issued = manager->GetNewDestination(OutputType::BECH32);
+    const auto issued = WITH_LOCK(wallet->cs_wallet, return manager->GetNewDestination(OutputType::BECH32));
     BOOST_REQUIRE(issued);
     BOOST_CHECK(*issued != expected[0] && *issued != expected[1]);
 }
@@ -1844,9 +1846,9 @@ BOOST_AUTO_TEST_CASE(descriptor_insert_and_erase_failures)
     // A failed plaintext insertion must not suppress the retry as a duplicate.
     CKey plaintext{GenerateRandomKey(pq::SchemeId::FALCON_512)};
     Fault(*wallet) = {"write", DBKeys::WALLETDESCRIPTORKEY};
-    BOOST_CHECK_THROW(manager->AddDescriptorKey(plaintext, plaintext.GetPubKey()), std::runtime_error);
+    BOOST_CHECK_THROW(WITH_LOCK(wallet->cs_wallet, manager->AddDescriptorKey(plaintext, plaintext.GetPubKey())), std::runtime_error);
     BOOST_CHECK(!manager->GetKey(plaintext.GetPubKey().GetID()));
-    manager->AddDescriptorKey(plaintext, plaintext.GetPubKey());
+    WITH_LOCK(wallet->cs_wallet, manager->AddDescriptorKey(plaintext, plaintext.GetPubKey()));
     BOOST_CHECK(manager->GetKey(plaintext.GetPubKey().GetID()));
     BOOST_REQUIRE(wallet->EncryptWallet(SecureString{"pass"}));
     BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
@@ -1854,7 +1856,7 @@ BOOST_AUTO_TEST_CASE(descriptor_insert_and_erase_failures)
     for (const Failure& point : std::vector<Failure>{{"begin"}, {"write", DBKeys::WALLETDESCRIPTORCKEY}, {"erase", DBKeys::WALLETDESCRIPTORKEY}, {"commit"}}) {
         CKey key{GenerateRandomKey(pq::SchemeId::FALCON_512)};
         Fault(*wallet) = point;
-        BOOST_CHECK_THROW(manager->AddDescriptorKey(key, key.GetPubKey()), std::runtime_error);
+        BOOST_CHECK_THROW(WITH_LOCK(wallet->cs_wallet, manager->AddDescriptorKey(key, key.GetPubKey())), std::runtime_error);
         BOOST_CHECK(Fault(*wallet).hit);
         BOOST_CHECK(!manager->GetKey(key.GetPubKey().GetID()));
         wallet.reset();
@@ -1864,7 +1866,7 @@ BOOST_AUTO_TEST_CASE(descriptor_insert_and_erase_failures)
         BOOST_REQUIRE(manager);
         BOOST_CHECK(!manager->GetKey(key.GetPubKey().GetID()));
         CheckKey(*wallet, original.GetPubKey());
-        manager->AddDescriptorKey(key, key.GetPubKey());
+        WITH_LOCK(wallet->cs_wallet, manager->AddDescriptorKey(key, key.GetPubKey()));
         CheckKey(*wallet, key.GetPubKey());
         inserted_keys.push_back(key.GetPubKey());
     }
@@ -2054,6 +2056,7 @@ BOOST_AUTO_TEST_CASE(recordless_legacy_wallet_load_fails_cleanly)
         AutoFile file{fsbridge::fopen(path, "wb")};
         BOOST_REQUIRE(!file.IsNull());
         file.write(std::as_bytes(std::span{bytes}));
+        BOOST_REQUIRE_EQUAL(file.fclose(), 0);
     }
     WalletContext context;
     context.args = &m_args;
@@ -2080,6 +2083,7 @@ BOOST_AUTO_TEST_CASE(bdb_structure_and_overflow_bounds)
         AutoFile file{fsbridge::fopen(path, "wb")};
         BOOST_REQUIRE(!file.IsNull());
         file.write(std::as_bytes(std::span{bytes}));
+        BOOST_REQUIRE_EQUAL(file.fclose(), 0);
     };
     for (bool overflow : {false, true}) {
         auto bytes{BDBFixture(overflow)};
@@ -2436,7 +2440,7 @@ struct ReconciliationSetup : PersistenceSetup {
 };
 } // namespace
 
-BOOST_FIXTURE_TEST_SUITE(wallet_reconciliation_tests, ReconciliationSetup)
+BOOST_FIXTURE_TEST_SUITE(wallet_persistence_tests_reconciliation, ReconciliationSetup)
 
 BOOST_AUTO_TEST_CASE(wallet_load_pqhd_reconciliation_is_atomic)
 {
@@ -2449,7 +2453,7 @@ BOOST_AUTO_TEST_CASE(wallet_load_pqhd_reconciliation_is_atomic)
                  {"write", DBKeys::ACTIVEEXTERNALSPK}, {"write", DBKeys::ACTIVEEXTERNALSPK, false, 1},
                  {"write", DBKeys::ACTIVEINTERNALSPK}, {"commit"}}) {
             BOOST_TEST_CONTEXT(point.operation << " " << point.record << " skip=" << point.skip << " existing=" << existing) {
-                const auto path{m_args.GetDataDirBase() / fs::PathFromString("reconcile-" + std::to_string(index++))};
+                const auto path{m_args.GetDataDirBase() / fs::PathFromString("reconcile-" + util::ToString(index++))};
                 Prepare(path, existing);
                 auto wallet{Unloaded(path)};
                 const auto records{ReadRecords(wallet->GetDatabase())};
@@ -2480,7 +2484,7 @@ BOOST_AUTO_TEST_CASE(reconciliation_birth_time_commit_boundary)
     SetMockTime(1);
     size_t index{0};
     for (const Failure& point : std::vector<Failure>{{"write", DBKeys::ACTIVEINTERNALSPK}, {"commit"}, {}}) {
-        const auto path{m_args.GetDataDirBase() / fs::PathFromString("birth-" + std::to_string(index++))};
+        const auto path{m_args.GetDataDirBase() / fs::PathFromString("birth-" + util::ToString(index++))};
         Prepare(path, false, 100);
         auto wallet{Unloaded(path)};
         const auto records{ReadRecords(wallet->GetDatabase())};
@@ -2603,7 +2607,7 @@ BOOST_AUTO_TEST_CASE(reconciliation_expansion_failure_survives_reopen)
             for (const Failure& trigger : std::vector<Failure>{{"seed", DBKeys::WALLETDESCRIPTOR},
                      {"seed", "walletdescriptorpubkeycache"}, {"seed", DBKeys::WALLETDESCRIPTOR, false, 2}}) {
                 BOOST_TEST_CONTEXT("scheme=" << int(scheme) << " existing=" << existing << " trigger=" << trigger.record << " skip=" << trigger.skip) {
-                    const auto path{m_args.GetDataDirBase() / fs::PathFromString("expand-" + std::to_string(index++))};
+                    const auto path{m_args.GetDataDirBase() / fs::PathFromString("expand-" + util::ToString(index++))};
                     Prepare(path, existing, 1, scheme);
                     auto wallet{Unloaded(path)};
                     wallet->m_keypool_size = 2;

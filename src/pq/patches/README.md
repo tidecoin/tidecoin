@@ -9,6 +9,7 @@ listed in `src/pq/VERSIONS.toml`.
   stable patch artifact to validate against.
 
 ## Patch files
+- `shared-fips202-cleanup.patch`
 - `falcon-512-local-adaptations.patch`
 - `falcon-1024-local-adaptations.patch`
 - `ml-dsa-44-local-adaptations.patch`
