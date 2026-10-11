@@ -112,7 +112,7 @@ BOOST_FIXTURE_TEST_CASE(pqhd_policy_preserves_pre_auxpow_preferences, WalletTest
     BOOST_REQUIRE(loaded);
     BOOST_CHECK_EQUAL(loaded->default_receive_scheme, static_cast<uint8_t>(pq::SchemeId::MLDSA_44));
     BOOST_CHECK_EQUAL(loaded->default_change_scheme, static_cast<uint8_t>(pq::SchemeId::MLDSA_65));
-    const auto load_invalid_policy = [&] {
+    const auto load_invalid_policy = [&]() EXCLUSIVE_LOCKS_REQUIRED(m_wallet.cs_wallet) {
         PQHDPolicy invalid{*loaded};
         invalid.default_receive_scheme = 0xff;
         m_wallet.LoadPQHDPolicy(std::move(invalid));

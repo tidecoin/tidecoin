@@ -20,6 +20,7 @@ target_link_libraries(tidecoin_ipc
   PRIVATE
     core_interface
     univalue
+    Boost::headers
 )
 
 configure_file(.clang-tidy.in .clang-tidy USE_SOURCE_PERMISSIONS COPYONLY)

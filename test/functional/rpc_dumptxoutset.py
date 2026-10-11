@@ -32,9 +32,10 @@ class DumptxoutsetTest(BitcoinTestFramework):
     def check_expected_network(self, node, active):
         rev_file = node.blocks_path / "rev00000.dat"
         bogus_file = node.blocks_path / "bogus.dat"
-        rev_file.rename(bogus_file)
         tip = node.getbestblockhash()
         tips = node.getchaintips()
+        undo_hash = sha256sum_file(rev_file)
+        rev_file.rename(bogus_file)
         try:
             assert_raises_rpc_error(
                 -32603, 'Failed to roll back block at height', node.dumptxoutset, 'utxos.dat', rollback=99)
@@ -44,7 +45,10 @@ class DumptxoutsetTest(BitcoinTestFramework):
             assert not (node.chain_path / 'utxos.dat').exists()
             assert_equal(list(node.chain_path.glob('temp_utxo_*')), [])
         finally:
-            bogus_file.rename(rev_file)
+            # The export's initial flush can recreate rev_file. Explicitly
+            # replace it when restoring the original, including on Windows.
+            bogus_file.replace(rev_file)
+        assert_equal(sha256sum_file(rev_file), undo_hash)
 
     def test_dumptxoutset_with_fork(self):
         # Adapted from upstream's stale-fork regression: exporting must not
