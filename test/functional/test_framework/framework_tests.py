@@ -4,6 +4,7 @@
 # file COPYING or https://opensource.org/license/mit/.
 """Regression tests for functional-test process and socket ownership."""
 
+import asyncio
 from contextlib import redirect_stdout
 import io
 import os
@@ -17,8 +18,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from interface_ipc import connect_unix_socket
 import test_runner
-from .socks5 import Socks5Configuration, Socks5Server, recvall
+from .socks5 import Socks5Configuration, Socks5Connection, Socks5Server, recvall, sendall
 from .test_framework import Binaries, BitcoinTestFramework
 from .util import PortSeed
 
@@ -41,7 +43,7 @@ class FrameworkTests(unittest.TestCase):
         self.assertEqual(binaries.node_argv(need_ipc=True)[-3:], [paths.tidecoin_bin, '-m', 'node'])
         paths.tidecoin_cmd = [paths.tidecoin_bin, '-m']
         self.assertEqual(binaries.node_argv()[-3:], [paths.tidecoin_bin, '-m', 'node'])
-        self.assertEqual(Binaries(paths, '/old release', use_valgrind=True).node_argv(), ['/old release/tidecoind'])
+        self.assertEqual(Binaries(paths, '/old release', use_valgrind=True).node_argv(), [os.path.join('/old release', 'tidecoind')])
         self.assertEqual(Binaries(paths, None).node_argv(), paths.tidecoin_cmd + ['node'])
 
     def test_skip_reason_and_failure_status(self):
@@ -215,6 +217,32 @@ class Socks5Tests(unittest.TestCase):
                 self.assertEqual(client.recv(1), b'')
         server.stop()
 
+    def test_stop_idle_forwarding_without_socket_shutdown(self):
+        # Exercise the fallback even on platforms where shutdown wakes select.
+        with patch.object(Socks5Connection, 'shutdown'):
+            self.test_stop_idle_forwarding()
+
+    def test_stop_stalled_handshake_without_socket_shutdown(self):
+        with patch.object(Socks5Connection, 'shutdown'):
+            self.test_stop_stalled_handshake_and_release_port()
+
+    def test_stop_forwarding_with_full_send_buffer(self):
+        running = threading.Event()
+        running.set()
+
+        def wait_for_write(readers, writers, errors, timeout=None):
+            # Simulate a destination that stays unwritable while we stop.
+            self.assertEqual((readers, writers, errors), ([], [sock], []))
+            self.assertIsNotNone(timeout)
+            self.assertGreater(timeout, 0)
+            self.assertLessEqual(timeout, 1)
+            running.clear()
+            return [], [], []
+
+        with socket.socket() as sock, patch('test_framework.socks5.select.select', side_effect=wait_for_write) as wait:
+            sendall(sock, b'pending', running.is_set)
+            wait.assert_called_once()
+
     def test_blocked_callback_does_not_report_successful_stop(self):
         entered, release = threading.Event(), threading.Event()
         def destination(addr, port):
@@ -230,3 +258,76 @@ class Socks5Tests(unittest.TestCase):
         finally:
             release.set()
             server.stop()
+
+
+# These cases exercise Linux Unix-socket queue behavior and /proc descriptor counts.
+@unittest.skipUnless(sys.platform == "linux", "requires Linux Unix sockets")
+class IPCConnectionTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix='tide-ipc-connect-')
+        self.addCleanup(directory.cleanup)
+        self.path = Path(directory.name) / 'socket'
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(self.server.close)
+        self.server.bind(str(self.path))
+        self.server.listen(5)
+        self.server.setblocking(False)
+
+    def fill_queue(self):
+        # Linux allows backlog + 1 completed connections to wait for accept().
+        for _ in range(6):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.connect(str(self.path))
+
+    async def test_connected_socket_transfers_data(self):
+        client = await connect_unix_socket(self.path, 1)
+        self.addCleanup(client.close)
+        peer, _ = self.server.accept()
+        self.addCleanup(peer.close)
+        peer.setblocking(False)
+        loop = asyncio.get_running_loop()
+        await loop.sock_sendall(client, b'connected')
+        self.assertEqual(await asyncio.wait_for(loop.sock_recv(peer, 9), 1), b'connected')
+
+    async def test_full_queue_waits_for_accept(self):
+        self.fill_queue()
+        pending = asyncio.create_task(connect_unix_socket(self.path, 1))
+        try:
+            await asyncio.sleep(0.05)
+            self.assertFalse(pending.done())
+            peer, _ = self.server.accept()
+            peer.close()
+            client = await pending
+            self.addCleanup(client.close)
+            self.assertEqual(client.getpeername(), str(self.path))
+        finally:
+            if not pending.done():
+                pending.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await pending
+
+    async def test_full_queue_times_out_without_leaking(self):
+        self.fill_queue()
+        before = len(list(Path('/proc/self/fd').iterdir()))
+        with self.assertRaises(asyncio.TimeoutError):
+            await connect_unix_socket(self.path, 0.05)
+        self.assertEqual(len(list(Path('/proc/self/fd').iterdir())), before)
+
+    async def test_cancel_closes_socket(self):
+        self.fill_queue()
+        before = len(list(Path('/proc/self/fd').iterdir()))
+        pending = asyncio.create_task(connect_unix_socket(self.path, 10))
+        await asyncio.sleep(0.02)
+        pending.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await pending
+        self.assertEqual(len(list(Path('/proc/self/fd').iterdir())), before)
+
+    async def test_closed_listener_fails(self):
+        self.server.close()
+        with self.assertRaises(ConnectionRefusedError):
+            await connect_unix_socket(self.path, 1)
+
+    async def test_missing_listener_fails(self):
+        with self.assertRaises(FileNotFoundError):
+            await connect_unix_socket(self.path.with_name('missing'), 1)

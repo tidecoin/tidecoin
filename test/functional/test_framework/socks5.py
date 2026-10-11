@@ -27,10 +27,16 @@ class AddressType:
     IPV6 = 0x04
 
 # Utility functions
-def recvall(s, n):
+def recvall(s, n, *, is_running=None):
     """Receive n bytes from a socket, or fail."""
     rv = bytearray()
     while n > 0:
+        if is_running is not None:
+            if not is_running():
+                raise IOError('SOCKS server stopped')
+            readable, _, _ = select.select([s], [], [], 0.1)
+            if not readable:
+                continue
         d = s.recv(n)
         if not d:
             raise IOError('Unexpected end of stream')
@@ -38,19 +44,21 @@ def recvall(s, n):
         n -= len(d)
     return rv
 
-def sendall(s, data):
-    """Send all data to a socket, or fail."""
+def sendall(s, data, is_running):
+    """Send all data to a socket, or stop when the server stops."""
     sent = 0
-    while sent < len(data):
-        _, wlist, _ = select.select([], [s], [])
+    while sent < len(data) and is_running():
+        _, wlist, _ = select.select([], [s], [], 0.1)
+        if not is_running():
+            return
         if len(wlist) > 0:
             n = s.send(data[sent:])
             if n == 0:
                 raise IOError('send() on socket returned 0')
             sent += n
 
-def forward_sockets(a, b):
-    """Forward data received on socket a to socket b and vice versa, until EOF is received on one of the sockets."""
+def forward_sockets(a, b, is_running):
+    """Forward data in both directions until EOF or server shutdown."""
     # Mark as non-blocking so that we do not end up in a deadlock-like situation
     # where we block and wait on data from `a` while there is data ready to be
     # received on `b` and forwarded to `a`. And at the same time the application
@@ -60,8 +68,12 @@ def forward_sockets(a, b):
     b.setblocking(False)
     sockets = [a, b]
     done = False
-    while not done:
-        rlist, _, xlist = select.select(sockets, [], sockets)
+    while not done and is_running():
+        # Socket shutdown does not wake select on every platform. Bound both
+        # read and write waits so stop() can join the handler even when idle.
+        rlist, _, xlist = select.select(sockets, [], sockets, 0.1)
+        if not is_running():
+            return
         if len(xlist) > 0:
             raise IOError('Exceptional condition on socket')
         for s in rlist:
@@ -70,9 +82,9 @@ def forward_sockets(a, b):
                 done = True
                 break
             if s == a:
-                sendall(b, data)
+                sendall(b, data, is_running)
             else:
-                sendall(a, data)
+                sendall(a, data, is_running)
 
 # Implementation classes
 class Socks5Configuration():
@@ -117,8 +129,9 @@ class Socks5Connection():
         self._sockets_lock = threading.Lock()
 
     def shutdown(self):
-        # Interrupt recv/send/select without closing a descriptor still in use
-        # by its handler thread. The handler or stop() closes it after joining.
+        # Interrupt socket I/O without closing a descriptor still in use by its
+        # handler thread. Handshake reads and forwarding also check the server's
+        # running state, since shutdown does not reliably wake every platform.
         with self._sockets_lock:
             for sock in self._sockets:
                 try:
@@ -134,14 +147,17 @@ class Socks5Connection():
 
     def handle(self):
         """Handle socks5 request according to RFC1928."""
+        def recv(n):
+            return recvall(self.conn, n, is_running=self.serv.is_running)
+
         try:
             # Verify socks version
-            ver = recvall(self.conn, 1)[0]
+            ver = recv(1)[0]
             if ver != 0x05:
                 raise IOError('Invalid socks version %i' % ver)
             # Choose authentication method
-            nmethods = recvall(self.conn, 1)[0]
-            methods = bytearray(recvall(self.conn, nmethods))
+            nmethods = recv(1)[0]
+            methods = bytearray(recv(nmethods))
             method = None
             if 0x02 in methods and self.serv.conf.auth:
                 method = 0x02 # username/password
@@ -155,33 +171,33 @@ class Socks5Connection():
             username = None
             password = None
             if method == 0x02:
-                ver = recvall(self.conn, 1)[0]
+                ver = recv(1)[0]
                 if ver != 0x01:
                     raise IOError('Invalid auth packet version %i' % ver)
-                ulen = recvall(self.conn, 1)[0]
-                username = str(recvall(self.conn, ulen))
-                plen = recvall(self.conn, 1)[0]
-                password = str(recvall(self.conn, plen))
+                ulen = recv(1)[0]
+                username = str(recv(ulen))
+                plen = recv(1)[0]
+                password = str(recv(plen))
                 # Send authentication response
                 self.conn.sendall(bytearray([0x01, 0x00]))
 
             # Read connect request
-            ver, cmd, _, atyp = recvall(self.conn, 4)
+            ver, cmd, _, atyp = recv(4)
             if ver != 0x05:
                 raise IOError('Invalid socks version %i in connect request' % ver)
             if cmd != Command.CONNECT:
                 raise IOError('Unhandled command %i in connect request' % cmd)
 
             if atyp == AddressType.IPV4:
-                addr = recvall(self.conn, 4)
+                addr = recv(4)
             elif atyp == AddressType.DOMAINNAME:
-                n = recvall(self.conn, 1)[0]
-                addr = recvall(self.conn, n)
+                n = recv(1)[0]
+                addr = recv(n)
             elif atyp == AddressType.IPV6:
-                addr = recvall(self.conn, 16)
+                addr = recv(16)
             else:
                 raise IOError('Unknown address type %i' % atyp)
-            port_hi,port_lo = recvall(self.conn, 2)
+            port_hi,port_lo = recv(2)
             port = (port_hi << 8) | port_lo
 
             # Send dummy response
@@ -204,7 +220,7 @@ class Socks5Connection():
                             if not self.serv.is_running():
                                 return
                             self._sockets.append(conn_to)
-                        forward_sockets(self.conn, conn_to)
+                        forward_sockets(self.conn, conn_to, self.serv.is_running)
                 else:
                     logger.debug(f"Can't serve the connection to {requested_to}: the destinations factory returned None")
             else:

@@ -13,6 +13,7 @@ export PIP_PACKAGES="--break-system-packages zmq"
 export GOAL="install deploy"
 export CMAKE_GENERATOR="Ninja"
 export TIDECOIN_CONFIG="-DBUILD_GUI=ON -DWITH_ZMQ=ON -DREDUCE_EXPORTS=ON -DCMAKE_EXE_LINKER_FLAGS='-Wl,-stack_size -Wl,0x80000'"
+export TIDECOIN_CONFIG="${TIDECOIN_CONFIG} -DCapnProto_DIR='${BASE_SCRATCH_DIR}/capnp/install/lib/cmake/CapnProto'"
 export CI_OS_NAME="macos"
 export NO_DEPENDS=1
 export OSX_SDK=""

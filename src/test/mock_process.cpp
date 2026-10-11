@@ -21,7 +21,7 @@ static int Run(const std::vector<std::string>& args)
 {
     const auto argc{args.size()};
     if (argc < 2) return 1;
-    const std::string mode{args[1]};
+    const std::string& mode{args[1]};
     if (mode == "fail") {
         std::cerr << "mock failure\n";
         return 7;
@@ -54,7 +54,7 @@ static int Run(const std::vector<std::string>& args)
                 std::cout << responses.find_value("signtx").write() << '\n';
                 return 0;
             }
-            const std::string arg{args[i]};
+            const std::string& arg{args[i]};
             if (arg == "enumerate" || arg == "getdescriptors") {
                 std::cout << responses.find_value(arg).write() << '\n';
                 return 0;

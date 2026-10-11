@@ -40,7 +40,7 @@ class PSBTCompletenessTest(BitcoinTestFramework):
     def check_complete(self, value, expected):
         node = self.nodes[0]
         for finalize in (False, True):
-            result = node.descriptorprocesspsbt(value, [], finalize=finalize)
+            result = node.descriptorprocesspsbt(psbt=value, descriptors=[], finalize=finalize)
             assert_equal(result['complete'], expected)
             assert_equal('hex' in result, expected)
         result = node.finalizepsbt(value)
@@ -56,10 +56,10 @@ class PSBTCompletenessTest(BitcoinTestFramework):
             descriptor = descsum_create(f'wpkh({private})')
             blank = self.make_psbt(descriptor)
             self.check_complete(blank, False)
-            partial = node.descriptorprocesspsbt(blank, [descriptor], finalize=False)
+            partial = node.descriptorprocesspsbt(psbt=blank, descriptors=[descriptor], finalize=False)
             assert_equal(partial['complete'], False)
             assert 'hex' not in partial
-            signed = node.descriptorprocesspsbt(blank, [descriptor])
+            signed = node.descriptorprocesspsbt(psbt=blank, descriptors=[descriptor])
             assert_equal(signed['complete'], True)
             self.check_complete(signed['psbt'], True)
 
@@ -88,7 +88,7 @@ class PSBTCompletenessTest(BitcoinTestFramework):
         private, _ = generate_keypair(wif=True, scheme='7')
         descriptor = descsum_create(f'wsh512(pk({private}))')
         blank = self.make_psbt(descriptor)
-        signed = node.descriptorprocesspsbt(blank, [descriptor])
+        signed = node.descriptorprocesspsbt(psbt=blank, descriptors=[descriptor])
         assert_equal(signed['complete'], True)
         self.check_complete(signed['psbt'], True)
         node.invalidateblock(blocks[-1])
@@ -97,7 +97,7 @@ class PSBTCompletenessTest(BitcoinTestFramework):
         node.reconsiderblock(blocks[-1])
         assert_equal(node.getblockcount(), 3)
         self.check_complete(signed['psbt'], True)
-        assert_raises_rpc_error(-22, 'decode', node.descriptorprocesspsbt, 'not a psbt', [])
+        assert_raises_rpc_error(-22, 'decode', node.descriptorprocesspsbt, psbt='not a psbt', descriptors=[])
 
 
 if __name__ == '__main__':

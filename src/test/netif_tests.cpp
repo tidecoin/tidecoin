@@ -118,7 +118,40 @@ BOOST_AUTO_TEST_CASE(gateway_receive_bounds)
         std::memcpy(data.data(), &header, sizeof(header));
         data.insert(data.end(), gateway.begin(), gateway.end());
         BOOST_CHECK(!query(data, header.nlmsg_len));
+        const auto next_gateway = query(data, data.size());
+        BOOST_REQUIRE(next_gateway);
+        BOOST_CHECK_EQUAL(next_gateway->ToStringAddr(), "192.0.2.1");
     }
+
+    // A complete netlink header does not imply a complete route header.
+    // Leave valid route bytes beyond the declared length to ensure that the
+    // parser checks message bounds, not just the received buffer size.
+    for (unsigned int length = sizeof(nlmsghdr); length < NLMSG_LENGTH(sizeof(rtmsg)); ++length) {
+        BOOST_TEST_CONTEXT("route message length " << length) {
+            auto data = gateway;
+            nlmsghdr header{};
+            header.nlmsg_type = RTM_NEWROUTE;
+            header.nlmsg_len = length;
+            std::memcpy(data.data(), &header, sizeof(header));
+            BOOST_CHECK(!query(data, length));
+            BOOST_CHECK(!query(data, data.size()));
+        }
+    }
+
+    // A route header with no attributes is valid. Continue to the next message
+    // when it does not supply a gateway.
+    auto data = gateway;
+    data.resize(NLMSG_LENGTH(sizeof(rtmsg)));
+    nlmsghdr header{};
+    header.nlmsg_type = RTM_NEWROUTE;
+    header.nlmsg_flags = NLM_F_MULTI;
+    header.nlmsg_len = data.size();
+    std::memcpy(data.data(), &header, sizeof(header));
+    BOOST_CHECK(!query(data, data.size()));
+    data.insert(data.end(), gateway.begin(), gateway.end());
+    const auto next_gateway = query(data, data.size());
+    BOOST_REQUIRE(next_gateway);
+    BOOST_CHECK_EQUAL(next_gateway->ToStringAddr(), "192.0.2.1");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -149,12 +149,18 @@ std::optional<CNetAddr> QueryDefaultGatewayImpl(sa_family_t family)
                 break;
             }
 
-            rtmsg* r = (rtmsg*)NLMSG_DATA(hdr);
-            int remaining_len = RTM_PAYLOAD(hdr);
-
             if (hdr->nlmsg_type != RTM_NEWROUTE) {
                 continue; // Skip non-route messages
             }
+
+            // NLMSG_OK only checks the generic header. Require the complete
+            // route header before reading it or calculating the payload size.
+            if (hdr->nlmsg_len < NLMSG_LENGTH(sizeof(rtmsg))) {
+                return std::nullopt;
+            }
+
+            rtmsg* r = (rtmsg*)NLMSG_DATA(hdr);
+            int remaining_len = RTM_PAYLOAD(hdr);
 
             // Only consider default routes (destination prefix length of 0).
             if (r->rtm_dst_len != 0) {

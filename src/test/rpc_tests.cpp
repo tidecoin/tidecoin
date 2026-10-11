@@ -867,7 +867,10 @@ BOOST_FIXTURE_TEST_CASE(historical_snapshot_isolation_and_interruption, TestChai
             if (++calls == stop) throw std::runtime_error("cancel export");
         };
         AutoFile file{fsbridge::fopen(path, "wb")};
-        BOOST_CHECK_EXCEPTION(CreateRolledBackUTXOSnapshot(m_node, chainstate, target, std::move(file), path, path),
+        const auto create_snapshot = [&] {
+            return CreateRolledBackUTXOSnapshot(m_node, chainstate, target, std::move(file), path, path);
+        };
+        BOOST_CHECK_EXCEPTION(create_snapshot(),
                               std::runtime_error, [](const auto& e) { return std::string{e.what()} == "cancel export"; });
         if (stop == total_calls) BOOST_CHECK(file.IsNull()); // Interrupted after output began.
         check_cleanup();
@@ -879,7 +882,10 @@ BOOST_FIXTURE_TEST_CASE(historical_snapshot_isolation_and_interruption, TestChai
     stale_target.nHeight = target->nHeight;
     {
         AutoFile file{fsbridge::fopen(path, "wb")};
-        BOOST_CHECK_EXCEPTION(CreateRolledBackUTXOSnapshot(m_node, chainstate, &stale_target, std::move(file), path, path),
+        const auto create_snapshot = [&] {
+            return CreateRolledBackUTXOSnapshot(m_node, chainstate, &stale_target, std::move(file), path, path);
+        };
+        BOOST_CHECK_EXCEPTION(create_snapshot(),
                               UniValue, [](const auto& e) { return e["message"].get_str() == "Snapshot target is no longer on the captured chain"; });
     }
     check_cleanup();

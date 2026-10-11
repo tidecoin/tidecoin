@@ -5,6 +5,7 @@
 """Test the IPC (multiprocess) interface."""
 import asyncio
 import copy
+import errno
 from io import BytesIO
 from pathlib import Path
 import shutil
@@ -18,6 +19,32 @@ try:
     import capnp  # type: ignore[import] # noqa: F401
 except ImportError:
     pass
+
+
+async def connect_unix_socket(path, timeout):
+    """Return a connected socket, waiting for space in a full Unix accept queue."""
+    async def connect():
+        loop = asyncio.get_running_loop()
+        while True:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.setblocking(False)
+            connected = False
+            try:
+                await loop.sock_connect(sock, str(path))
+                # asyncio can report success after EAGAIN on a full Unix queue.
+                # Verify the connection before handing the socket to a transport.
+                sock.getpeername()
+                connected = True
+                return sock
+            except OSError as error:
+                if error.errno != errno.ENOTCONN:
+                    raise
+            finally:
+                if not connected:
+                    sock.close()
+            await asyncio.sleep(0.01)
+
+    return await asyncio.wait_for(connect(), timeout)
 
 
 class IPCInterfaceTest(BitcoinTestFramework):
@@ -63,7 +90,12 @@ class IPCInterfaceTest(BitcoinTestFramework):
     async def make_capnp_init_ctx(self):
         node = self.nodes[0]
         # Establish a connection, and create Init proxy object.
-        connection = await capnp.AsyncIoStream.create_unix_connection(node.ipc_socket_path)
+        sock = await connect_unix_socket(node.ipc_socket_path, 60 * self.options.timeout_factor)
+        try:
+            connection = await capnp.AsyncIoStream.create_unix_connection(sock=sock)
+        except BaseException:
+            sock.close()
+            raise
         client = capnp.TwoPartyClient(connection)
         init = client.bootstrap().cast_as(self.capnp_modules['init'].Init)
         # Create a remote thread on the server for the IPC calls to be executed in.

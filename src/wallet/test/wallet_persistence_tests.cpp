@@ -425,6 +425,9 @@ BOOST_AUTO_TEST_CASE(unlock_rpc_failure_with_concurrent_relock)
     BOOST_REQUIRE(request.params.read("[\"test passphrase\", 600]"));
     walletpassphrase().HandleRequest(request);
 
+    JSONRPCRequest lock_request;
+    lock_request.context = &context;
+    BOOST_REQUIRE(lock_request.params.read("[]"));
     std::promise<void> entered, release;
     auto entered_future{entered.get_future()};
     auto gate{release.get_future()};
@@ -449,19 +452,17 @@ BOOST_AUTO_TEST_CASE(unlock_rpc_failure_with_concurrent_relock)
     scheduler.StopWhenDrained();
     auto timer{std::async(std::launch::async, [&] { scheduler.serviceQueue(); })};
     auto lock{std::async(std::launch::async, [&] {
-        JSONRPCRequest lock_request;
-        lock_request.context = &context;
-        BOOST_REQUIRE(lock_request.params.read("[]"));
         walletlock().HandleRequest(lock_request);
     })};
     // Both relock paths must wait for the in-progress unlock to unwind.
     const bool timer_waited{timer.wait_for(std::chrono::milliseconds{100}) == std::future_status::timeout};
     const bool lock_waited{lock.wait_for(std::chrono::milliseconds{100}) == std::future_status::timeout};
     release.set_value();
-    BOOST_CHECK(unlock.get());
+    const bool unlock_failed{unlock.get()};
     timer.get();
     lock.get();
     db.before_begin = {};
+    BOOST_CHECK(unlock_failed);
     BOOST_CHECK(timer_waited);
     BOOST_CHECK(lock_waited);
     BOOST_CHECK(db.failure.hit);
@@ -820,10 +821,12 @@ BOOST_AUTO_TEST_CASE(pqhd_private_seed_restrictions_preserve_state)
         BOOST_CHECK(!wallet->ImportPQHDSeed(bytes));
         PQHDSeed seed;
         seed.seed.assign(bytes.begin(), bytes.end());
-        BOOST_CHECK(!wallet->LoadPQHDSeed(id, std::move(seed)));
+        const bool seed_loaded{wallet->LoadPQHDSeed(id, std::move(seed))};
+        BOOST_CHECK(!seed_loaded);
         PQHDCryptedSeed encrypted;
         encrypted.crypted_seed.assign(48, 0x42);
-        BOOST_CHECK(!wallet->LoadPQHDCryptedSeed(id, std::move(encrypted)));
+        const bool encrypted_seed_loaded{wallet->LoadPQHDCryptedSeed(id, std::move(encrypted))};
+        BOOST_CHECK(!encrypted_seed_loaded);
         BOOST_CHECK(!wallet->SetPQHDSeedDefaults(id, id));
         BOOST_CHECK(!wallet->SetPQHDPolicy(7, 7));
         WalletBatch batch(wallet->GetDatabase());
@@ -2526,7 +2529,8 @@ BOOST_AUTO_TEST_CASE(descriptor_setup_propagates_expansion_failure)
         DescriptorScriptPubKeyMan manager{*wallet, 1};
         WalletBatch batch{wallet->GetDatabase()};
         BOOST_REQUIRE(batch.TxnBegin());
-        BOOST_CHECK(!manager.SetupDescriptor(batch, std::move(descriptor)));
+        const bool descriptor_set_up{manager.SetupDescriptor(batch, std::move(descriptor))};
+        BOOST_CHECK(!descriptor_set_up);
         BOOST_CHECK_EQUAL(manager.GetKeyPoolSize(), 0U);
         BOOST_CHECK(wallet->IsWalletFlagSet(WALLET_FLAG_BLANK_WALLET));
         BOOST_REQUIRE(batch.TxnAbort());

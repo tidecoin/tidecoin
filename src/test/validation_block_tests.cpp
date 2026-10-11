@@ -288,7 +288,6 @@ BOOST_AUTO_TEST_CASE(unlinked_shared_ancestors_reorg)
         const auto& candidates = chainstate.setBlockIndexCandidates;
         BOOST_CHECK(std::is_sorted(candidates.begin(), candidates.end(), candidates.value_comp()));
         for (size_t i{3}; i < indexes.size(); ++i) {
-            BOOST_CHECK_EQUAL(std::count(candidates.begin(), candidates.end(), indexes[i]), 1);
             BOOST_CHECK_EQUAL(candidates.count(indexes[i]), 1U);
         }
         expected_tip = *candidates.rbegin();

@@ -46,12 +46,16 @@ BOOST_AUTO_TEST_CASE(secret_lifetime_and_moves)
     original.chain_code.fill(0x24);
     pqhd::Node copy = original;
     pqhd::Node moved = std::move(original);
+    // Node's move operation guarantees that the source is cleared.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     BOOST_CHECK(std::ranges::all_of(original.node_secret, [](auto b) { return b == 0; }));
     BOOST_CHECK(std::ranges::all_of(original.chain_code, [](auto b) { return b == 0; }));
     BOOST_CHECK(copy.node_secret == moved.node_secret);
     BOOST_CHECK(copy.chain_code == moved.chain_code);
     original = std::move(moved);
     BOOST_CHECK(original.node_secret == copy.node_secret);
+    // Check the same clearing guarantee after move assignment.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     BOOST_CHECK(std::ranges::all_of(moved.node_secret, [](auto b) { return b == 0; }));
     original.Clear();
     BOOST_CHECK(std::ranges::all_of(original.chain_code, [](auto b) { return b == 0; }));
@@ -62,6 +66,8 @@ BOOST_AUTO_TEST_CASE(secret_lifetime_and_moves)
     const auto expected = HexStr(block.Span());
     auto moved_block = std::move(block);
     BOOST_CHECK_EQUAL(HexStr(moved_block.Span()), expected);
+    // KeygenStreamBlock64 also guarantees that a moved-from source is cleared.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     BOOST_CHECK(std::ranges::all_of(block.Span(), [](auto b) { return b == 0; }));
 }
 
