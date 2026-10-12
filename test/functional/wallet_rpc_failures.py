@@ -9,7 +9,7 @@ import sqlite3
 
 from test_framework.messages import ser_string
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import assert_equal, assert_raises_rpc_error, get_rpc_proxy
+from test_framework.util import assert_equal, assert_raises_rpc_error, get_rpc_proxy, rpc_url
 
 
 class WalletRPCFailuresTest(BitcoinTestFramework):
@@ -63,7 +63,7 @@ class WalletRPCFailuresTest(BitcoinTestFramework):
         desc = next(d['desc'] for d in wallet.listdescriptors()['descriptors']
                     if d['active'] and not d['internal'] and d['desc'].startswith('wpkh('))
         # A separate HTTP connection is required for concurrent RPC calls.
-        other = get_rpc_proxy(node.url + '/wallet/early-abort', 0, timeout=120)
+        other = get_rpc_proxy(rpc_url(node.datadir_path, node.index, node.chain, node.rpchost) + '/wallet/early-abort', node.index, timeout=120)
         with ThreadPoolExecutor(max_workers=1) as pool:
             result = pool.submit(assert_raises_rpc_error, -1, 'Rescan aborted by user.',
                                  other.importdescriptors, [{'desc': desc, 'range': [0, 299], 'timestamp': 0}])

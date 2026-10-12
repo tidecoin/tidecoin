@@ -366,10 +366,28 @@ class IPCInterfaceTest(BitcoinTestFramework):
 
     def run_aborted_connection_test(self):
         self.log.info("IPC listener survives clients disconnecting immediately")
-        for _ in range(32):
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                client.connect(str(self.nodes[0].ipc_socket_path))
-        self.run_echo_test()
+        connections = 0
+
+        def connect_and_check():
+            nonlocal connections
+            while connections < 32:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                    client.settimeout(1)
+                    try:
+                        client.connect(str(self.nodes[0].ipc_socket_path))
+                    except (ConnectionRefusedError, BlockingIOError, TimeoutError):
+                        # A full Unix accept queue can refuse connections on macOS
+                        # or return EAGAIN on Linux. Retry with a fresh socket.
+                        return False
+                connections += 1
+            try:
+                self.run_echo_test()
+            except ConnectionRefusedError:
+                # The last connections may still be waiting for acceptance.
+                return False
+            return True
+
+        self.wait_until(connect_and_check)
 
     def run_test(self):
         self.run_echo_test()
