@@ -153,7 +153,7 @@ class PSBTTest(BitcoinTestFramework):
         utxos = wonline.listunspent(addresses=[offline_addr])
         raw = wonline.createrawtransaction([{"txid":utxos[0]["txid"], "vout":utxos[0]["vout"]}],[{online_addr:0.9999}])
         psbt = wonline.walletprocesspsbt(online_node.converttopsbt(raw))["psbt"]
-        assert not "not_witness_utxo" in mining_node.decodepsbt(psbt)["inputs"][0]
+        assert "not_witness_utxo" not in mining_node.decodepsbt(psbt)["inputs"][0]
 
         # add non-witness UTXO manually
         psbt_new = PSBT.from_base64(psbt)
@@ -1336,7 +1336,7 @@ class PSBTTest(BitcoinTestFramework):
         self.nodes[2].sendrawtransaction(pq_processed['hex'])
 
         self.log.info("Test descriptorprocesspsbt raises if an invalid sighashtype is passed")
-        assert_raises_rpc_error(-8, "'all' is not a valid sighash parameter.", self.nodes[2].descriptorprocesspsbt, psbt, [descriptor], sighashtype="all")
+        assert_raises_rpc_error(-8, "'all' is not a valid sighash parameter.", self.nodes[2].descriptorprocesspsbt, psbt=psbt, descriptors=[descriptor], sighashtype="all")
 
         if not self.options.usecli:
             self.test_sighash_mismatch()

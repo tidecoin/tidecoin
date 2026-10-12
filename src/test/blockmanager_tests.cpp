@@ -12,6 +12,7 @@
 #include <primitives/block.h>
 #include <util/chaintype.h>
 #include <validation.h>
+#include <validationinterface.h>
 
 #include <algorithm>
 #include <vector>
@@ -51,6 +52,8 @@ BOOST_FIXTURE_TEST_CASE(unlinked_blocks_unique_pairs, TestingSetup)
 
 BOOST_FIXTURE_TEST_CASE(unlinked_blocks_reload_skips_pruned_data, TestChain100Setup)
 {
+    // Finish notifications from fixture mining before rewriting their block indexes.
+    m_node.validation_signals->SyncWithValidationInterfaceQueue();
     LOCK(cs_main);
     auto& chainman = *m_node.chainman;
     auto& blockman = chainman.m_blockman;

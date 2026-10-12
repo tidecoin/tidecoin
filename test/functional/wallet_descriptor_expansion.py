@@ -17,7 +17,7 @@ from threading import Thread
 from test_framework.authproxy import JSONRPCException
 from test_framework.descriptors import descsum_create
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import assert_equal, assert_raises_rpc_error, get_rpc_proxy
+from test_framework.util import assert_equal, assert_raises_rpc_error, get_rpc_proxy, rpc_url
 
 
 class WalletDescriptorExpansionTest(BitcoinTestFramework):
@@ -69,7 +69,7 @@ class WalletDescriptorExpansionTest(BitcoinTestFramework):
 
         self.log.info('Use existing RPC permissions and remove the superseded command')
         assert_raises_rpc_error(-32601, 'Method not found', wallet.expandwalletdescriptor, 'status')
-        endpoint = urlsplit(node.url)
+        endpoint = urlsplit(rpc_url(node.datadir_path, node.index, node.chain, node.rpchost))
         headers = {'Authorization': 'Basic ' + base64.b64encode(b'expandlimited:restricted-password').decode(), 'Content-Type': 'application/json'}
         for method, params, expected_status in [('getwalletinfo', [], 200)] + [(method, [], 403) for method in ['deriveaddresses', 'scantxoutset', 'scanblocks', 'getdescriptoractivity']]:
             with closing(HTTPConnection(endpoint.hostname, endpoint.port, timeout=10)) as connection:
@@ -150,7 +150,7 @@ class WalletDescriptorExpansionTest(BitcoinTestFramework):
         def start_background(method):
             outcome = []
             def run():
-                worker = get_rpc_proxy(node.url + '/wallet/expand', 0, timeout=60)
+                worker = get_rpc_proxy(rpc_url(node.datadir_path, node.index, node.chain, node.rpchost) + '/wallet/expand', node.index, timeout=60)
                 # A cached probe may briefly acquire the reservation before
                 # this worker starts. Retry only that startup conflict.
                 for attempt in range(1000):

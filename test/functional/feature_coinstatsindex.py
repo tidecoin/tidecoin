@@ -35,6 +35,7 @@ from test_framework.util import (
     assert_equal,
     assert_raises_rpc_error,
     get_rpc_proxy,
+    rpc_url,
 )
 from test_framework.wallet import (
     MiniWallet,
@@ -365,7 +366,7 @@ class CoinStatsIndexTest(BitcoinTestFramework):
 
         # Each thread owns its HTTP connection. The barrier overlaps calls with
         # tip changes; the exact server-side interleaving remains stress coverage.
-        rpc = get_rpc_proxy(node.url, node.index, timeout=self.rpc_timeout)
+        rpc = get_rpc_proxy(rpc_url(node.datadir_path, node.index, node.chain, node.rpchost), node.index, timeout=self.rpc_timeout)
         with ThreadPoolExecutor(max_workers=1) as executor:
             for _ in range(20):
                 start = Barrier(2, timeout=self.rpc_timeout)

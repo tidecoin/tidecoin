@@ -904,7 +904,8 @@ class TestNodeCLIAttr:
         return self.cli.send_cli(self.command, *args, **kwargs)
 
     def get_request(self, *args, **kwargs):
-        return lambda: self(*args, **kwargs)
+        # Like an HTTP batch request, execute on the client receiving the batch.
+        return lambda cli: cli.send_cli(self.command, *args, **kwargs)
 
 
 def arg_to_cli(arg):
@@ -941,7 +942,7 @@ class TestNodeCLI():
         results = []
         for request in requests:
             try:
-                results.append(dict(result=request()))
+                results.append(dict(result=request(self)))
             except JSONRPCException as e:
                 results.append(dict(error=e))
         return results

@@ -20,12 +20,31 @@ from unittest.mock import patch
 
 from interface_ipc import connect_unix_socket
 import test_runner
+from .authproxy import JSONRPCException
 from .socks5 import Socks5Configuration, Socks5Connection, Socks5Server, recvall, sendall
 from .test_framework import Binaries, BitcoinTestFramework
+from .test_node import TestNodeCLI
 from .util import PortSeed
 
 
 class FrameworkTests(unittest.TestCase):
+    def test_cli_batch_uses_receiving_node(self):
+        source = TestNodeCLI(None, 'source')('-rpcwallet=source')
+        receiver = TestNodeCLI(None, 'receiver')('-rpcwallet=receiver')
+        request = source.getblock.get_request('blockhash', verbosity=2)
+        with patch.object(source, 'send_cli') as source_call, patch.object(receiver, 'send_cli', return_value={'height': 1}) as receiver_call:
+            self.assertEqual(receiver.batch([request]), [{'result': {'height': 1}}])
+            source_call.assert_not_called()
+            receiver_call.assert_called_once_with('getblock', 'blockhash', verbosity=2)
+
+    def test_cli_batch_keeps_errors_and_continues(self):
+        cli = TestNodeCLI(None, 'node')
+        error = JSONRPCException({'code': -5, 'message': 'Block not found'})
+        requests = [cli.getblock.get_request('missing'), cli.getblockcount.get_request()]
+        with patch.object(cli, 'send_cli', side_effect=[error, 100]) as send:
+            self.assertEqual(cli.batch(requests), [{'error': error}, {'result': 100}])
+            self.assertEqual(send.call_count, 2)
+
     def test_binary_instrumentation(self):
         paths = SimpleNamespace(tidecoin_bin='/tools with spaces/tidecoin', tidecoin_cmd=None)
         for name in ('tidecoind', 'tidecoincli', 'tidecointx', 'tidecoinutil', 'tidecoinwallet', 'tidecoinchainstate'):
