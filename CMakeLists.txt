@@ -531,7 +531,7 @@ else()
 
   try_append_cxx_flags("-Wstack-protector" TARGET core_interface SKIP_LINK)
   try_append_cxx_flags("-fstack-protector-all" TARGET core_interface)
-  if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|x64|amd64|AMD64|i[3-6]86)$")
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|x64|amd64|AMD64|i[3-6]86)$")
     try_append_cxx_flags("-fcf-protection=full" TARGET core_interface)
   endif()
 
