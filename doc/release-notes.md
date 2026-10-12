@@ -1,5 +1,5 @@
-Tidecoin v1.0.0 Release Notes
-============================
+Tidecoin v1.0.0rc1 Release Notes
+===============================
 
 Downloads:
 
