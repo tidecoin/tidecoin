@@ -16,6 +16,7 @@
 #include <uint256.h>
 #include <util/check.h>
 #include <validation.h>
+#include <validationinterface.h>
 
 #include <vector>
 
@@ -23,10 +24,27 @@
 
 BOOST_FIXTURE_TEST_SUITE(validation_chainstate_tests, ChainTestingSetup)
 
+BOOST_AUTO_TEST_CASE(recreate_memory_databases_with_existing_block_files)
+{
+    for (int i{0}; i < 3; ++i) {
+        LoadVerifyActivateChainstate();
+        {
+            LOCK(cs_main);
+            auto& chainman = *m_node.chainman;
+            BOOST_CHECK_EQUAL(chainman.ActiveChain().Height(), 0);
+            BOOST_CHECK_EQUAL(*chainman.m_blockman.m_block_tree_db->ReadDatabaseFormatVersion(), node::BlockTreeDB::DATABASE_FORMAT_VERSION);
+            BOOST_CHECK(fs::exists(chainman.m_blockman.GetBlockPosFilename(FlatFilePos{0, 0})));
+        }
+        m_node.validation_signals->SyncWithValidationInterfaceQueue();
+        m_node.chainman.reset();
+        m_make_chainman();
+    }
+}
+
 BOOST_AUTO_TEST_CASE(database_format_checked_before_chainstate_rebuild)
 {
     auto& chainman = *m_node.chainman;
-    auto& db = *chainman.m_blockman.m_block_tree_db;
+    auto& db = WITH_LOCK(cs_main, return *chainman.m_blockman.m_block_tree_db);
     node::ChainstateLoadOptions options;
     options.coins_db_in_memory = true;
     options.wipe_chainstate_db = true;

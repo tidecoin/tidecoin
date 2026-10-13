@@ -54,6 +54,12 @@ public:
     using CDBWrapper::CDBWrapper;
     //! Local database encoding, independent of the node release version.
     static constexpr uint32_t DATABASE_FORMAT_VERSION{1};
+    //! Distinguish malformed version metadata from failures reading the database.
+    class InvalidFormatVersion : public dbwrapper_error
+    {
+    public:
+        InvalidFormatVersion() : dbwrapper_error{"Invalid database format version"} {}
+    };
     std::optional<uint32_t> ReadDatabaseFormatVersion();
     bool WriteDatabaseFormatVersion();
     //! True if no block entries exist, or the expected genesis is present.

@@ -69,9 +69,9 @@ std::optional<uint32_t> BlockTreeDB::ReadDatabaseFormatVersion()
     try {
         stream >> version;
     } catch (const std::exception&) {
-        throw dbwrapper_error{"Invalid database format version"};
+        throw InvalidFormatVersion{};
     }
-    if (!stream.empty()) throw dbwrapper_error{"Invalid database format version"};
+    if (!stream.empty()) throw InvalidFormatVersion{};
     return version;
 }
 
@@ -1301,8 +1301,13 @@ BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts)
             if (version && *version != BlockTreeDB::DATABASE_FORMAT_VERSION) {
                 throw std::runtime_error{"Unsupported database format version. Use a compatible version of Tidecoin."};
             }
-        } catch (const dbwrapper_error& e) {
+        } catch (const BlockTreeDB::InvalidFormatVersion& e) {
             throw std::runtime_error{e.what()};
+        } catch (const dbwrapper_error& e) {
+            // An explicitly requested rebuild must still be able to recover a
+            // damaged index. A readable unsupported or malformed version above
+            // is refused before any database is wiped.
+            LogWarning("Cannot read block index before reindex: %s. Rebuilding the index.\n", e.what());
         }
     }
     m_block_tree_db = std::make_unique<BlockTreeDB>(m_opts.block_tree_db_params);

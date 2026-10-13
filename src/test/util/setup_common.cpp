@@ -229,7 +229,9 @@ BasicTestingSetup::~BasicTestingSetup()
 }
 
 ChainTestingSetup::ChainTestingSetup(const ChainType chainType, TestOpts opts)
-    : BasicTestingSetup(chainType, opts)
+    : BasicTestingSetup(chainType, opts),
+      m_coins_db_in_memory{opts.coins_db_in_memory},
+      m_block_tree_db_in_memory{opts.block_tree_db_in_memory}
 {
     const CChainParams& chainparams = Params();
 
@@ -308,6 +310,14 @@ ChainTestingSetup::~ChainTestingSetup()
 void ChainTestingSetup::LoadVerifyActivateChainstate()
 {
     auto& chainman{*Assert(m_node.chainman)};
+    if (m_block_tree_db_in_memory && m_coins_db_in_memory) {
+        LOCK(cs_main);
+        auto& db = *chainman.m_blockman.m_block_tree_db;
+        // Tests may recreate both in-memory databases while retaining block
+        // files written by this binary. These empty databases use its format;
+        // they are not an unversioned database loaded from disk.
+        if (db.IsEmpty()) Assert(db.WriteDatabaseFormatVersion());
+    }
     node::ChainstateLoadOptions options;
     options.mempool = Assert(m_node.mempool.get());
     options.coins_db_in_memory = m_coins_db_in_memory;
@@ -333,8 +343,6 @@ TestingSetup::TestingSetup(
     TestOpts opts)
     : ChainTestingSetup(chainType, opts)
 {
-    m_coins_db_in_memory = opts.coins_db_in_memory;
-    m_block_tree_db_in_memory = opts.block_tree_db_in_memory;
     // Ideally we'd move all the RPC tests to the functional testing framework
     // instead of unit tests, but for now we need these here.
     RegisterAllCoreRPCCommands(tableRPC);

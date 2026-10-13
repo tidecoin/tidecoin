@@ -30,7 +30,7 @@
 using kernel::CacheSizes;
 
 namespace node {
-static ChainstateLoadResult RequireDatabaseReindex(ChainstateManager& chainman)
+static ChainstateLoadResult RequireDatabaseReindex(ChainstateManager& chainman) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     bool have_pruned{false};
     chainman.m_blockman.m_block_tree_db->ReadFlag("prunedblockfiles", have_pruned);
@@ -186,8 +186,11 @@ ChainstateLoadResult LoadChainstate(ChainstateManager& chainman, const CacheSize
     std::optional<uint32_t> database_version;
     try {
         database_version = block_db.ReadDatabaseFormatVersion();
-    } catch (const dbwrapper_error&) {
+    } catch (const BlockTreeDB::InvalidFormatVersion&) {
         return {ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB, _("Invalid database format version. The database has not been rebuilt.")};
+    } catch (const dbwrapper_error& e) {
+        LogError("%s\n", e.what());
+        return {ChainstateLoadStatus::FAILURE, _("Error loading block database")};
     }
     if (database_version && *database_version != BlockTreeDB::DATABASE_FORMAT_VERSION) {
         return {ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB, _("Unsupported database format version. Use a compatible version of Tidecoin.")};

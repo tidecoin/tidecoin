@@ -236,6 +236,12 @@ class InitTest(BitcoinTestFramework):
             finally:
                 node.rpc_timeout = orig_timeout
 
+            if file_patt == 'blocks/index/*.ldb':
+                self.log.info("Recover the damaged block index with an explicit reindex")
+                check_clean_start(args + ['-reindex'])
+                assert node.verifychain(4, 0)
+                self.stop_node(0)
+
             for dir in dirs:
                 shutil.rmtree(node.chain_path / dir)
                 shutil.move(node.chain_path / f"{dir}_bak", node.chain_path / dir)

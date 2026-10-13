@@ -53,13 +53,49 @@ BOOST_AUTO_TEST_CASE(database_format_version)
         BOOST_CHECK_EQUAL(*db.ReadDatabaseFormatVersion(), 999U);
         // Reject both truncated and extended encodings of the version.
         BOOST_REQUIRE(db.Write(uint8_t{'V'}, uint8_t{1}));
-        BOOST_CHECK_THROW(db.ReadDatabaseFormatVersion(), dbwrapper_error);
+        BOOST_CHECK_THROW(db.ReadDatabaseFormatVersion(), node::BlockTreeDB::InvalidFormatVersion);
         BOOST_REQUIRE(db.Write(uint8_t{'V'}, uint64_t{1}));
-        BOOST_CHECK_THROW(db.ReadDatabaseFormatVersion(), dbwrapper_error);
+        BOOST_CHECK_THROW(db.ReadDatabaseFormatVersion(), node::BlockTreeDB::InvalidFormatVersion);
         BOOST_REQUIRE(db.Write(std::make_pair(uint8_t{'b'}, uint256{123}), uint8_t{0}));
         BOOST_CHECK(!db.CheckGenesisBlock(Params().GetConsensus().hashGenesisBlock));
         BOOST_REQUIRE(db.Write(std::make_pair(uint8_t{'b'}, Params().GetConsensus().hashGenesisBlock), uint8_t{0}));
         BOOST_CHECK(db.CheckGenesisBlock(Params().GetConsensus().hashGenesisBlock));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(reindex_preserves_unsupported_database_format)
+{
+    KernelNotifications notifications{Assert(m_node.shutdown_request), m_node.exit_status, *Assert(m_node.warnings)};
+    const DBParams params{.path = m_args.GetDataDirNet() / "format-index", .cache_bytes = 1 << 20};
+    auto reindex_params = params;
+    reindex_params.wipe_data = true;
+    const BlockManager::Options opts{
+        .chainparams = Params(),
+        .blocks_dir = m_args.GetBlocksDirPath(),
+        .notifications = notifications,
+        .block_tree_db_params = reindex_params,
+    };
+    for (const auto width : {1, 4, 8}) {
+        {
+            node::BlockTreeDB db{params};
+            if (width == 1) BOOST_REQUIRE(db.Write(uint8_t{'V'}, uint8_t{1}));
+            if (width == 4) BOOST_REQUIRE(db.Write(uint8_t{'V'}, uint32_t{999}));
+            if (width == 8) BOOST_REQUIRE(db.Write(uint8_t{'V'}, uint64_t{1}));
+            BOOST_REQUIRE(db.WriteFlag("preserve", true));
+        }
+        BOOST_CHECK_EXCEPTION((BlockManager{*Assert(m_node.shutdown_signal), opts}), std::runtime_error,
+            [width](const std::runtime_error& e) {
+                return std::string{e.what()}.starts_with(width == 4 ? "Unsupported database format version" : "Invalid database format version");
+            });
+        node::BlockTreeDB db{params};
+        bool preserved{false};
+        BOOST_REQUIRE(db.ReadFlag("preserve", preserved));
+        BOOST_CHECK(preserved);
+        if (width == 4) {
+            BOOST_CHECK_EQUAL(*db.ReadDatabaseFormatVersion(), 999U);
+        } else {
+            BOOST_CHECK_THROW(db.ReadDatabaseFormatVersion(), node::BlockTreeDB::InvalidFormatVersion);
+        }
     }
 }
 
