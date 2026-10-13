@@ -10,6 +10,8 @@
 - Verify that out-of-order blocks are correctly processed, see LoadExternalBlockFile()
 """
 
+import shutil
+
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.messages import MAGIC_BYTES
 from test_framework.util import (
@@ -78,6 +80,24 @@ class ReindexTest(BitcoinTestFramework):
         # All blocks should be accepted and processed.
         assert_equal(self.nodes[0].getblockcount(), 12)
 
+    def missing_index_requires_full_reindex(self):
+        node = self.nodes[0]
+        tip = node.getbestblockhash()
+        node.stop_node()
+        # Chainstate alone (including its format marker) cannot establish the
+        # storage format when the block index is missing.
+        shutil.rmtree(node.blocks_path / 'index')
+        with node.assert_debug_log(['Database storage format upgrade:', 'Reindexing finished']):
+            node.start(['-reindex-chainstate'])
+            node.wait_for_rpc_connection()
+        assert_equal(node.getbestblockhash(), tip)
+        assert node.verifychain(4, 0)
+        node.stop_node()
+        with node.assert_debug_log([], unexpected_msgs=['Database storage format upgrade:', 'Reindexing block file']):
+            node.start()
+            node.wait_for_rpc_connection()
+        assert_equal(node.getbestblockhash(), tip)
+
     def continue_reindex_after_shutdown(self):
         node = self.nodes[0]
         self.generate(node, 1500)
@@ -104,6 +124,7 @@ class ReindexTest(BitcoinTestFramework):
         self.reindex(True)
 
         self.out_of_order()
+        self.missing_index_requires_full_reindex()
         self.continue_reindex_after_shutdown()
 
 

@@ -24,11 +24,14 @@ Back up your wallets and shut down the old node completely before replacing the
 executables. See [wallet backup and migration](managing-wallets.md) for legacy
 wallet migration instructions.
 
-When an older chainstate database uses the legacy script-compression format,
-an unpruned node automatically rebuilds chainstate from its local block files.
-This can take time, but does not require downloading those blocks again if all
-required files are present. A pruned node with that format must restart with
-`-reindex` and download any missing blocks.
+This release records an overall database storage-format version. Existing
+databases without that version, including those created by earlier development
+builds, require a one-time full rebuild of the block index, chainstate and undo
+records. An unpruned node performs this rebuild automatically from its local
+block files. This can take time, but does not require downloading those blocks
+again if all required files are present. A node that has pruned blocks must
+restart with `-reindex` and download any missing blocks. `-reindex-chainstate`
+alone is insufficient for this migration.
 
 Offline transaction utility
 ---------------------------

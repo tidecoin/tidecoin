@@ -11,6 +11,7 @@
 #include <kernel/caches.h>
 #include <logging.h>
 #include <node/blockstorage.h>
+#include <node/utxo_snapshot.h>
 #include <sync.h>
 #include <threadsafety.h>
 #include <tinyformat.h>
@@ -29,6 +30,16 @@
 using kernel::CacheSizes;
 
 namespace node {
+static ChainstateLoadResult RequireDatabaseReindex(ChainstateManager& chainman)
+{
+    bool have_pruned{false};
+    chainman.m_blockman.m_block_tree_db->ReadFlag("prunedblockfiles", have_pruned);
+    if (have_pruned) {
+        return {ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB, _("The database storage format requires a full rebuild. Blocks have been pruned; restart with -reindex to rebuild and redownload missing blocks.")};
+    }
+    return {ChainstateLoadStatus::FAILURE_REINDEX, _("The database storage format requires a full rebuild of the block index, chainstate and undo records. Please restart with -reindex.")};
+}
+
 // Complete initialization of chainstates after the initial call has been made
 // to ChainstateManager::InitializeChainstate().
 static ChainstateLoadResult CompleteChainstateInitialization(
@@ -110,12 +121,9 @@ static ChainstateLoadResult CompleteChainstateInitialization(
                                                                      "Please restart with -reindex-chainstate. This will "
                                                                      "rebuild the chainstate database.")};
         case CoinsDBFormatState::LEGACY_SCRIPT_COMPRESSION:
-            if (options.prune) {
-                return {ChainstateLoadStatus::FAILURE, _("Legacy Tidecoin chainstate format found. Pruned nodes cannot rebuild chainstate alone. "
-                                                         "Please restart with -reindex to rebuild the entire block database.")};
-            }
-            return {ChainstateLoadStatus::FAILURE_REINDEX_CHAINSTATE, _("Legacy Tidecoin chainstate format found. Rebuilding chainstate is required because "
-                                                                        "older releases stored UTXO entries with an incompatible script compressor.")};
+            return RequireDatabaseReindex(chainman);
+        case CoinsDBFormatState::UNSUPPORTED:
+            return {ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB, _("Unsupported chainstate format version. Use a compatible version of Tidecoin.")};
         }
 
         // ReplayBlocks is a no-op if we cleared the coinsviewdb with -reindex or -reindex-chainstate
@@ -171,6 +179,35 @@ ChainstateLoadResult LoadChainstate(ChainstateManager& chainman, const CacheSize
     }
 
     LOCK(cs_main);
+
+    // Check before opening or wiping any chainstate, including snapshot state.
+    // A chainstate-only rebuild cannot establish compatibility of existing undo.
+    auto& block_db = *chainman.m_blockman.m_block_tree_db;
+    std::optional<uint32_t> database_version;
+    try {
+        database_version = block_db.ReadDatabaseFormatVersion();
+    } catch (const dbwrapper_error&) {
+        return {ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB, _("Invalid database format version. The database has not been rebuilt.")};
+    }
+    if (database_version && *database_version != BlockTreeDB::DATABASE_FORMAT_VERSION) {
+        return {ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB, _("Unsupported database format version. Use a compatible version of Tidecoin.")};
+    }
+    if (!database_version && !chainman.m_blockman.BlockIndexWasWiped()) {
+        const auto& datadir = chainman.m_options.datadir;
+        if (!block_db.IsEmpty() ||
+            (!options.coins_db_in_memory && (fs::exists(datadir / "chainstate") || FindSnapshotChainstateDir(datadir))) ||
+            fs::exists(chainman.m_blockman.GetBlockPosFilename(FlatFilePos{0, 0}))) {
+            // Preserve the existing wrong-network check before offering an
+            // automatic rebuild of an unversioned database.
+            if (!block_db.CheckGenesisBlock(chainman.GetConsensus().hashGenesisBlock)) {
+                return {ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB, _("Incorrect or no genesis block found. Wrong datadir for network?")};
+            }
+            return RequireDatabaseReindex(chainman);
+        }
+    }
+    if (chainman.m_blockman.BlockIndexWasWiped() && !options.wipe_chainstate_db) {
+        return {ChainstateLoadStatus::FAILURE_REINDEX, _("Rebuilding the block index also requires rebuilding chainstate. Please restart with -reindex.")};
+    }
 
     chainman.m_total_coinstip_cache = cache_sizes.coins;
     chainman.m_total_coinsdb_cache = cache_sizes.coins_db;
@@ -232,6 +269,13 @@ ChainstateLoadResult LoadChainstate(ChainstateManager& chainman, const CacheSize
         return {ChainstateLoadStatus::FAILURE_FATAL, _(
            "UTXO snapshot failed to validate. "
            "Restart to resume normal initial block download, or try loading a different snapshot.")};
+    }
+
+    // Only fresh databases or a full reindex reach here without a version.
+    // Chainstates have now been initialized (and wiped for a full reindex).
+    // The separate reindex flag remains set until block importing finishes.
+    if (!database_version && !block_db.WriteDatabaseFormatVersion()) {
+        return {ChainstateLoadStatus::FAILURE_FATAL, _("Failed to write database format version")};
     }
 
     return {ChainstateLoadStatus::SUCCESS, {}};

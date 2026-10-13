@@ -40,6 +40,7 @@
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <unordered_map>
 
 namespace kernel {
@@ -48,6 +49,7 @@ static constexpr uint8_t DB_BLOCK_INDEX{'b'};
 static constexpr uint8_t DB_FLAG{'F'};
 static constexpr uint8_t DB_REINDEX_FLAG{'R'};
 static constexpr uint8_t DB_LAST_BLOCK{'l'};
+static constexpr uint8_t DB_DATABASE_FORMAT{'V'};
 // Keys used in previous version that might still be found in the DB:
 // BlockTreeDB::DB_TXINDEX_BLOCK{'T'};
 // BlockTreeDB::DB_TXINDEX{'t'}
@@ -58,10 +60,39 @@ bool BlockTreeDB::ReadBlockFileInfo(int nFile, CBlockFileInfo& info)
     return Read(std::make_pair(DB_BLOCK_FILES, nFile), info);
 }
 
+std::optional<uint32_t> BlockTreeDB::ReadDatabaseFormatVersion()
+{
+    std::string value;
+    if (!ReadRaw(DB_DATABASE_FORMAT, value)) return std::nullopt;
+    DataStream stream{MakeByteSpan(value)};
+    uint32_t version;
+    try {
+        stream >> version;
+    } catch (const std::exception&) {
+        throw dbwrapper_error{"Invalid database format version"};
+    }
+    if (!stream.empty()) throw dbwrapper_error{"Invalid database format version"};
+    return version;
+}
+
+bool BlockTreeDB::WriteDatabaseFormatVersion()
+{
+    return Write(DB_DATABASE_FORMAT, DATABASE_FORMAT_VERSION, /*fSync=*/true);
+}
+
+bool BlockTreeDB::CheckGenesisBlock(const uint256& genesis_hash)
+{
+    if (Exists(std::make_pair(DB_BLOCK_INDEX, genesis_hash))) return true;
+    std::unique_ptr<CDBIterator> cursor{NewIterator()};
+    cursor->Seek(DB_BLOCK_INDEX);
+    uint8_t prefix;
+    return !cursor->Valid() || (cursor->GetKey(prefix) && prefix != DB_BLOCK_INDEX);
+}
+
 bool BlockTreeDB::WriteReindexing(bool fReindexing)
 {
     if (fReindexing) {
-        return Write(DB_REINDEX_FLAG, uint8_t{'1'});
+        return Write(DB_REINDEX_FLAG, uint8_t{'1'}, /*fSync=*/true);
     } else {
         return Erase(DB_REINDEX_FLAG);
     }
@@ -1258,6 +1289,22 @@ BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts)
       m_undo_file_seq{FlatFileSeq{m_opts.blocks_dir, "rev", UNDOFILE_CHUNK_SIZE}},
       m_interrupt{interrupt}
 {
+    // Check an existing version before -reindex can erase it. Unknown formats
+    // must be opened by a compatible node, even when a rebuild was requested.
+    if (m_opts.block_tree_db_params.wipe_data && !m_opts.block_tree_db_params.memory_only &&
+        fs::exists(m_opts.block_tree_db_params.path)) {
+        auto params = m_opts.block_tree_db_params;
+        params.wipe_data = false;
+        try {
+            BlockTreeDB existing_db{params};
+            const auto version = existing_db.ReadDatabaseFormatVersion();
+            if (version && *version != BlockTreeDB::DATABASE_FORMAT_VERSION) {
+                throw std::runtime_error{"Unsupported database format version. Use a compatible version of Tidecoin."};
+            }
+        } catch (const dbwrapper_error& e) {
+            throw std::runtime_error{e.what()};
+        }
+    }
     m_block_tree_db = std::make_unique<BlockTreeDB>(m_opts.block_tree_db_params);
 
     if (m_opts.block_tree_db_params.wipe_data) {

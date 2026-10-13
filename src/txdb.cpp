@@ -69,11 +69,11 @@ CoinsDBFormatState CCoinsViewDB::GetFormatState()
     cursor->Seek(std::make_pair(DB_COINS, uint256{}));
     if (cursor->Valid()) return CoinsDBFormatState::NEEDS_UPGRADE;
 
-    uint8_t format_version{0};
-    if (m_db->Read(DB_CHAINSTATE_FORMAT, format_version)) {
-        return format_version == CHAINSTATE_FORMAT_CURRENT
+    std::string format_version;
+    if (m_db->ReadRaw(DB_CHAINSTATE_FORMAT, format_version)) {
+        return format_version == std::string(1, CHAINSTATE_FORMAT_CURRENT)
             ? CoinsDBFormatState::OK
-            : CoinsDBFormatState::LEGACY_SCRIPT_COMPRESSION;
+            : CoinsDBFormatState::UNSUPPORTED;
     }
 
     cursor->Seek(DB_COIN);

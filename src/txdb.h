@@ -44,6 +44,7 @@ enum class CoinsDBFormatState {
     OK,
     NEEDS_UPGRADE,
     LEGACY_SCRIPT_COMPRESSION,
+    UNSUPPORTED,
 };
 
 /** CCoinsView backed by the coin database (chainstate/) */

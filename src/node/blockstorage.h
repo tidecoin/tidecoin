@@ -52,6 +52,12 @@ class BlockTreeDB : public CDBWrapper
 {
 public:
     using CDBWrapper::CDBWrapper;
+    //! Local database encoding, independent of the node release version.
+    static constexpr uint32_t DATABASE_FORMAT_VERSION{1};
+    std::optional<uint32_t> ReadDatabaseFormatVersion();
+    bool WriteDatabaseFormatVersion();
+    //! True if no block entries exist, or the expected genesis is present.
+    bool CheckGenesisBlock(const uint256& genesis_hash);
     bool WriteBatchSync(const std::vector<std::pair<int, const CBlockFileInfo*>>& fileInfo, int nLastFile, const std::vector<const CBlockIndex*>& blockinfo);
     bool ReadBlockFileInfo(int nFile, CBlockFileInfo& info);
     bool ReadLastBlockFile(int& nFile);
@@ -262,6 +268,8 @@ public:
     using Options = kernel::BlockManagerOpts;
 
     explicit BlockManager(const util::SignalInterrupt& interrupt, Options opts);
+
+    bool BlockIndexWasWiped() const { return m_opts.block_tree_db_params.wipe_data; }
 
     const util::SignalInterrupt& m_interrupt;
     std::atomic<bool> m_importing{false};

@@ -1764,14 +1764,14 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         do_reindex_chainstate,
         kernel_cache_sizes,
         args);
-    if (status == ChainstateLoadStatus::FAILURE_REINDEX_CHAINSTATE && !do_reindex && !do_reindex_chainstate && !ShutdownRequested(node)) {
-        const bilingual_str rebuild_msg = _("Legacy Tidecoin chainstate detected. Rebuilding chainstate from local block files. This may take a while, but does not require redownloading blocks.");
+    if (status == ChainstateLoadStatus::FAILURE_REINDEX && !do_reindex && !ShutdownRequested(node)) {
+        const bilingual_str rebuild_msg = _("Database storage format upgrade: rebuilding the block index, chainstate and undo records from local block files. This may take a while. Missing blocks will need to be downloaded.");
         LogWarning("%s\n", rebuild_msg.original);
         uiInterface.InitMessage(rebuild_msg.translated);
         if (!Assert(node.shutdown_signal)->reset()) {
             LogError("Internal error: failed to reset shutdown signal.\n");
         }
-        do_reindex_chainstate = true;
+        do_reindex = true;
         std::tie(status, error) = InitAndLoadChainstate(
             node,
             do_reindex,
@@ -1978,9 +1978,11 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
      */
     {
         WAIT_LOCK(kernel_notifications.m_tip_block_mutex, lock);
-        kernel_notifications.m_tip_block_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(kernel_notifications.m_tip_block_mutex) {
-            return kernel_notifications.TipBlock() || ShutdownRequested(node);
-        });
+        // A shutdown signal before the first connected block need not produce
+        // a tip notification. Periodically check it rather than waiting forever.
+        while (!kernel_notifications.TipBlock() && !ShutdownRequested(node)) {
+            kernel_notifications.m_tip_block_cv.wait_for(lock, std::chrono::milliseconds{100});
+        }
     }
 
     if (ShutdownRequested(node)) {

@@ -1433,6 +1433,19 @@ BOOST_AUTO_TEST_CASE(coinsdb_marks_current_script_compression_format)
     }
 }
 
+BOOST_AUTO_TEST_CASE(coinsdb_rejects_unknown_format_version)
+{
+    const fs::path path{m_args.GetDataDirBase() / "coinsdb_unknown_format"};
+    for (const uint32_t version : {1U, 2U, 256U}) {
+        {
+            CDBWrapper db{{.path = path, .cache_bytes = 1 << 20, .wipe_data = true, .obfuscate = true}};
+            BOOST_REQUIRE(db.Write(uint8_t{'F'}, version));
+        }
+        CCoinsViewDB coins_db{{.path = path, .cache_bytes = 1 << 20}, {}};
+        BOOST_CHECK(coins_db.GetFormatState() == CoinsDBFormatState::UNSUPPORTED);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(coins_snapshot_pins_cache_reopen)
 {
     CCoinsViewDB db{{.path = m_args.GetDataDirNet() / "pinned-coins", .cache_bytes = 1 << 20}, {}};

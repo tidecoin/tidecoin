@@ -4,6 +4,7 @@
 //
 #include <chainparams.h>
 #include <consensus/validation.h>
+#include <node/chainstate.h>
 #include <node/kernel_notifications.h>
 #include <random.h>
 #include <rpc/blockchain.h>
@@ -21,6 +22,35 @@
 #include <boost/test/unit_test.hpp>
 
 BOOST_FIXTURE_TEST_SUITE(validation_chainstate_tests, ChainTestingSetup)
+
+BOOST_AUTO_TEST_CASE(database_format_checked_before_chainstate_rebuild)
+{
+    auto& chainman = *m_node.chainman;
+    auto& db = *chainman.m_blockman.m_block_tree_db;
+    node::ChainstateLoadOptions options;
+    options.coins_db_in_memory = true;
+    options.wipe_chainstate_db = true;
+    const auto check_status = [&](node::ChainstateLoadStatus expected) {
+        const auto [status, error] = node::LoadChainstate(chainman, m_kernel_cache_sizes, options);
+        BOOST_CHECK(status == expected);
+        BOOST_CHECK(WITH_LOCK(cs_main, return chainman.GetAll().empty()));
+    };
+
+    // An unversioned index, even with an in-progress reindex, must not be
+    // certified by deleting chainstate alone.
+    BOOST_REQUIRE(db.WriteReindexing(true));
+    check_status(node::ChainstateLoadStatus::FAILURE_REINDEX);
+    BOOST_CHECK(!db.ReadDatabaseFormatVersion());
+    BOOST_REQUIRE(db.WriteFlag("prunedblockfiles", true));
+    check_status(node::ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB);
+    BOOST_REQUIRE(db.WriteFlag("prunedblockfiles", false));
+
+    BOOST_REQUIRE(db.Write(uint8_t{'V'}, uint32_t{999}));
+    check_status(node::ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB);
+    BOOST_CHECK_EQUAL(*db.ReadDatabaseFormatVersion(), 999U);
+    BOOST_REQUIRE(db.Write(uint8_t{'V'}, uint8_t{1}));
+    check_status(node::ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB);
+}
 
 //! Test resizing coins-related Chainstate caches during runtime.
 //!

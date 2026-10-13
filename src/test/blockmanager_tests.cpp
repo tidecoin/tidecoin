@@ -29,6 +29,40 @@ using node::MAX_BLOCKFILE_SIZE;
 // use BasicTestingSetup here for the data directory configuration, setup, and cleanup
 BOOST_FIXTURE_TEST_SUITE(blockmanager_tests, BasicTestingSetup)
 
+BOOST_AUTO_TEST_CASE(database_format_version)
+{
+    const DBParams params{.path = m_args.GetDataDirNet() / "format-index", .cache_bytes = 1 << 20};
+    {
+        node::BlockTreeDB db{params};
+        BOOST_CHECK(db.CheckGenesisBlock(Params().GetConsensus().hashGenesisBlock));
+        BOOST_CHECK(!db.ReadDatabaseFormatVersion());
+        BOOST_REQUIRE(db.WriteDatabaseFormatVersion());
+        BOOST_CHECK_EQUAL(*db.ReadDatabaseFormatVersion(), node::BlockTreeDB::DATABASE_FORMAT_VERSION);
+        BOOST_REQUIRE(db.WriteReindexing(true));
+    }
+    {
+        node::BlockTreeDB db{params};
+        BOOST_CHECK_EQUAL(*db.ReadDatabaseFormatVersion(), node::BlockTreeDB::DATABASE_FORMAT_VERSION);
+        bool reindex{false};
+        db.ReadReindexing(reindex);
+        BOOST_CHECK(reindex);
+        BOOST_REQUIRE(db.WriteReindexing(false));
+        // Format and rebuild progress are independent records.
+        BOOST_CHECK_EQUAL(*db.ReadDatabaseFormatVersion(), node::BlockTreeDB::DATABASE_FORMAT_VERSION);
+        BOOST_REQUIRE(db.Write(uint8_t{'V'}, uint32_t{999}));
+        BOOST_CHECK_EQUAL(*db.ReadDatabaseFormatVersion(), 999U);
+        // Reject both truncated and extended encodings of the version.
+        BOOST_REQUIRE(db.Write(uint8_t{'V'}, uint8_t{1}));
+        BOOST_CHECK_THROW(db.ReadDatabaseFormatVersion(), dbwrapper_error);
+        BOOST_REQUIRE(db.Write(uint8_t{'V'}, uint64_t{1}));
+        BOOST_CHECK_THROW(db.ReadDatabaseFormatVersion(), dbwrapper_error);
+        BOOST_REQUIRE(db.Write(std::make_pair(uint8_t{'b'}, uint256{123}), uint8_t{0}));
+        BOOST_CHECK(!db.CheckGenesisBlock(Params().GetConsensus().hashGenesisBlock));
+        BOOST_REQUIRE(db.Write(std::make_pair(uint8_t{'b'}, Params().GetConsensus().hashGenesisBlock), uint8_t{0}));
+        BOOST_CHECK(db.CheckGenesisBlock(Params().GetConsensus().hashGenesisBlock));
+    }
+}
+
 BOOST_FIXTURE_TEST_CASE(unlinked_blocks_unique_pairs, TestingSetup)
 {
     LOCK(cs_main);
