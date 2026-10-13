@@ -4,7 +4,7 @@ runs:
   using: 'composite'
   steps:
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@v4
       with:
         # Use host network to allow BuildKit to access the GitHub Actions cache backend.
         driver-opts: |
@@ -12,7 +12,7 @@ runs:
 
     # This is required to allow buildkit to access the actions cache
     - name: Expose actions cache variables
-      uses: actions/github-script@v6
+      uses: actions/github-script@v8
       with:
         script: |
           core.exportVariable('ACTIONS_CACHE_URL', process.env['ACTIONS_CACHE_URL'])

@@ -247,7 +247,7 @@ define check_or_remove_sources
   mkdir -p $($(package)_source_dir); cd $($(package)_source_dir); \
   test -f $($(package)_fetched) && ( $(build_SHA256SUM) -c $($(package)_fetched) >/dev/null 2>/dev/null || \
     ( echo "Checksum missing or mismatched for $(package) source. Forcing re-download."; \
-      rm -f $($(package)_all_sources) $($(1)_fetched))) || true
+      rm -f $($(package)_fetched))) || true
 endef
 
 check-packages:

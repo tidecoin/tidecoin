@@ -36,7 +36,7 @@ define fetch_file_inner
 endef
 
 define fetch_file
-    ( test -f $$($(1)_source_dir)/$(4) || \
+    ( ( echo "$(5)  $$($(1)_source_dir)/$(4)" | $(build_SHA256SUM) -c >/dev/null 2>&1 ) || \
     ( $(call fetch_file_inner,$(1),$(2),$(3),$(4),$(5)) || \
       $(call fetch_file_inner,$(1),$(FALLBACK_DOWNLOAD_PATH),$(4),$(4),$(5))))
 endef
@@ -244,10 +244,12 @@ ifneq ($(LOG),)
 $(1)_logging = >>$$($(1)_build_log) 2>&1 || { if test -f $$($(1)_build_log); then cat $$($(1)_build_log); fi; exit 1; }
 endif
 
-$($(1)_fetched):
+# A saved download stamp describes the old files, not necessarily the current
+# recipe. Recheck remote sources against the recipe even when a stamp exists.
+# Locally generated sources have their own content-based checks above.
+$($(1)_fetched): $(if $($(1)_local_dir),,FORCE)
 	mkdir -p $$(@D) $(SOURCES_PATH)
 	rm -f $$@
-	touch $$@
 	cd $$(@D); $($(1)_fetch_cmds)
 	cd $($(1)_source_dir); $(foreach source,$($(1)_all_sources),$(build_SHA256SUM) $(source) >> $$(@);)
 	touch $$@
