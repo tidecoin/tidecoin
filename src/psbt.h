@@ -174,6 +174,7 @@ struct PSBTInput
     std::optional<int> sighash_type;
 
     bool IsNull() const;
+    bool IsUTXOConsistent(const COutPoint& prevout) const;
     void FillSignatureData(SignatureData& sigdata) const;
     void FromSignatureData(const SignatureData& sigdata);
     void Merge(const PSBTInput& input);
@@ -843,6 +844,9 @@ struct PartiallySignedTransaction
                     throw std::ios_base::failure("Input specifies output index that does not exist");
                 }
             }
+            if (!input.IsUTXOConsistent(tx->vin[i].prevout)) {
+                throw std::ios_base::failure("PSBT previous output information is inconsistent at input " + std::to_string(i));
+            }
             ++i;
         }
         // Make sure that the number of inputs matches the number of inputs in the transaction
@@ -898,8 +902,9 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned 
  **/
 [[nodiscard]] PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& psbt, int index, const PrecomputedTransactionData* txdata, std::optional<int> sighash = std::nullopt, SignatureData* out_sigdata = nullptr, bool finalize = true, std::optional<unsigned int> script_verify_flags = std::nullopt);
 
-/**  Reduces the size of the PSBT by dropping unnecessary `non_witness_utxos` (i.e. complete previous transactions) from a psbt when all inputs are segwit v1+. */
-void RemoveUnnecessaryTransactions(PartiallySignedTransaction& psbtx);
+/** Drop full transactions only for active native v1 inputs whose signing mode
+ * commits to all input amounts and scripts. Finalized inputs are retained. */
+void RemoveUnnecessaryTransactions(PartiallySignedTransaction& psbt, unsigned int script_verify_flags);
 
 /** Counts the unsigned inputs of a PSBT. */
 size_t CountPSBTUnsignedInputs(const PartiallySignedTransaction& psbt);

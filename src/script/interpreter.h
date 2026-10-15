@@ -140,7 +140,10 @@ struct PrecomputedTransactionData
 
     // SHA-512 precomputed data for witness v1_512 sighash.
     uint512 hashPrevouts_512, hashSequence_512, hashOutputs_512;
-    //! Whether the 3 fields above are initialized.
+    //! Amounts and locking scripts of all spent outputs, in input order.
+    uint512 hashSpentAmounts_512, hashSpentScripts_512;
+    //! Whether transaction hashes are initialized; spent-output hashes additionally
+    //! require m_spent_outputs_ready.
     bool m_bip143_segwit512_ready = false;
 
     std::vector<CTxOut> m_spent_outputs;
@@ -201,8 +204,9 @@ public:
 template <class T>
 uint256 SignatureHash(const CScript& scriptCode, const T& txTo, unsigned int nIn, int32_t nHashType, const CAmount& amount, SigVersion sigversion, const PrecomputedTransactionData* cache = nullptr, SigHashCache* sighash_cache = nullptr);
 
+/** Returns false when required spent outputs or the SIGHASH_SINGLE output are missing. */
 template <class T>
-uint512 SignatureHash512(const CScript& scriptCode, const T& txTo, unsigned int nIn, int32_t nHashType, const CAmount& amount, const PrecomputedTransactionData* cache = nullptr);
+bool SignatureHash512(uint512& hash_out, const CScript& scriptCode, const T& txTo, unsigned int nIn, int32_t nHashType, const CAmount& amount, const PrecomputedTransactionData* cache = nullptr);
 
 class BaseSignatureChecker
 {

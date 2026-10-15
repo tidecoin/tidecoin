@@ -78,13 +78,13 @@ class PQHDPSBTTest(BitcoinTestFramework):
                 conflicting = modified.to_base64()
                 for opt_in in (False, True):
                     assert_raises_rpc_error(-22, 'PQHD origin conflicts with wallet metadata', update, conflicting, opt_in)
-                assert_raises_rpc_error(-8, 'conflicting PQHD origins', node.combinepsbt, [public, conflicting])
+                assert_raises_rpc_error(-8, 'PSBTs not compatible (different transactions, previous outputs or PQHD origins)', node.combinepsbt, [public, conflicting])
                 assert_equal(wallet.listdescriptors(), state)
         # Malformed origin values are rejected by combination as well.
         malformed = PSBT.from_base64(public)
         key = next(key for key in malformed.i[0].map if isinstance(key, bytes) and key.startswith(b'\xfc\x08tidecoin\x01'))
         malformed.i[0].map[key] = b'bad'
-        assert_raises_rpc_error(-8, 'conflicting PQHD origins', node.combinepsbt, [malformed.to_base64()])
+        assert_raises_rpc_error(-8, 'PSBTs not compatible (different transactions, previous outputs or PQHD origins)', node.combinepsbt, [malformed.to_base64()])
 
         self.log.info('Successful signing still spends the mixed-scheme script after rejected updates')
         wallet.walletpassphrase('pass', 60)

@@ -121,6 +121,7 @@ BASE_SCRIPTS = [
     # vv Tests less than 60s vv
     'rpc_psbt.py',
     'rpc_psbt_complete.py',
+    'rpc_psbt_witness_v1.py',
     'wallet_fundrawtransaction.py',
     'wallet_bumpfee.py',
     'wallet_bumpfee_large_cluster.py',

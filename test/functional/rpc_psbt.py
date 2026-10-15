@@ -126,7 +126,7 @@ class PSBTTest(BitcoinTestFramework):
         assert signed_psbt_incomplete["complete"] is False
 
     def test_utxo_conversion(self):
-        self.log.info("Check that non-witness UTXOs are removed for segwit v0 inputs")
+        self.log.info("Check that full previous transactions are retained for witness inputs")
         mining_node = self.nodes[2]
         offline_node = self.nodes[0]
         online_node = self.nodes[1]
@@ -153,7 +153,7 @@ class PSBTTest(BitcoinTestFramework):
         utxos = wonline.listunspent(addresses=[offline_addr])
         raw = wonline.createrawtransaction([{"txid":utxos[0]["txid"], "vout":utxos[0]["vout"]}],[{online_addr:0.9999}])
         psbt = wonline.walletprocesspsbt(online_node.converttopsbt(raw))["psbt"]
-        assert "not_witness_utxo" not in mining_node.decodepsbt(psbt)["inputs"][0]
+        assert "non_witness_utxo" in mining_node.decodepsbt(psbt)["inputs"][0]
 
         # add non-witness UTXO manually
         psbt_new = PSBT.from_base64(psbt)
@@ -161,15 +161,10 @@ class PSBTTest(BitcoinTestFramework):
         psbt_new.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = bytes.fromhex(prev_tx)
         assert "non_witness_utxo" in mining_node.decodepsbt(psbt_new.to_base64())["inputs"][0]
 
-        # Have the offline node sign the PSBT. Core drops non_witness_utxo only for segwit v1+.
+        # Retain full previous transactions through offline signing.
         signed_psbt = offline_node.walletprocesspsbt(psbt_new.to_base64())
         signed_input = mining_node.decodepsbt(signed_psbt["psbt"])["inputs"][0]
-        has_non_witness = "non_witness_utxo" in signed_input
-        spk_type = signed_input.get("witness_utxo", {}).get("scriptPubKey", {}).get("type", "")
-        if spk_type.startswith("witness_v1") or spk_type.startswith("witness_unknown"):
-            assert not has_non_witness
-        else:
-            assert has_non_witness
+        assert "non_witness_utxo" in signed_input
 
         # Make sure we can mine the resulting transaction
         txid = mining_node.sendrawtransaction(signed_psbt["hex"])
@@ -1246,7 +1241,7 @@ class PSBTTest(BitcoinTestFramework):
         psbt1 = PSBT(g=PSBTMap({PSBT_GLOBAL_UNSIGNED_TX: tx.serialize()}), i=[PSBTMap()], o=[PSBTMap()]).to_base64()
         tx.vout[0].nValue += 1  # slightly modify tx
         psbt2 = PSBT(g=PSBTMap({PSBT_GLOBAL_UNSIGNED_TX: tx.serialize()}), i=[PSBTMap()], o=[PSBTMap()]).to_base64()
-        assert_raises_rpc_error(-8, "PSBTs not compatible (different transactions or conflicting PQHD origins)", self.nodes[0].combinepsbt, [psbt1, psbt2])
+        assert_raises_rpc_error(-8, "PSBTs not compatible (different transactions, previous outputs or PQHD origins)", self.nodes[0].combinepsbt, [psbt1, psbt2])
         assert_equal(self.nodes[0].combinepsbt([psbt1, psbt1]), psbt1)
 
         self.log.info("Test that PSBT inputs are being checked via script execution")

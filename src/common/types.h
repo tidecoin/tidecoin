@@ -15,6 +15,7 @@
 
 namespace common {
 enum class PSBTError {
+    UTXO_MISMATCH,
     MISSING_INPUTS,
     SIGHASH_MISMATCH,
     PQHD_ORIGIN_MISMATCH,

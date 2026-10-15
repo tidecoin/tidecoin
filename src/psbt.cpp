@@ -167,6 +167,15 @@ bool PartiallySignedTransaction::Merge(const PartiallySignedTransaction& psbt)
     if (!PQHDOriginsCompatible(m_proprietary, psbt.m_proprietary)) return false;
     for (size_t i = 0; i < inputs.size(); ++i) {
         if (!PQHDOriginsCompatible(inputs[i].m_proprietary, psbt.inputs[i].m_proprietary)) return false;
+        const auto& left = inputs[i];
+        const auto& right = psbt.inputs[i];
+        const auto& prevout = tx->vin[i].prevout;
+        if (!left.IsUTXOConsistent(prevout) || !right.IsUTXOConsistent(prevout)) return false;
+        if (!left.witness_utxo.IsNull() && !right.witness_utxo.IsNull() && left.witness_utxo != right.witness_utxo) return false;
+        PSBTInput combined;
+        combined.non_witness_utxo = left.non_witness_utxo ? left.non_witness_utxo : right.non_witness_utxo;
+        combined.witness_utxo = left.witness_utxo.IsNull() ? right.witness_utxo : left.witness_utxo;
+        if (!combined.IsUTXOConsistent(prevout)) return false;
     }
     for (size_t i = 0; i < outputs.size(); ++i) {
         if (!PQHDOriginsCompatible(outputs[i].m_proprietary, psbt.outputs[i].m_proprietary)) return false;
@@ -204,9 +213,17 @@ bool PartiallySignedTransaction::AddOutput(const CTxOut& txout, const PSBTOutput
     return true;
 }
 
+bool PSBTInput::IsUTXOConsistent(const COutPoint& prevout) const
+{
+    if (!non_witness_utxo) return true;
+    if (non_witness_utxo->GetHash() != prevout.hash || prevout.n >= non_witness_utxo->vout.size()) return false;
+    return witness_utxo.IsNull() || witness_utxo == non_witness_utxo->vout[prevout.n];
+}
+
 bool PartiallySignedTransaction::GetInputUTXO(CTxOut& utxo, int input_index) const
 {
     const PSBTInput& input = inputs[input_index];
+    if (!input.IsUTXOConsistent(tx->vin[input_index].prevout)) return false;
     uint32_t prevout_index = tx->vin[input_index].prevout.n;
     if (input.non_witness_utxo) {
         if (prevout_index >= input.non_witness_utxo->vout.size()) {
@@ -355,6 +372,7 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned 
     CTxOut utxo;
     assert(input_index < psbt.inputs.size());
     const PSBTInput& input = psbt.inputs[input_index];
+    if (!input.IsUTXOConsistent(psbt.tx->vin[input_index].prevout)) return false;
 
     if (input.non_witness_utxo) {
         // If we're taking our information from a non-witness UTXO, verify that it matches the prevout.
@@ -435,6 +453,7 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
 {
     PSBTInput& input = psbt.inputs.at(index);
     const CMutableTransaction& tx = *psbt.tx;
+    if (!input.IsUTXOConsistent(tx.vin[index].prevout)) return PSBTError::UTXO_MISMATCH;
     const unsigned int effective_flags = script_verify_flags.value_or(STANDARD_SCRIPT_VERIFY_FLAGS);
     const bool allow_legacy = !(effective_flags & SCRIPT_VERIFY_PQ_STRICT);
 
@@ -520,9 +539,8 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
     // If we have a witness signature, put a witness UTXO.
     if (sigdata.witness) {
         input.witness_utxo = utxo;
-        // We can remove the non_witness_utxo if and only if there are no non-segwit or segwit v0
-        // inputs in this transaction. Since this requires inspecting the entire transaction, this
-        // is something for the caller to deal with (i.e. FillPSBT).
+        // The caller may drop full transactions after checking the signing
+        // modes and witness versions of every input.
     }
 
     // Fill in the missing info
@@ -536,41 +554,28 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
     return sig_complete ? PSBTError::OK : PSBTError::INCOMPLETE;
 }
 
-void RemoveUnnecessaryTransactions(PartiallySignedTransaction& psbtx)
+void RemoveUnnecessaryTransactions(PartiallySignedTransaction& psbt, unsigned int script_verify_flags)
 {
-    // Figure out if any non_witness_utxos should be dropped
-    std::vector<unsigned int> to_drop;
-    for (unsigned int i = 0; i < psbtx.inputs.size(); ++i) {
-        const auto& input = psbtx.inputs.at(i);
-        int wit_ver;
-        std::vector<unsigned char> wit_prog;
-        if (input.witness_utxo.IsNull() || !input.witness_utxo.scriptPubKey.IsWitnessProgram(wit_ver, wit_prog)) {
-            // There's a non-segwit input, so we cannot drop any non_witness_utxos
-            to_drop.clear();
-            break;
+    if (!(script_verify_flags & SCRIPT_VERIFY_WITNESS_V1_512)) return;
+    if (!psbt.tx || psbt.inputs.size() != psbt.tx->vin.size()) return;
+    for (size_t i = 0; i < psbt.inputs.size(); ++i) {
+        const auto& input = psbt.inputs[i];
+        if (!input.IsUTXOConsistent(psbt.tx->vin[i].prevout)) return;
+        // Final witnesses can use a different mode from an absent PSBT sighash
+        // field. Do not infer their actual signing mode from that field.
+        if (PSBTInputSigned(input) || input.sighash_type.value_or(SIGHASH_ALL) != SIGHASH_ALL) return;
+        for (const auto& [id, signature] : input.partial_sigs) {
+            if (signature.second.empty() || signature.second.back() != SIGHASH_ALL) return;
         }
-        if (wit_ver == 0) {
-            // Segwit v0, so we cannot drop any non_witness_utxos
-            to_drop.clear();
-            break;
-        }
-        // non_witness_utxos cannot be dropped if the sighash type includes SIGHASH_ANYONECANPAY
-        // Since callers should have called SignPSBTInput which updates the sighash type in the PSBT, we only
-        // need to look at that field. If it is not present, then we can assume SIGHASH_ALL.
-        if (input.sighash_type != std::nullopt && (*input.sighash_type & 0x80) == SIGHASH_ANYONECANPAY) {
-            to_drop.clear();
-            break;
-        }
-
-        if (input.non_witness_utxo) {
-            to_drop.push_back(i);
-        }
+        int version;
+        std::vector<unsigned char> program;
+        if (input.witness_utxo.IsNull() ||
+            !input.witness_utxo.scriptPubKey.IsWitnessProgram(version, program) ||
+            version != 1 || program.size() != WITNESS_V1_SCRIPTHASH_512_SIZE) return;
     }
-
-    // Drop the non_witness_utxos that we can drop
-    for (unsigned int i : to_drop) {
-        psbtx.inputs.at(i).non_witness_utxo = nullptr;
-    }
+    // Unlike v0, ordinary v1 signatures bind all supplied amounts and scripts.
+    // Keep this restricted to the defined version and mode, not future versions.
+    for (auto& input : psbt.inputs) input.non_witness_utxo.reset();
 }
 
 bool FinalizePSBT(PartiallySignedTransaction& psbtx, std::optional<unsigned int> script_verify_flags)

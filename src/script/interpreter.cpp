@@ -1230,6 +1230,15 @@ void PrecomputedTransactionData::Init(const T& txTo, std::vector<CTxOut>&& spent
         hashPrevouts_512 = GetPrevoutsSHA512(txTo);
         hashSequence_512 = GetSequencesSHA512(txTo);
         hashOutputs_512 = GetOutputsSHA512(txTo);
+        if (m_spent_outputs_ready) {
+            SHA512Writer amounts{}, scripts{};
+            for (const auto& output : m_spent_outputs) {
+                amounts << output.nValue;
+                scripts << output.scriptPubKey;
+            }
+            hashSpentAmounts_512 = amounts.GetHash();
+            hashSpentScripts_512 = scripts.GetHash();
+        }
         m_bip143_segwit512_ready = true;
     }
 }
@@ -1366,16 +1375,16 @@ uint256 SignatureHash(const CScript& scriptCode, const T& txTo, unsigned int nIn
 }
 
 template <class T>
-uint512 SignatureHash512(const CScript& scriptCode, const T& txTo, unsigned int nIn, int32_t nHashType, const CAmount& amount, const PrecomputedTransactionData* cache)
+bool SignatureHash512(uint512& hash_out, const CScript& scriptCode, const T& txTo, unsigned int nIn, int32_t nHashType, const CAmount& amount, const PrecomputedTransactionData* cache)
 {
     assert(nIn < txTo.vin.size());
 
-    // Check for invalid use of SIGHASH_SINGLE
-    if ((nHashType & 0x1f) == SIGHASH_SINGLE) {
-        if (nIn >= txTo.vout.size()) {
-            return uint512::ONE;
-        }
-    }
+    // No constant-hash fallback: every successful v1 signature must commit
+    // to the transaction data selected by its signing mode.
+    if ((nHashType & 0x1f) == SIGHASH_SINGLE && nIn >= txTo.vout.size()) return false;
+    if (!(nHashType & SIGHASH_ANYONECANPAY) &&
+        (!cache || !cache->m_spent_outputs_ready || !cache->m_bip143_segwit512_ready ||
+         cache->m_spent_outputs.size() != txTo.vin.size())) return false;
 
     uint512 hashPrevouts;
     uint512 hashSequence;
@@ -1411,6 +1420,10 @@ uint512 SignatureHash512(const CScript& scriptCode, const T& txTo, unsigned int 
 
     ss << txTo.version;
     ss << hashPrevouts;
+    if (!(nHashType & SIGHASH_ANYONECANPAY)) {
+        ss << cache->hashSpentAmounts_512;
+        ss << cache->hashSpentScripts_512;
+    }
     ss << hashSequence;
     ss << txTo.vin[nIn].prevout;
     ss << scriptCode;
@@ -1420,7 +1433,8 @@ uint512 SignatureHash512(const CScript& scriptCode, const T& txTo, unsigned int 
     ss << txTo.nLockTime;
     ss << nHashType;
 
-    return ss.GetHash();
+    hash_out = ss.GetHash();
+    return true;
 }
 
 template <class T>
@@ -1468,7 +1482,8 @@ bool GenericTransactionSignatureChecker<T>::CheckPostQuantumSignature(const std:
         if (nHashType == 0) {
             return false;
         }
-        uint512 sighash = SignatureHash512(scriptCode, *txTo, nIn, nHashType, amount, this->txdata);
+        uint512 sighash;
+        if (!SignatureHash512(sighash, scriptCode, *txTo, nIn, nHashType, amount, this->txdata)) return false;
         if (!VerifyPostQuantumSignature512(vchSig, pubkey, sighash)) {
             return false;
         }

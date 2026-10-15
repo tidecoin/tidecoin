@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <node/psbt.h>
+#include <policy/policy.h>
 #include <psbt.h>
 #include <pubkey.h>
 #include <script/script.h>
@@ -58,12 +59,24 @@ FUZZ_TARGET(psbt)
     }
 
     for (size_t i = 0; i < psbt.tx->vin.size(); ++i) {
+        Assert(psbt.inputs[i].IsUTXOConsistent(psbt.tx->vin[i].prevout));
         CTxOut tx_out;
         if (psbt.GetInputUTXO(tx_out, i)) {
             (void)tx_out.IsNull();
             (void)tx_out.ToString();
         }
     }
+
+    // Removing redundant transactions must preserve every resolved output.
+    psbt_mut = psbt;
+    constexpr unsigned v1_flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_PQ_STRICT};
+    RemoveUnnecessaryTransactions(psbt_mut, v1_flags);
+    for (size_t i = 0; i < psbt.inputs.size(); ++i) {
+        CTxOut before, after;
+        Assert(psbt.GetInputUTXO(before, i) == psbt_mut.GetInputUTXO(after, i));
+        Assert(before == after);
+    }
+    (void)FinalizePSBT(psbt_mut, v1_flags);
 
     psbt_mut = psbt;
     (void)FinalizePSBT(psbt_mut);

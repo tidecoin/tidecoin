@@ -241,6 +241,12 @@ PartiallySignedTransaction ProcessPSBT(const std::string& psbt_string, const std
         }
     }
 
+    for (size_t i = 0; i < psbtx.inputs.size(); ++i) {
+        if (!psbtx.inputs[i].IsUTXOConsistent(psbtx.tx->vin[i].prevout)) {
+            throw JSONRPCError(RPC_DESERIALIZATION_ERROR, strprintf("PSBT previous output information is inconsistent at input %u", i));
+        }
+    }
+
     const PrecomputedTransactionData& txdata = PrecomputePSBTData(psbtx);
 
     for (unsigned int i = 0; i < psbtx.tx->vin.size(); ++i) {
@@ -263,7 +269,7 @@ PartiallySignedTransaction ProcessPSBT(const std::string& psbt_string, const std
         UpdatePSBTOutput(provider, psbtx, i);
     }
 
-    RemoveUnnecessaryTransactions(psbtx);
+    RemoveUnnecessaryTransactions(psbtx, script_verify_flags.value_or(STANDARD_SCRIPT_VERIFY_FLAGS));
 
     return psbtx;
 }
@@ -688,6 +694,21 @@ static RPCHelpMan combinerawtransaction()
     const unsigned int script_verify_flags = GetCurrentScriptVerifyFlags(request.context);
     const bool allow_legacy = !(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT);
 
+    // Each variant must be checked against its own transaction and inputs.
+    std::vector<PrecomputedTransactionData> variant_data(txVariants.size());
+    for (size_t v = 0; v < txVariants.size(); ++v) {
+        std::vector<CTxOut> spent_outputs;
+        for (const auto& input : txVariants[v].vin) {
+            const Coin& coin = view.AccessCoin(input.prevout);
+            if (coin.IsSpent()) {
+                spent_outputs.clear();
+                break;
+            }
+            spent_outputs.push_back(coin.out);
+        }
+        variant_data[v].Init(txVariants[v], std::move(spent_outputs), true);
+    }
+
     // Sign what we can:
     for (unsigned int i = 0; i < mergedTx.vin.size(); i++) {
         CTxIn& txin = mergedTx.vin[i];
@@ -698,12 +719,13 @@ static RPCHelpMan combinerawtransaction()
         SignatureData sigdata;
 
         // ... and merge in other signatures:
-        for (const CMutableTransaction& txv : txVariants) {
-            if (txv.vin.size() > i) {
-                sigdata.MergeSignatureData(DataFromTransaction(txv, i, coin.out, script_verify_flags));
+        for (size_t v = 0; v < txVariants.size(); ++v) {
+            const auto& txv = txVariants[v];
+            if (txv.vin.size() > i && txv.vin[i].prevout == txin.prevout) {
+                sigdata.MergeSignatureData(DataFromTransaction(txv, i, coin.out, script_verify_flags, &variant_data[v]));
             }
         }
-        ProduceSignature(DUMMY_SIGNING_PROVIDER, MutableTransactionSignatureCreator(mergedTx, i, coin.out.nValue, 1, allow_legacy), coin.out.scriptPubKey, sigdata, script_verify_flags);
+        ProduceSignature(DUMMY_SIGNING_PROVIDER, MutableTransactionSignatureCreator(mergedTx, i, coin.out.nValue, &variant_data[0], SIGHASH_ALL, allow_legacy), coin.out.scriptPubKey, sigdata, script_verify_flags);
 
         UpdateInput(txin, sigdata);
     }
@@ -1309,7 +1331,7 @@ static RPCHelpMan combinepsbt()
 
     PartiallySignedTransaction merged_psbt;
     if (!CombinePSBTs(merged_psbt, psbtxs)) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, "PSBTs not compatible (different transactions or conflicting PQHD origins)");
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "PSBTs not compatible (different transactions, previous outputs or PQHD origins)");
     }
 
     DataStream ssTx{};

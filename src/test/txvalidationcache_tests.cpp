@@ -58,16 +58,19 @@ BOOST_FIXTURE_TEST_CASE(pq_scheme_activation, BasicTestingSetup)
                         mtx.vin.resize(1);
                         mtx.vout.emplace_back(9'000, CScript{} << OP_TRUE);
                         constexpr CAmount amount{10'000};
+                        PrecomputedTransactionData txdata;
+                        txdata.Init(mtx, {CTxOut{amount, GetScriptForDestination(WitnessV1ScriptHash512{script})}}, true);
                         std::vector<unsigned char> sig;
                         if (version == SigVersion::WITNESS_V1_512) {
-                            BOOST_REQUIRE(key.Sign512(SignatureHash512(script, mtx, 0, SIGHASH_ALL, amount), sig));
+                            uint512 hash;
+                            BOOST_REQUIRE(SignatureHash512(hash, script, mtx, 0, SIGHASH_ALL, amount, &txdata));
+                            BOOST_REQUIRE(key.Sign512(hash, sig));
                         } else {
                             BOOST_REQUIRE(key.Sign(SignatureHash(script, mtx, 0, SIGHASH_ALL, amount, version), sig));
                         }
                         sig.push_back(SIGHASH_ALL);
                         const CTransaction tx{mtx};
                         SignatureCache cache{1 << 20};
-                        PrecomputedTransactionData txdata;
                         // Populate caches after activation, then revisit the same
                         // signature before activation, including the 512-bit path.
                         for (bool active : {true, false, true}) {
@@ -241,7 +244,10 @@ BOOST_FIXTURE_TEST_CASE(pq512_script_cache_integration, BasicTestingSetup)
             mtx.vin.resize(1);
             mtx.vin[0].prevout = COutPoint{Txid::FromUint256(uint256{1}), 0};
             mtx.vout.emplace_back(9'000, CScript{} << OP_TRUE);
-            const auto hash = SignatureHash512(script, mtx, 0, SIGHASH_ALL, prevout.nValue);
+            PrecomputedTransactionData signing_data;
+            signing_data.Init(mtx, {prevout}, true);
+            uint512 hash;
+            BOOST_REQUIRE(SignatureHash512(hash, script, mtx, 0, SIGHASH_ALL, prevout.nValue, &signing_data));
             std::vector<unsigned char> sig;
             BOOST_REQUIRE(key.Sign512(hash, sig));
             auto script_sig = sig;

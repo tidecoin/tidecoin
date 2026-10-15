@@ -93,6 +93,28 @@ hardware implementations will typically implement multiple roles simultaneously.
 
 ### Tidecoin-specific PSBT behavior
 
+- Witness-v1 signatures without `ANYONECANPAY` commit to every input's amount
+  and locking script, in input order. Signing and verification require all spent
+  outputs; missing data does not fall back to an older signature calculation.
+  Incorrect supplied amounts or scripts therefore cannot produce signatures that
+  validate against the actual outputs. Witness-v0 rules are unchanged.
+- `ANYONECANPAY` continues to cover only the current input's amount and script
+  code. `NONE` and `SINGLE` do not cover all outputs. These modes do not approve a
+  fixed total fee. Witness-v1 `SINGLE` fails if its corresponding output is absent.
+- A full previous transaction and a separate witness output, when both present,
+  must agree on the amount and locking script. Contradictory records are rejected,
+  including when combining PSBTs or adding wallet information.
+- Wallet and descriptor processing can omit full previous transactions when
+  witness-v1 is active and every input is native witness-v1 with a 64-byte
+  program, all declared and partial-signature modes are `ALL`, and no input has
+  final signature fields. Separate previous-output records are kept. Other cases,
+  including mixed witness-v0 inputs, wrapped inputs, `ANYONECANPAY`, finalized
+  inputs and unknown witness versions, retain supplied full transactions.
+- This witness-v1 signature calculation changes the earlier development/testnet
+  rules. Existing ordinary witness-v1 signatures must be regenerated. Deployment
+  requires a restarted testnet; this is not a transition for the old testnet's
+  history. Mainnet witness-v1 remains gated by AuxPoW activation. No activation
+  setting or witness-v0 signature rule is changed by this correction.
 - Tidecoin wallet PSBT RPCs do not expose a `bip32derivs` toggle.
 - `walletprocesspsbt` supports `include_pqhd_origins` (default `false`) to
   control emission of Tidecoin proprietary PQHD origin records.

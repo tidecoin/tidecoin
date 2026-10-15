@@ -138,7 +138,9 @@ void DoTest(const CScript& scriptPubKey, const CScript& scriptSig, const CScript
     const CTransaction txCredit{BuildCreditingTransaction(scriptPubKey, nValue)};
     CMutableTransaction tx = BuildSpendingTransaction(scriptSig, scriptWitness, txCredit);
     const bool allow_legacy = !(flags & SCRIPT_VERIFY_PQ_STRICT);
-    MutableTransactionSignatureChecker checker(&tx, 0, txCredit.vout[0].nValue, MissingDataBehavior::ASSERT_FAIL, allow_legacy);
+    PrecomputedTransactionData txdata;
+    txdata.Init(tx, {txCredit.vout[0]}, true);
+    MutableTransactionSignatureChecker checker(&tx, 0, txCredit.vout[0].nValue, txdata, MissingDataBehavior::ASSERT_FAIL, allow_legacy);
     BOOST_CHECK_MESSAGE(VerifyScript(scriptSig, scriptPubKey, &scriptWitness, flags, checker, &err) == expect, message);
     BOOST_CHECK_MESSAGE(err == scriptError, FormatScriptError(err) + " where " + FormatScriptError((ScriptError_t)scriptError) + " expected: " + message);
 
@@ -148,7 +150,7 @@ void DoTest(const CScript& scriptPubKey, const CScript& scriptSig, const CScript
         const uint32_t combined_flags{ScriptFlagsForComparison(flags, extra_flags, expect)};
         if (!IsValidFlagCombination(combined_flags)) continue;
         const bool combined_allow_legacy = !(combined_flags & SCRIPT_VERIFY_PQ_STRICT);
-        MutableTransactionSignatureChecker combined_checker(&tx, 0, txCredit.vout[0].nValue, MissingDataBehavior::ASSERT_FAIL, combined_allow_legacy);
+        MutableTransactionSignatureChecker combined_checker(&tx, 0, txCredit.vout[0].nValue, txdata, MissingDataBehavior::ASSERT_FAIL, combined_allow_legacy);
         BOOST_CHECK_MESSAGE(VerifyScript(scriptSig, scriptPubKey, &scriptWitness, combined_flags, combined_checker, &err) == expect, message + strprintf(" (with flags %x)", combined_flags));
     }
 }
@@ -274,7 +276,10 @@ public:
         (void)lenS;
         std::vector<unsigned char> vchSig;
         if (sigversion == SigVersion::WITNESS_V1_512) {
-            const uint512 hash = SignatureHash512(script, spendTx, 0, nHashType, amount, nullptr);
+            PrecomputedTransactionData txdata;
+            txdata.Init(spendTx, {creditTx->vout[0]}, true);
+            uint512 hash;
+            BOOST_REQUIRE(SignatureHash512(hash, script, spendTx, 0, nHashType, amount, &txdata));
             key.Sign512(hash, vchSig, legacy_mode);
         } else {
             const uint256 hash = SignatureHash(script, spendTx, 0, nHashType, amount, sigversion);
@@ -1929,8 +1934,11 @@ BOOST_AUTO_TEST_CASE(script_sighash_v1_512_single_oob)
     CScript scriptCode;
     scriptCode << OP_TRUE;
 
-    const uint512 hash = SignatureHash512(scriptCode, tx, 0, SIGHASH_SINGLE, 0, nullptr);
-    BOOST_CHECK(hash == uint512::ONE);
+    PrecomputedTransactionData txdata;
+    txdata.Init(tx, {CTxOut{0, scriptCode}}, true);
+    uint512 hash;
+    BOOST_CHECK(!SignatureHash512(hash, scriptCode, tx, 0, SIGHASH_SINGLE, 0, &txdata));
+    BOOST_CHECK(!SignatureHash512(hash, scriptCode, tx, 0, SIGHASH_SINGLE | SIGHASH_ANYONECANPAY, 0));
 }
 
 BOOST_AUTO_TEST_CASE(script_sighash_v1_512_zero_rejected)

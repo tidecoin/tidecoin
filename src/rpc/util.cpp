@@ -362,6 +362,7 @@ RPCErrorCode RPCErrorFromPSBTError(PSBTError err)
     switch (err) {
         case PSBTError::UNSUPPORTED:
             return RPC_INVALID_PARAMETER;
+        case PSBTError::UTXO_MISMATCH:
         case PSBTError::SIGHASH_MISMATCH:
         case PSBTError::PQHD_ORIGIN_MISMATCH:
             return RPC_DESERIALIZATION_ERROR;

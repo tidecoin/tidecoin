@@ -64,7 +64,8 @@ bool MutableTransactionSignatureCreator::CreateSig(const SigningProvider& provid
     }
 
     if (sigversion == SigVersion::WITNESS_V1_512) {
-        uint512 hash = SignatureHash512(scriptCode, m_txto, nIn, nHashType, amount, m_txdata);
+        uint512 hash;
+        if (!SignatureHash512(hash, scriptCode, m_txto, nIn, nHashType, amount, m_txdata)) return false;
         if (!key.Sign512(hash, vchSig, /*legacy_mode=*/false)) {
             return false;
         }
@@ -339,12 +340,19 @@ static bool SignStep(const SigningProvider& provider, const BaseSignatureCreator
         // Could not find witnessScript, add to missing
         sigdata.missing_witness_script = uint256(vSolutions[0]);
         return false;
-    case TxoutType::WITNESS_V1_SCRIPTHASH_512:
-        if (GetCScript(provider, sigdata, CScriptID{RIPEMD160(vSolutions[0])}, scriptRet)) {
-            ret.emplace_back(scriptRet.begin(), scriptRet.end());
-            return true;
+    case TxoutType::WITNESS_V1_SCRIPTHASH_512: {
+        // Provider keys differ from CScriptID(script) for witness v1. Check
+        // the complete commitment, including for a script supplied by a PSBT.
+        const auto matches = [&](const CScript& script) {
+            return ToByteVector(WitnessV1ScriptHash512{script}) == vSolutions[0];
+        };
+        if (!provider.GetCScript(CScriptID{RIPEMD160(vSolutions[0])}, scriptRet) || !matches(scriptRet)) {
+            scriptRet = sigdata.witness_script;
         }
-        return false;
+        if (!matches(scriptRet)) return false;
+        ret.emplace_back(scriptRet.begin(), scriptRet.end());
+        return true;
+    }
 
     } // no default case, so the compiler can warn about missing cases
     assert(false);
@@ -497,7 +505,7 @@ SignatureData DataFromTransaction(const CMutableTransaction& tx, unsigned int nI
     return DataFromTransaction(tx, nIn, txout, STANDARD_SCRIPT_VERIFY_FLAGS);
 }
 
-SignatureData DataFromTransaction(const CMutableTransaction& tx, unsigned int nIn, const CTxOut& txout, unsigned int script_verify_flags)
+SignatureData DataFromTransaction(const CMutableTransaction& tx, unsigned int nIn, const CTxOut& txout, unsigned int script_verify_flags, const PrecomputedTransactionData* txdata)
 {
     SignatureData data;
     assert(tx.vin.size() > nIn);
@@ -507,7 +515,9 @@ SignatureData DataFromTransaction(const CMutableTransaction& tx, unsigned int nI
 
     // Get signatures
     const bool allow_legacy = !(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT);
-    MutableTransactionSignatureChecker tx_checker(&tx, nIn, txout.nValue, MissingDataBehavior::FAIL, allow_legacy);
+    MutableTransactionSignatureChecker tx_checker = txdata ?
+        MutableTransactionSignatureChecker{&tx, nIn, txout.nValue, *txdata, MissingDataBehavior::FAIL, allow_legacy} :
+        MutableTransactionSignatureChecker{&tx, nIn, txout.nValue, MissingDataBehavior::FAIL, allow_legacy};
     SignatureExtractorChecker extractor_checker(data, tx_checker);
     if (VerifyScript(data.scriptSig, txout.scriptPubKey, &data.scriptWitness, script_verify_flags, extractor_checker)) {
         data.complete = true;
@@ -721,7 +731,7 @@ bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, 
         const CScript& prevPubKey = coin->second.out.scriptPubKey;
         const CAmount& amount = coin->second.out.nValue;
 
-        SignatureData sigdata = DataFromTransaction(mtx, i, coin->second.out, script_verify_flags);
+        SignatureData sigdata = DataFromTransaction(mtx, i, coin->second.out, script_verify_flags, &txdata);
         // Only sign SIGHASH_SINGLE if there's a corresponding output:
         if (!fHashSingle || (i < mtx.vout.size())) {
             ProduceSignature(*keystore, MutableTransactionSignatureCreator(mtx, i, amount, &txdata, nHashType, allow_legacy), prevPubKey, sigdata, script_verify_flags);

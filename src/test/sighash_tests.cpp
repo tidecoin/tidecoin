@@ -297,4 +297,56 @@ BOOST_AUTO_TEST_CASE(sighash_caching)
     }
 }
 
+BOOST_AUTO_TEST_CASE(witness_v1_spent_output_commitments)
+{
+    CMutableTransaction tx;
+    tx.version = 2;
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256{1}), 0}, CScript{}, 0xfffffffe);
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256{2}), 1}, CScript{}, 0xfffffffd);
+    tx.vout.emplace_back(700, CScript{} << OP_TRUE);
+    tx.vout.emplace_back(500, CScript{} << OP_2);
+    tx.nLockTime = 17;
+    const CScript script{CScript{} << OP_TRUE};
+    const std::vector<CTxOut> outputs{{1000, script}, {2000, CScript{} << OP_2}};
+    PrecomputedTransactionData data;
+    data.Init(tx, std::vector<CTxOut>{outputs}, true);
+    uint512 hash;
+    BOOST_REQUIRE(SignatureHash512(hash, script, tx, 0, SIGHASH_ALL, 1000, &data));
+    // Independently serialized with Python struct + hashlib.sha512. This fixes
+    // the field order, integer encoding, script lengths and tagged-hash format.
+    BOOST_CHECK_EQUAL(hash.GetHex(), "94631936f659cab4c86cc42fde7a4201fd1dfafa56d1960d0f6bf46889bdbc7cfac097db48749c51fd55423ee412da866fb567bfdad9f090cc815372f9f0e4de");
+    BOOST_CHECK(!SignatureHash512(hash, script, tx, 0, SIGHASH_ALL, 1000));
+    PrecomputedTransactionData missing;
+    missing.Init(tx, {}, true);
+    BOOST_CHECK(!SignatureHash512(hash, script, tx, 0, SIGHASH_ALL, 1000, &missing));
+
+    for (int mode : {SIGHASH_ALL, SIGHASH_NONE, SIGHASH_SINGLE}) {
+        uint512 original, anyone;
+        BOOST_REQUIRE(SignatureHash512(original, script, tx, 0, mode, 1000, &data));
+        BOOST_REQUIRE(SignatureHash512(anyone, script, tx, 0, mode | SIGHASH_ANYONECANPAY, 1000));
+        for (size_t input : {0U, 1U}) {
+            for (bool change_script : {false, true}) {
+                auto changed_outputs = outputs;
+                if (change_script) changed_outputs[input].scriptPubKey << OP_DROP;
+                else ++changed_outputs[input].nValue;
+                PrecomputedTransactionData changed;
+                changed.Init(tx, std::move(changed_outputs), true);
+                uint512 result;
+                BOOST_REQUIRE(SignatureHash512(result, script, tx, 0, mode, 1000, &changed));
+                BOOST_CHECK(result != original);
+                // ANYONECANPAY still signs only this input's amount and scriptCode.
+                BOOST_REQUIRE(SignatureHash512(result, script, tx, 0, mode | SIGHASH_ANYONECANPAY, 1000, &changed));
+                BOOST_CHECK(result == anyone);
+                // Witness-v0 does not acquire the new commitments.
+                BOOST_CHECK(SignatureHash(script, tx, 0, mode, 1000, SigVersion::WITNESS_V0, &data) ==
+                            SignatureHash(script, tx, 0, mode, 1000, SigVersion::WITNESS_V0, &changed));
+            }
+        }
+        BOOST_REQUIRE(SignatureHash512(hash, script, tx, 0, mode | SIGHASH_ANYONECANPAY, 1001));
+        BOOST_CHECK(hash != anyone);
+        BOOST_REQUIRE(SignatureHash512(hash, CScript{} << OP_2, tx, 0, mode | SIGHASH_ANYONECANPAY, 1000));
+        BOOST_CHECK(hash != anyone);
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -2712,10 +2712,13 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, boo
             if (it != mapWallet.end()) {
                 const CWalletTx& wtx = it->second;
                 // We only need the non_witness_utxo, which is a superset of the witness_utxo.
-                //   The signing code will switch to the smaller witness_utxo if this is ok.
                 input.non_witness_utxo = wtx.tx;
             }
         }
+    }
+
+    for (size_t i = 0; i < psbtx.inputs.size(); ++i) {
+        if (!psbtx.inputs[i].IsUTXOConsistent(psbtx.tx->vin[i].prevout)) return PSBTError::UTXO_MISMATCH;
     }
 
     const PrecomputedTransactionData txdata = PrecomputePSBTData(psbtx);
@@ -2749,7 +2752,7 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, boo
         }
     }
 
-    RemoveUnnecessaryTransactions(psbtx);
+    RemoveUnnecessaryTransactions(psbtx, script_verify_flags);
 
     // Complete if every input is now signed
     complete = true;

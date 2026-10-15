@@ -106,6 +106,8 @@ bool FeeModeFromString(const std::string& mode_string, FeeEstimateMode& fee_esti
 bilingual_str PSBTErrorString(PSBTError err)
 {
     switch (err) {
+        case PSBTError::UTXO_MISMATCH:
+            return Untranslated("PSBT previous output information is inconsistent");
         case PSBTError::MISSING_INPUTS:
             return Untranslated("Inputs missing or spent");
         case PSBTError::SIGHASH_MISMATCH:

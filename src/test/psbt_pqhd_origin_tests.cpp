@@ -7,6 +7,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <array>
 #include <cstdint>
 #ifndef WIN32
 #include <csignal>
@@ -72,6 +73,85 @@ BOOST_AUTO_TEST_CASE(invalid_final_fields_do_not_imply_completion)
     BOOST_CHECK(!FinalizePSBT(psbt, 0));
     CMutableTransaction extracted;
     BOOST_CHECK(!FinalizeAndExtractPSBT(psbt, extracted, 0));
+}
+
+BOOST_AUTO_TEST_CASE(psbt_previous_output_consistency)
+{
+    CMutableTransaction previous;
+    previous.vout.emplace_back(1000, CScript{} << OP_TRUE);
+    auto full = MakeMinimalPSBT();
+    full.tx->vin[0].prevout = COutPoint(previous.GetHash(), 0);
+    full.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+    auto output = full;
+    output.inputs[0].non_witness_utxo.reset();
+    output.inputs[0].witness_utxo = previous.vout[0];
+    for (bool change_script : {false, true}) {
+        auto changed = output;
+        if (change_script) changed.inputs[0].witness_utxo.scriptPubKey << OP_FALSE;
+        else ++changed.inputs[0].witness_utxo.nValue;
+        auto merged = full;
+        BOOST_CHECK(!merged.Merge(changed));
+        BOOST_CHECK(merged.inputs[0].witness_utxo.IsNull());
+        merged = changed;
+        BOOST_CHECK(!merged.Merge(full));
+        BOOST_CHECK(!merged.inputs[0].non_witness_utxo);
+        changed.inputs[0].non_witness_utxo = full.inputs[0].non_witness_utxo;
+        CTxOut utxo;
+        BOOST_CHECK(!changed.GetInputUTXO(utxo, 0));
+        BOOST_CHECK(!PSBTInputSignedAndVerified(changed, 0, nullptr, 0));
+        BOOST_CHECK(SignPSBTInput(DUMMY_SIGNING_PROVIDER, changed, 0, nullptr, std::nullopt) == common::PSBTError::UTXO_MISMATCH);
+    }
+    BOOST_CHECK(full.Merge(output));
+    BOOST_CHECK(full.inputs[0].IsUTXOConsistent(full.tx->vin[0].prevout));
+}
+
+BOOST_AUTO_TEST_CASE(psbt_previous_transaction_removal)
+{
+    const auto make_psbt = [](int version, size_t program_size) {
+        CMutableTransaction previous;
+        previous.vout.emplace_back(1000, CScript{} << CScript::EncodeOP_N(version) << std::vector<unsigned char>(program_size, 1));
+        auto psbt = MakeMinimalPSBT();
+        psbt.tx->vin[0].prevout = COutPoint(previous.GetHash(), 0);
+        psbt.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+        psbt.inputs[0].witness_utxo = previous.vout[0];
+        return psbt;
+    };
+    constexpr unsigned flags{SCRIPT_VERIFY_WITNESS_V1_512};
+    auto psbt = make_psbt(1, 64);
+    RemoveUnnecessaryTransactions(psbt, 0);
+    BOOST_CHECK(psbt.inputs[0].non_witness_utxo);
+    RemoveUnnecessaryTransactions(psbt, flags);
+    BOOST_CHECK(!psbt.inputs[0].non_witness_utxo);
+    for (int version : {0, 1, 2}) {
+        psbt = make_psbt(version, 32);
+        RemoveUnnecessaryTransactions(psbt, flags);
+        BOOST_CHECK(psbt.inputs[0].non_witness_utxo);
+    }
+    for (int mode : std::array<int, 3>{SIGHASH_NONE, SIGHASH_SINGLE, SIGHASH_ALL | SIGHASH_ANYONECANPAY}) {
+        psbt = make_psbt(1, 64);
+        psbt.inputs[0].sighash_type = mode;
+        RemoveUnnecessaryTransactions(psbt, flags);
+        BOOST_CHECK(psbt.inputs[0].non_witness_utxo);
+    }
+    psbt = make_psbt(1, 64);
+    psbt.inputs[0].partial_sigs.emplace(CKeyID{}, SigPair{CPubKey{}, {SIGHASH_ALL | SIGHASH_ANYONECANPAY}});
+    RemoveUnnecessaryTransactions(psbt, flags);
+    BOOST_CHECK(psbt.inputs[0].non_witness_utxo);
+    psbt = make_psbt(1, 64);
+    psbt.inputs[0].final_script_witness.stack = {{1}};
+    RemoveUnnecessaryTransactions(psbt, flags);
+    BOOST_CHECK(psbt.inputs[0].non_witness_utxo);
+    psbt = make_psbt(1, 64);
+    ++psbt.inputs[0].witness_utxo.nValue;
+    RemoveUnnecessaryTransactions(psbt, flags);
+    BOOST_CHECK(psbt.inputs[0].non_witness_utxo);
+    psbt = make_psbt(1, 64);
+    auto v0 = make_psbt(0, 32);
+    psbt.tx->vin.push_back(v0.tx->vin[0]);
+    psbt.inputs.push_back(v0.inputs[0]);
+    RemoveUnnecessaryTransactions(psbt, flags);
+    BOOST_CHECK(psbt.inputs[0].non_witness_utxo);
+    BOOST_CHECK(psbt.inputs[1].non_witness_utxo);
 }
 
 BOOST_AUTO_TEST_CASE(psbt_verified_input_bounds)

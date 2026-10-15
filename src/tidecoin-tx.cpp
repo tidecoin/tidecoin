@@ -735,6 +735,18 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
 
     bool fHashSingle = ((nHashType & ~SIGHASH_ANYONECANPAY) == SIGHASH_SINGLE);
 
+    PrecomputedTransactionData txdata;
+    std::vector<CTxOut> spent_outputs;
+    for (const auto& input : mergedTx.vin) {
+        const Coin& coin = view.AccessCoin(input.prevout);
+        if (coin.IsSpent() || coin.out.nValue == MAX_MONEY) {
+            spent_outputs.clear();
+            break;
+        }
+        spent_outputs.push_back(coin.out);
+    }
+    txdata.Init(mergedTx, std::move(spent_outputs), true);
+
     // Sign what we can:
     for (unsigned int i = 0; i < mergedTx.vin.size(); i++) {
         CTxIn& txin = mergedTx.vin[i];
@@ -745,10 +757,10 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
         const CScript& prevPubKey = coin.out.scriptPubKey;
         const CAmount& amount = coin.out.nValue;
 
-        SignatureData sigdata = DataFromTransaction(mergedTx, i, coin.out, script_verify_flags);
+        SignatureData sigdata = DataFromTransaction(mergedTx, i, coin.out, script_verify_flags, &txdata);
         // Only sign SIGHASH_SINGLE if there's a corresponding output:
         if (!fHashSingle || (i < mergedTx.vout.size())) {
-            ProduceSignature(keystore, MutableTransactionSignatureCreator(mergedTx, i, amount, nHashType, allow_legacy), prevPubKey, sigdata, script_verify_flags);
+            ProduceSignature(keystore, MutableTransactionSignatureCreator(mergedTx, i, amount, &txdata, nHashType, allow_legacy), prevPubKey, sigdata, script_verify_flags);
         }
 
         if (fVerify && !sigdata.complete) {
@@ -777,7 +789,17 @@ static void VerifyTx(const CTransaction& tx)
     CCoinsViewCache view(&viewDummy);
     AddPrevTxsToView(view, prevtxsObj);
 
-    const PrecomputedTransactionData txdata(tx);
+    std::vector<CTxOut> spent_outputs;
+    for (const auto& input : tx.vin) {
+        const Coin& coin = view.AccessCoin(input.prevout);
+        if (coin.IsSpent() || coin.out.nValue == MAX_MONEY) {
+            spent_outputs.clear();
+            break;
+        }
+        spent_outputs.push_back(coin.out);
+    }
+    PrecomputedTransactionData txdata;
+    txdata.Init(tx, std::move(spent_outputs), true);
     for (unsigned int i = 0; i < tx.vin.size(); i++) {
         const CTxIn& txin = tx.vin[i];
         const Coin& coin = view.AccessCoin(txin.prevout);
