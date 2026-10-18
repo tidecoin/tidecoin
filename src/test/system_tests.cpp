@@ -130,6 +130,16 @@ BOOST_AUTO_TEST_CASE(signer_response_preserves_request)
         BOOST_CHECK(!error.empty());
         BOOST_CHECK_EQUAL(bytes(request), before);
     };
+    auto invalid_partial = sign(SIGHASH_ALL, false);
+    invalid_partial.inputs[0].partial_sigs.begin()->second.second[1] ^= 1;
+    reject(invalid_partial);
+    {
+        auto unrelated = original;
+        const std::vector<bool> targets{false};
+        std::string error;
+        BOOST_CHECK(!ExternalSigner::MergeSignatures(unrelated, signed_psbt, error, STANDARD_SCRIPT_VERIFY_FLAGS, &targets));
+        BOOST_CHECK_EQUAL(bytes(unrelated), bytes(original));
+    }
     auto changed = signed_psbt;
     changed.tx->vout[0].nValue--;
     reject(changed);
@@ -174,6 +184,46 @@ BOOST_AUTO_TEST_CASE(signer_response_preserves_request)
     auto same = prior;
     BOOST_REQUIRE(ExternalSigner::MergeSignatures(prior, same, error, STANDARD_SCRIPT_VERIFY_FLAGS));
 
+    // New no-output SINGLE data is refused, but an unchanged verified final
+    // from another participant can accompany a newly signed input.
+    for (int mode : {int{SIGHASH_NONE}, int{SIGHASH_SINGLE}, SIGHASH_SINGLE | SIGHASH_ANYONECANPAY}) {
+        CMutableTransaction previous;
+        const CScript legacy = CScript{} << ToByteVector(key.GetPubKey()) << OP_CHECKSIG;
+        previous.vout.emplace_back(COIN, legacy);
+        auto two = original;
+        two.tx->vin.emplace_back(previous.GetHash(), 0);
+        two.inputs.emplace_back();
+        two.inputs[1].non_witness_utxo = MakeTransactionRef(previous);
+        const bool constant_one = (mode & 0x1f) == SIGHASH_SINGLE;
+        const auto two_data = PrecomputePSBTData(two);
+        std::vector<unsigned char> existing;
+        BOOST_REQUIRE(key.Sign(SignatureHash(legacy, *two.tx, 1, mode, COIN, SigVersion::BASE, &two_data), existing, false, 0, true));
+        existing.push_back(mode);
+        if (constant_one) {
+            for (bool final : {false, true}) {
+                auto declared = two;
+                declared.inputs[1].sighash_type = mode;
+                auto returned = declared;
+                if (final) returned.inputs[1].final_script_sig = CScript{} << existing;
+                else returned.inputs[1].partial_sigs.emplace(key.GetPubKey().GetID(), SigPair{key.GetPubKey(), existing});
+                auto refused = declared;
+                const auto before = bytes(refused);
+                BOOST_CHECK(!ExternalSigner::MergeSignatures(refused, returned, error, STANDARD_SCRIPT_VERIFY_FLAGS));
+                BOOST_CHECK_EQUAL(error, "Signer returned an unsupported signature mode or SINGLE without output");
+                BOOST_CHECK_EQUAL(bytes(refused), before);
+            }
+        }
+        two.inputs[1].final_script_sig = CScript{} << existing;
+        BOOST_REQUIRE(PSBTInputSignedAndVerified(two, 1, &two_data));
+        auto returned = two;
+        BOOST_REQUIRE(SignPSBTInput(provider, returned, 0, &two_data, SIGHASH_ALL, nullptr, true) == common::PSBTError::OK);
+        const std::vector<bool> targets{true, false};
+        BOOST_REQUIRE(ExternalSigner::MergeSignatures(two, returned, error, STANDARD_SCRIPT_VERIFY_FLAGS, &targets));
+        BOOST_CHECK(PSBTInputSignedAndVerified(two, 0, &two_data));
+        BOOST_CHECK(PSBTInputSignedAndVerified(two, 1, &two_data));
+        BOOST_CHECK(two.inputs[1].final_script_sig == (CScript{} << existing));
+    }
+
     // A hash-type policy checker must not change CHECKSIG's truth value: that
     // could turn a consensus-invalid CHECKSIG NOT script into an accepted one.
     auto negated = original;
@@ -209,6 +259,22 @@ BOOST_AUTO_TEST_CASE(signer_response_preserves_request)
         if (!valid) BOOST_CHECK_EQUAL(bytes(request), bytes(original));
         else BOOST_CHECK(PSBTInputSignedAndVerified(request, 0, &data));
     }
+    auto signatureless = original;
+    const CScript true_script = CScript{} << OP_TRUE;
+    signatureless.inputs[0].witness_utxo.scriptPubKey = GetScriptForDestination(WitnessV0ScriptHash{true_script});
+    signatureless.inputs[0].witness_script = true_script;
+    auto response = signatureless;
+    response.inputs[0].final_script_witness.stack = {ToByteVector(true_script)};
+    DataStream stream;
+    stream << response;
+    UniValue result{UniValue::VOBJ}, responses{UniValue::VOBJ};
+    result.pushKV("psbt", EncodeBase64(stream));
+    responses.pushKV("signtx", result);
+    { std::ofstream file{path}; file << responses.write(); BOOST_REQUIRE(file.good()); }
+    const std::vector<bool> targets{true};
+    BOOST_REQUIRE(signer.SignTransaction(signatureless, error, STANDARD_SCRIPT_VERIFY_FLAGS, &targets, SIGHASH_NONE));
+    BOOST_CHECK(PSBTInputSignedAndVerified(signatureless, 0, nullptr));
+    BOOST_CHECK(!signatureless.inputs[0].sighash_type);
 }
 
 #else

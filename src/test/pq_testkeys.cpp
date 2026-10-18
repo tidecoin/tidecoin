@@ -11,6 +11,7 @@
 #include <pq/pq_scheme.h>
 #include <util/strencodings.h>
 #include <util/translation.h>
+#include <uint512.h>
 
 #include <univalue.h>
 
@@ -37,6 +38,8 @@ struct Options {
     int count{1};
     int index_start{0};
     bool index_set{false};
+    std::string sign_key;
+    std::string sign_hash;
 };
 
 bool ParseSchemeId(const std::string& in, pq::SchemeId& out)
@@ -121,6 +124,8 @@ bool ParseArgs(int argc, char* argv[], Options& opt)
 {
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
+        if (arg.starts_with("--sign-key=")) { opt.sign_key = arg.substr(11); continue; }
+        if (arg.starts_with("--sign-hash=")) { opt.sign_hash = arg.substr(12); continue; }
         if (arg == "-h" || arg == "--help") {
             PrintUsage(argv[0]);
             return false;
@@ -163,6 +168,7 @@ bool ParseArgs(int argc, char* argv[], Options& opt)
         return false;
     }
 
+    if (!opt.sign_key.empty()) return IsHex(opt.sign_hash) && (opt.sign_hash.size() == 64 || opt.sign_hash.size() == 128);
     if (!opt.have_seed) return false;
 
     if (opt.path_hardened.empty()) {
@@ -187,6 +193,28 @@ int main(int argc, char* argv[])
     if (!ParseArgs(argc, argv, opt)) {
         PrintUsage(argv[0]);
         return 1;
+    }
+
+    // Test-only signing of explicitly supplied digests permits constructing
+    // consensus fixtures for modes the production signing API will not create.
+    if (!opt.sign_key.empty()) {
+        const CKey key = DecodeSecret(opt.sign_key);
+        if (!key.IsValid()) return 1;
+        const auto bytes = ParseHex(opt.sign_hash);
+        std::vector<unsigned char> signature;
+        bool signed_ok;
+        if (bytes.size() == 64) {
+            uint512 hash;
+            std::copy(bytes.begin(), bytes.end(), hash.begin());
+            signed_ok = key.Sign512(hash, signature, false);
+        } else {
+            uint256 hash;
+            std::copy(bytes.begin(), bytes.end(), hash.begin());
+            signed_ok = key.Sign(hash, signature, false, 0, false);
+        }
+        if (!signed_ok) return 1;
+        std::cout << HexStr(signature) << '\n';
+        return 0;
     }
 
     const pq::SchemeInfo* info = pq::SchemeFromId(opt.scheme_id);

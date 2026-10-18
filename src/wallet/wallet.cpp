@@ -2663,7 +2663,7 @@ bool CWallet::SignTransaction(CMutableTransaction& tx) const
     return SignTransaction(tx, coins, SIGHASH_ALL, input_errors);
 }
 
-bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const
+bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, const std::set<COutPoint>* missing_amounts) const
 {
     const std::optional<int> tip_height = chain().getHeight();
     const int next_height = tip_height ? *tip_height + 1 : 0;
@@ -2677,7 +2677,7 @@ bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint,
     for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
         // spk_man->SignTransaction will return true if the transaction is complete,
         // so we can exit early and return true if that happens
-        if (spk_man->SignTransaction(tx, coins, sighash, input_errors, script_verify_flags)) {
+        if (spk_man->SignTransaction(tx, coins, sighash, input_errors, script_verify_flags, missing_amounts)) {
             return true;
         }
     }
@@ -2686,12 +2686,19 @@ bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint,
     return false;
 }
 
-std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, bool& complete, std::optional<int> sighash_type, bool sign, size_t * n_signed, bool finalize, bool include_pqhd_origins) const
+std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, bool& complete, std::optional<int> sighash_type, bool sign, size_t * n_signed, bool finalize, bool include_pqhd_origins, std::vector<common::PSBTInputError>* input_errors) const
 {
     // Publish only a successful update; metadata/signing errors leave the caller intact.
     auto psbtx = psbt;
     complete = false;
     size_t signed_count{0};
+    if (input_errors) input_errors->clear();
+    if (sign) {
+        sighash_type = sighash_type.value_or(SIGHASH_ALL);
+    } else if (sighash_type) {
+        const auto error = DeclarePSBTSighash(psbtx, *sighash_type);
+        if (error != PSBTError::OK) return error;
+    }
     if (n_signed) {
         *n_signed = 0;
     }
@@ -2739,18 +2746,36 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, boo
         }
     }
 
+    // Check every enrolled manager before contacting any device. A later
+    // manager's conflicting target must not follow an earlier device request.
+    if (sign && IsWalletFlagSet(WALLET_FLAG_EXTERNAL_SIGNER)) {
+        std::optional<PSBTError> refusal;
+        for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
+            const auto error = spk_man->CheckPSBTSigningIntent(psbtx, txdata, *sighash_type, script_verify_flags, input_errors);
+            if (error && !refusal) refusal = error;
+        }
+        if (refusal) return refusal;
+    }
+
     // Fill in information from ScriptPubKeyMans
+    std::optional<PSBTError> refusal;
     for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
         int n_signed_this_spkm = 0;
-        const auto error{spk_man->FillPSBT(psbtx, txdata, sighash_type, sign, &n_signed_this_spkm, finalize, include_pqhd_origins, script_verify_flags)};
+        const auto error{spk_man->FillPSBT(psbtx, txdata, sighash_type, sign, &n_signed_this_spkm, finalize, include_pqhd_origins, script_verify_flags, input_errors)};
         if (error) {
-            return error;
+            if (!refusal) refusal = error;
         }
 
         if (n_signed) {
             signed_count += n_signed_this_spkm;
         }
     }
+
+    if (input_errors) {
+        std::sort(input_errors->begin(), input_errors->end(), [](const auto& a, const auto& b) { return a.input < b.input; });
+        input_errors->erase(std::unique(input_errors->begin(), input_errors->end(), [](const auto& a, const auto& b) { return a.input == b.input; }), input_errors->end());
+    }
+    if (refusal) return refusal;
 
     RemoveUnnecessaryTransactions(psbtx, script_verify_flags);
 

@@ -819,6 +819,9 @@ void SendCoinsDialog::processSendCoinsReturn(const WalletModel::SendCoinsReturn 
     case WalletModel::InvalidAddress:
         msgParams.first = tr("The recipient address is not valid. Please recheck.");
         break;
+    case WalletModel::AmountExceedsMaximum:
+        msgParams.first = tr("The total amount exceeds the maximum permitted amount.");
+        break;
     case WalletModel::InvalidAmount:
         msgParams.first = tr("The amount to pay must be larger than 0.");
         break;

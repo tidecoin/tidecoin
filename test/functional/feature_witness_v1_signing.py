@@ -19,9 +19,15 @@ from test_framework.wallet_util import generate_keypair
 
 class WitnessV1SigningTest(BitcoinTestFramework):
     def set_test_params(self):
-        self.num_nodes = 1
+        self.num_nodes = 2
         self.setup_clean_chain = True
-        self.extra_args = [["-auxpowactivationheight=110"]]
+        self.extra_args = [["-auxpowactivationheight=110"], ["-auxpowactivationheight=1"]]
+
+    def setup_network(self):
+        self.setup_nodes()  # Keep the second node offline for caller-supplied amount tests.
+
+    def sync_all(self, nodes=None):
+        pass
 
     def add_options(self, parser):
         parser.add_argument("--direct-only", action="store_true", help="Run only direct witness-v1 payments")
@@ -137,7 +143,9 @@ class WitnessV1SigningTest(BitcoinTestFramework):
 
         # The signing RPC can work from caller-supplied amounts. Sign using a
         # wrong amount, then verify against the actual on-chain output amount.
-        wrong_amount = node.signrawtransactionwithkey(unsigned, [row["secret"]], [self.prevout(row, amount_delta=1)], "ALL")
+        assert_raises_rpc_error(-22, "Previous output amount mismatch", node.signrawtransactionwithkey,
+                                unsigned, [row["secret"]], [self.prevout(row, amount_delta=1)], "ALL")
+        wrong_amount = self.nodes[1].signrawtransactionwithkey(unsigned, [row["secret"]], [self.prevout(row, amount_delta=1)], "ALL")
         assert_equal(wrong_amount["complete"], True)
         self.reject(wrong_amount["hex"], f"{label}/previous_amount")
 

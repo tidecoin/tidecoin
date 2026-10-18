@@ -7,6 +7,9 @@
 #include <algorithm>
 
 #include <common/types.h>
+#include <consensus/amount.h>
+#include <crypto/sha512.h>
+#include <script/solver.h>
 #include <node/types.h>
 #include <policy/policy.h>
 #include <pq/pqhd_kdf.h>
@@ -169,6 +172,7 @@ bool PartiallySignedTransaction::Merge(const PartiallySignedTransaction& psbt)
         if (!PQHDOriginsCompatible(inputs[i].m_proprietary, psbt.inputs[i].m_proprietary)) return false;
         const auto& left = inputs[i];
         const auto& right = psbt.inputs[i];
+        if (left.sighash_type && right.sighash_type && left.sighash_type != right.sighash_type) return false;
         const auto& prevout = tx->vin[i].prevout;
         if (!left.IsUTXOConsistent(prevout) || !right.IsUTXOConsistent(prevout)) return false;
         if (!left.witness_utxo.IsNull() && !right.witness_utxo.IsNull() && left.witness_utxo != right.witness_utxo) return false;
@@ -308,6 +312,7 @@ void PSBTInput::FromSignatureData(const SignatureData& sigdata)
 
 void PSBTInput::Merge(const PSBTInput& input)
 {
+    if (!sighash_type) sighash_type = input.sighash_type;
     if (!non_witness_utxo && input.non_witness_utxo) non_witness_utxo = input.non_witness_utxo;
     if (witness_utxo.IsNull() && !input.witness_utxo.IsNull()) {
         witness_utxo = input.witness_utxo;
@@ -364,6 +369,42 @@ void PSBTOutput::Merge(const PSBTOutput& output)
 bool PSBTInputSigned(const PSBTInput& input)
 {
     return !input.final_script_sig.empty() || !input.final_script_witness.IsNull();
+}
+
+bool VerifyPSBTPartialSignature(const PartiallySignedTransaction& psbt, size_t index, const SigPair& signature,
+                                const PrecomputedTransactionData& txdata, unsigned int flags)
+{
+    CTxOut utxo;
+    if (!psbt.GetInputUTXO(utxo, index)) return false;
+    const auto& input = psbt.inputs[index];
+    CScript script = utxo.scriptPubKey;
+    if (script.IsPayToScriptHash()) {
+        if (GetScriptForDestination(ScriptHash(input.redeem_script)) != script) return false;
+        script = input.redeem_script;
+    }
+    SigVersion sigversion = SigVersion::BASE;
+    int version;
+    std::vector<unsigned char> program;
+    if (script.IsWitnessProgram(version, program)) {
+        if (version == 0 && program.size() == 20) {
+            uint160 id;
+            std::copy(program.begin(), program.end(), id.begin());
+            script = GetScriptForDestination(PKHash(id));
+            sigversion = SigVersion::WITNESS_V0;
+        } else if (version == 0 && program.size() == 32) {
+            if (GetScriptForDestination(WitnessV0ScriptHash(input.witness_script)) != script) return false;
+            script = input.witness_script;
+            sigversion = SigVersion::WITNESS_V0;
+        } else if (version == 1 && program.size() == WITNESS_V1_SCRIPTHASH_512_SIZE && (flags & SCRIPT_VERIFY_WITNESS_V1_512)) {
+            if (GetScriptForDestination(WitnessV1ScriptHash512(input.witness_script)) != script) return false;
+            script = input.witness_script;
+            sigversion = SigVersion::WITNESS_V1_512;
+        } else {
+            return false;
+        }
+    }
+    const MutableTransactionSignatureChecker checker{&*psbt.tx, static_cast<unsigned int>(index), utxo.nValue, txdata, MissingDataBehavior::FAIL, !(flags & SCRIPT_VERIFY_PQ_STRICT)};
+    return checker.CheckPostQuantumSignature(signature.second, std::vector<unsigned char>(signature.first.begin(), signature.first.end()), script, sigversion);
 }
 
 bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned int input_index, const PrecomputedTransactionData* txdata, unsigned int script_verify_flags)
@@ -449,7 +490,23 @@ PrecomputedTransactionData PrecomputePSBTData(const PartiallySignedTransaction& 
     return txdata;
 }
 
-PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& psbt, int index, const PrecomputedTransactionData* txdata, std::optional<int> sighash,  SignatureData* out_sigdata, bool finalize, std::optional<unsigned int> script_verify_flags)
+PSBTError DeclarePSBTSighash(PartiallySignedTransaction& psbt, int sighash)
+{
+    if (!IsSupportedSighash(sighash)) return PSBTError::SIGHASH_UNSUPPORTED;
+    for (const auto& input : psbt.inputs) {
+        if (PSBTInputSigned(input)) continue;
+        if (input.sighash_type && *input.sighash_type != sighash) return PSBTError::SIGHASH_MISMATCH;
+        for (const auto& [_, sig] : input.partial_sigs) {
+            if (sig.second.empty() || sig.second.back() != sighash) return PSBTError::SIGHASH_MISMATCH;
+        }
+    }
+    for (auto& input : psbt.inputs) {
+        if (!PSBTInputSigned(input)) input.sighash_type = sighash;
+    }
+    return PSBTError::OK;
+}
+
+PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& psbt, int index, const PrecomputedTransactionData* txdata, std::optional<int> sighash, SignatureData* out_sigdata, bool finalize, std::optional<unsigned int> script_verify_flags, PSBTInputIntent intent)
 {
     PSBTInput& input = psbt.inputs.at(index);
     const CMutableTransaction& tx = *psbt.tx;
@@ -494,40 +551,62 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
         return PSBTError::MISSING_INPUTS;
     }
 
-    // Get the sighash type
-    // If both the field and the parameter are provided, they must match.
-    // If only the parameter is provided, add it to the PSBT only if it is
-    // something other than ALL.
-    if (!sighash) sighash = SIGHASH_ALL;
-    Assert(sighash.has_value());
-    // Reject zero hashtype bytes (formerly a Taproot-only zero alias).
-    if ((input.sighash_type && *input.sighash_type == 0) || *sighash == 0) {
-        return PSBTError::SIGHASH_MISMATCH;
-    }
-    // For user safety, the desired sighash must be provided if the PSBT wants something other than the default set in the previous line.
-    if (input.sighash_type && input.sighash_type != sighash) {
-        return PSBTError::SIGHASH_MISMATCH;
-    }
-    // Set the PSBT sighash field when sighash is not ALL.
-    if (sighash != SIGHASH_ALL) {
-        input.sighash_type = sighash;
-    }
-
-    // Check all existing signatures use the sighash type
-    if (sighash != SIGHASH_ALL) {
-        for (const auto& [_, sig] : input.partial_sigs) {
-            if (sig.second.back() != *sighash) return PSBTError::SIGHASH_MISMATCH;
+    const int requested = intent == PSBTInputIntent::SIGN ? sighash.value_or(SIGHASH_ALL) : input.sighash_type.value_or(SIGHASH_ALL);
+    const auto preserve_public_metadata = [&] {
+        if (intent != PSBTInputIntent::INSPECT || !txdata) return;
+        // Resolve scripts without creating signatures or publishing a final.
+        MutableTransactionSignatureCreator creator(tx, index, utxo.nValue, txdata, requested, allow_legacy);
+        ProduceSignature(HidingSigningProvider(&provider, true), creator, utxo.scriptPubKey, sigdata, effective_flags);
+        sigdata.complete = false;
+        input.FromSignatureData(sigdata);
+        if (sigdata.witness) input.witness_utxo = utxo;
+    };
+    bool existing_match{true};
+    bool declaration_match{true};
+    for (const auto& [_, sig] : input.partial_sigs) {
+        if (!sig.second.empty() && SingleWithoutOutput(sig.second.back(), index, tx.vout.size())) {
+            // Do not newly finalize this partial, including on a foreign input.
+            // Inspection explains it; unrelated signing can still proceed.
+            preserve_public_metadata();
+            return intent == PSBTInputIntent::INSPECT ? PSBTError::SINGLE_WITHOUT_OUTPUT : PSBTError::INCOMPLETE;
         }
+        existing_match &= !sig.second.empty() && sig.second.back() == requested;
+        declaration_match &= !sig.second.empty() && sig.second.back() == input.sighash_type.value_or(SIGHASH_ALL);
     }
 
     sigdata.witness = false;
     bool sig_complete;
+    bool signed_new{false};
     if (txdata == nullptr) {
+        if (SingleWithoutOutput(requested, index, tx.vout.size())) return PSBTError::SINGLE_WITHOUT_OUTPUT;
+        if (!IsSupportedSighash(requested)) return PSBTError::SIGHASH_UNSUPPORTED;
+        if (!declaration_match) return PSBTError::SIGHASH_MISMATCH;
         sig_complete = ProduceSignature(provider, DUMMY_SIGNATURE_CREATOR, utxo.scriptPubKey, sigdata, effective_flags);
     } else {
-        MutableTransactionSignatureCreator creator(tx, index, utxo.nValue, txdata, *sighash, allow_legacy);
+        MutableTransactionSignatureCreator creator(tx, index, utxo.nValue, txdata, requested, allow_legacy);
+        creator.SetPSBTConstraints(input.sighash_type, existing_match && declaration_match);
         sig_complete = ProduceSignature(provider, creator, utxo.scriptPubKey, sigdata, effective_flags);
+        if (creator.Error() != PSBTError::OK) {
+            if (out_sigdata) *out_sigdata = sigdata;
+            return creator.Error();
+        }
+        signed_new = creator.Signed();
+        // Cached signatures do not pass through the creator. Inspection and
+        // foreign inputs use their own declarations, never the caller's mode.
+        if (!declaration_match && !signed_new) {
+            preserve_public_metadata();
+            return intent == PSBTInputIntent::INSPECT ? PSBTError::SIGHASH_MISMATCH : PSBTError::INCOMPLETE;
+        }
     }
+
+    // Report missing solving data even if no witness could be constructed.
+    if (out_sigdata) {
+        out_sigdata->missing_pubkeys = sigdata.missing_pubkeys;
+        out_sigdata->missing_sigs = sigdata.missing_sigs;
+        out_sigdata->missing_redeem_script = sigdata.missing_redeem_script;
+        out_sigdata->missing_witness_script = sigdata.missing_witness_script;
+    }
+
     // Verify that a witness signature was produced in case one was required.
     if (require_witness_sig && !sigdata.witness) return PSBTError::INCOMPLETE;
 
@@ -535,20 +614,13 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
     if (!finalize && sigdata.complete) sigdata.complete = false;
 
     input.FromSignatureData(sigdata);
+    if (signed_new && requested != SIGHASH_ALL && !PSBTInputSigned(input)) input.sighash_type = requested;
 
     // If we have a witness signature, put a witness UTXO.
     if (sigdata.witness) {
         input.witness_utxo = utxo;
         // The caller may drop full transactions after checking the signing
         // modes and witness versions of every input.
-    }
-
-    // Fill in the missing info
-    if (out_sigdata) {
-        out_sigdata->missing_pubkeys = sigdata.missing_pubkeys;
-        out_sigdata->missing_sigs = sigdata.missing_sigs;
-        out_sigdata->missing_redeem_script = sigdata.missing_redeem_script;
-        out_sigdata->missing_witness_script = sigdata.missing_witness_script;
     }
 
     return sig_complete ? PSBTError::OK : PSBTError::INCOMPLETE;
@@ -558,24 +630,59 @@ void RemoveUnnecessaryTransactions(PartiallySignedTransaction& psbt, unsigned in
 {
     if (!(script_verify_flags & SCRIPT_VERIFY_WITNESS_V1_512)) return;
     if (!psbt.tx || psbt.inputs.size() != psbt.tx->vin.size()) return;
+    const auto txdata = PrecomputePSBTData(psbt);
+    std::vector<CTxOut> utxos(psbt.inputs.size());
     for (size_t i = 0; i < psbt.inputs.size(); ++i) {
         const auto& input = psbt.inputs[i];
-        if (!input.IsUTXOConsistent(psbt.tx->vin[i].prevout)) return;
-        // Final witnesses can use a different mode from an absent PSBT sighash
-        // field. Do not infer their actual signing mode from that field.
-        if (PSBTInputSigned(input) || input.sighash_type.value_or(SIGHASH_ALL) != SIGHASH_ALL) return;
-        for (const auto& [id, signature] : input.partial_sigs) {
-            if (signature.second.empty() || signature.second.back() != SIGHASH_ALL) return;
+        auto& utxo = utxos[i];
+        if (!psbt.GetInputUTXO(utxo, i) || !MoneyRange(utxo.nValue)) return;
+        const bool final = PSBTInputSigned(input);
+        // Unfinished inputs must already carry their witness UTXO. Final inputs
+        // may have only the verified full record; stage its output before removal.
+        if (!final && input.witness_utxo.IsNull()) return;
+        CScript program_script = utxo.scriptPubKey;
+        if (program_script.IsPayToScriptHash()) {
+            CScript redeem = input.redeem_script;
+            if (final) {
+                auto pc = input.final_script_sig.begin();
+                opcodetype opcode;
+                std::vector<unsigned char> data;
+                if (!input.final_script_sig.GetOp(pc, opcode, data) || pc != input.final_script_sig.end()) return;
+                redeem = CScript(data.begin(), data.end());
+                if (input.final_script_sig != (CScript() << data)) return;
+            }
+            if (GetScriptForDestination(ScriptHash(redeem)) != program_script) return;
+            program_script = redeem;
+            if (!final && input.witness_script.empty()) return;
         }
         int version;
         std::vector<unsigned char> program;
-        if (input.witness_utxo.IsNull() ||
-            !input.witness_utxo.scriptPubKey.IsWitnessProgram(version, program) ||
-            version != 1 || program.size() != WITNESS_V1_SCRIPTHASH_512_SIZE) return;
+        if (!program_script.IsWitnessProgram(version, program) || version != 1 || program.size() != WITNESS_V1_SCRIPTHASH_512_SIZE) return;
+        if (!final && !input.witness_script.empty()) {
+            uint512 hash;
+            CSHA512().Write(input.witness_script.data(), input.witness_script.size()).Finalize(hash.begin());
+            if (!std::equal(program.begin(), program.end(), hash.begin())) return;
+        }
+        if (final) {
+            const MutableTransactionSignatureChecker checker{&*psbt.tx, static_cast<unsigned int>(i), utxo.nValue, txdata, MissingDataBehavior::FAIL, !(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT)};
+            const SignatureCheckObserver observer{checker, i, psbt.tx->vout.size()};
+            if (!VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, script_verify_flags, observer)) return;
+            if (!observer.all_full_commitment || !observer.successful_v1) return;
+            if (input.sighash_type && (observer.modes.size() != 1 || !observer.modes.contains(*input.sighash_type))) return;
+        } else {
+            const int mode = input.sighash_type.value_or(SIGHASH_ALL);
+            if (mode != SIGHASH_ALL && mode != SIGHASH_NONE && mode != SIGHASH_SINGLE) return;
+            if (SingleWithoutOutput(mode, i, psbt.tx->vout.size())) return;
+            for (const auto& [id, signature] : input.partial_sigs) {
+                if (signature.second.empty() || signature.second.back() != mode) return;
+            }
+        }
     }
-    // Unlike v0, ordinary v1 signatures bind all supplied amounts and scripts.
-    // Keep this restricted to the defined version and mode, not future versions.
-    for (auto& input : psbt.inputs) input.non_witness_utxo.reset();
+    // Publish only after every input qualified. Never remove the only UTXO record.
+    for (size_t i = 0; i < psbt.inputs.size(); ++i) {
+        psbt.inputs[i].witness_utxo = utxos[i];
+        psbt.inputs[i].non_witness_utxo.reset();
+    }
 }
 
 bool FinalizePSBT(PartiallySignedTransaction& psbtx, std::optional<unsigned int> script_verify_flags)
@@ -589,7 +696,7 @@ bool FinalizePSBT(PartiallySignedTransaction& psbtx, std::optional<unsigned int>
     const PrecomputedTransactionData txdata = PrecomputePSBTData(psbtx);
     for (unsigned int i = 0; i < psbtx.tx->vin.size(); ++i) {
         PSBTInput& input = psbtx.inputs.at(i);
-        complete &= (SignPSBTInput(DUMMY_SIGNING_PROVIDER, psbtx, i, &txdata, input.sighash_type, nullptr, true, effective_flags) == PSBTError::OK);
+        complete &= (SignPSBTInput(DUMMY_SIGNING_PROVIDER, psbtx, i, &txdata, input.sighash_type, nullptr, true, effective_flags, PSBTInputIntent::INSPECT) == PSBTError::OK);
     }
 
     return complete;

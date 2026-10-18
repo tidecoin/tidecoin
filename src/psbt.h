@@ -884,11 +884,19 @@ enum class PSBTRole {
 
 std::string PSBTRoleName(PSBTRole role);
 
+enum class PSBTInputIntent { SIGN, INSPECT };
+
+/** Deliberate public declaration: validate every unfinished input before mutation. */
+[[nodiscard]] PSBTError DeclarePSBTSighash(PartiallySignedTransaction& psbt, int sighash);
+
 /** Compute a PrecomputedTransactionData object from a psbt. */
 PrecomputedTransactionData PrecomputePSBTData(const PartiallySignedTransaction& psbt);
 
 /** Checks whether a PSBTInput is already signed by checking for non-null finalized fields. */
 bool PSBTInputSigned(const PSBTInput& input);
+
+bool VerifyPSBTPartialSignature(const PartiallySignedTransaction& psbt, size_t index, const SigPair& signature,
+                                const PrecomputedTransactionData& txdata, unsigned int flags);
 
 /** Checks whether a PSBTInput is already signed by doing script verification using final fields. */
 bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned int input_index, const PrecomputedTransactionData* txdata, unsigned int script_verify_flags);
@@ -900,10 +908,10 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned 
  * txdata should be the output of PrecomputePSBTData (which can be shared across
  * multiple SignPSBTInput calls). If it is nullptr, a dummy signature will be created.
  **/
-[[nodiscard]] PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& psbt, int index, const PrecomputedTransactionData* txdata, std::optional<int> sighash = std::nullopt, SignatureData* out_sigdata = nullptr, bool finalize = true, std::optional<unsigned int> script_verify_flags = std::nullopt);
+[[nodiscard]] PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& psbt, int index, const PrecomputedTransactionData* txdata, std::optional<int> sighash = std::nullopt, SignatureData* out_sigdata = nullptr, bool finalize = true, std::optional<unsigned int> script_verify_flags = std::nullopt, PSBTInputIntent intent = PSBTInputIntent::SIGN);
 
-/** Drop full transactions only for active native v1 inputs whose signing mode
- * commits to all input amounts and scripts. Finalized inputs are retained. */
+/** Drop full transactions atomically for eligible active native/wrapped v1
+ * inputs. Final inputs require real verification and observed v1 signatures. */
 void RemoveUnnecessaryTransactions(PartiallySignedTransaction& psbt, unsigned int script_verify_flags);
 
 /** Counts the unsigned inputs of a PSBT. */

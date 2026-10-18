@@ -8,6 +8,7 @@
 
 #include <attributes.h>
 #include <coins.h>
+#include <common/types.h>
 #include <hash.h>
 #include <pubkey.h>
 #include <script/interpreter.h>
@@ -23,11 +24,41 @@ class SigningProvider;
 struct bilingual_str;
 struct CMutableTransaction;
 
+/** Supported requests for new signatures; this is not a consensus predicate. */
+constexpr bool IsSupportedSighash(int type)
+{
+    return type == 1 || type == 2 || type == 3 || type == 0x81 || type == 0x82 || type == 0x83;
+}
+
+constexpr bool SingleWithoutOutput(int type, size_t input, size_t outputs)
+{
+    return (type & 0x1f) == SIGHASH_SINGLE && input >= outputs;
+}
+
+/** Observes executed checks without altering their results. */
+class SignatureCheckObserver : public DeferringSignatureChecker
+{
+    const size_t m_input;
+    const size_t m_outputs;
+public:
+    mutable std::set<int> modes;
+    mutable bool all_full_commitment{true};
+    mutable bool successful_v1{false};
+    mutable bool successful_signature{false};
+    mutable bool single_without_output{false};
+    mutable bool legacy_single_without_output{false};
+    SignatureCheckObserver(const BaseSignatureChecker& checker, size_t input, size_t outputs)
+        : DeferringSignatureChecker(checker), m_input(input), m_outputs(outputs) {}
+    bool CheckPostQuantumSignature(const std::vector<unsigned char>& sig, const std::vector<unsigned char>& key,
+                                   const CScript& script, SigVersion version) const override;
+};
+
 /** Interface for signature creators. */
 class BaseSignatureCreator {
 public:
     virtual ~BaseSignatureCreator() = default;
     virtual const BaseSignatureChecker& Checker() const =0;
+    virtual common::PSBTError Error() const { return common::PSBTError::OK; }
 
     /** Create a singular (non-script) signature. */
     virtual bool CreateSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const CKeyID& keyid, const CScript& scriptCode, SigVersion sigversion) const =0;
@@ -43,6 +74,12 @@ class MutableTransactionSignatureCreator : public BaseSignatureCreator
     const bool m_allow_legacy;
     const MutableTransactionSignatureChecker checker;
     const PrecomputedTransactionData* m_txdata;
+    std::optional<int> m_declared_sighash;
+    bool m_existing_signatures_match{true};
+    bool m_amount_known{true};
+    bool m_all_amounts_known{true};
+    mutable common::PSBTError m_error{common::PSBTError::OK};
+    mutable bool m_signed{false};
 
 public:
     MutableTransactionSignatureCreator(const CMutableTransaction& tx LIFETIMEBOUND, unsigned int input_idx, const CAmount& amount, int hash_type);
@@ -50,6 +87,10 @@ public:
     MutableTransactionSignatureCreator(const CMutableTransaction& tx LIFETIMEBOUND, unsigned int input_idx, const CAmount& amount, int hash_type, bool allow_legacy);
     MutableTransactionSignatureCreator(const CMutableTransaction& tx LIFETIMEBOUND, unsigned int input_idx, const CAmount& amount, const PrecomputedTransactionData* txdata, int hash_type, bool allow_legacy);
     const BaseSignatureChecker& Checker() const override { return checker; }
+    common::PSBTError Error() const override { return m_error; }
+    bool Signed() const { return m_signed; }
+    void SetPSBTConstraints(std::optional<int> declared, bool existing_match) { m_declared_sighash = declared; m_existing_signatures_match = existing_match; }
+    void SetAmountAvailability(bool own, bool all) { m_amount_known = own; m_all_amounts_known = all; }
     bool CreateSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const CKeyID& keyid, const CScript& scriptCode, SigVersion sigversion) const override;
 };
 
@@ -76,7 +117,7 @@ struct SignatureData {
     std::vector<CKeyID> missing_pubkeys; ///< KeyIDs of pubkeys which could not be found
     std::vector<CKeyID> missing_sigs; ///< KeyIDs of pubkeys for signatures which could not be found
     uint160 missing_redeem_script; ///< ScriptID of the missing redeemScript (if any)
-    uint256 missing_witness_script; ///< SHA256 of the missing witnessScript (if any)
+    std::vector<unsigned char> missing_witness_script; ///< SHA256 (v0) or SHA512 (v1) of the missing witnessScript; empty if none
     std::map<std::vector<uint8_t>, std::vector<uint8_t>> sha256_preimages; ///< Mapping from a SHA256 hash to its preimage provided to solve a Script
     std::map<std::vector<uint8_t>, std::vector<uint8_t>> hash256_preimages; ///< Mapping from a HASH256 hash to its preimage provided to solve a Script
     std::map<std::vector<uint8_t>, std::vector<uint8_t>> ripemd160_preimages; ///< Mapping from a RIPEMD160 hash to its preimage provided to solve a Script
@@ -101,6 +142,6 @@ bool IsSegWitOutput(const SigningProvider& provider, const CScript& script);
 
 /** Sign the CMutableTransaction */
 bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* provider, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors);
-bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* provider, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, unsigned int script_verify_flags);
+bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* provider, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, unsigned int script_verify_flags, const std::set<COutPoint>* missing_amounts = nullptr);
 
 #endif // BITCOIN_SCRIPT_SIGN_H

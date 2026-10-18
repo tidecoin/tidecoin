@@ -9,10 +9,12 @@ from decimal import Decimal
 from pathlib import Path
 
 from test_framework.descriptors import descsum_create
-from test_framework.messages import CTransaction, from_binary
-from test_framework.psbt import PSBT, PSBT_GLOBAL_UNSIGNED_TX, PSBT_IN_WITNESS_UTXO, PSBT_IN_FINAL_SCRIPTWITNESS
+from test_framework.messages import CTransaction, CTxOut, CTxIn, COutPoint, from_binary
+from test_framework.psbt import PSBT, PSBTMap, PSBT_GLOBAL_UNSIGNED_TX, PSBT_IN_WITNESS_UTXO, PSBT_IN_FINAL_SCRIPTWITNESS
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error
+from test_framework.wallet_util import generate_keypair_at_index
+from test_framework.script_util import key_to_p2wpkh_script
 
 
 class WalletSignerTest(BitcoinTestFramework):
@@ -92,6 +94,12 @@ class WalletSignerTest(BitcoinTestFramework):
                 assert_raises_rpc_error(-25, 'External signer failed', wallet.walletprocesspsbt, request)
                 assert_equal(wallet.listdescriptors(), before)
 
+            # Existing verified finals never cause another device request.
+            response(signed['psbt'])
+            before = count_signs()
+            assert wallet.walletprocesspsbt(signed['psbt'])['complete']
+            assert_equal(count_signs(), before)
+
             # Exercise all response attacks on one scheme; every scheme signs and spends below.
             if scheme == 7:
                 # walletprocesspsbt(sign=true) must prepare all managers' solving
@@ -143,10 +151,70 @@ class WalletSignerTest(BitcoinTestFramework):
                         assert not wallet.walletprocesspsbt(bad.to_base64(), False)['complete']
 
                 # Correct signatures with the wrong requested sighash are also rejected.
-                weak = private.walletprocesspsbt(request, True, 'NONE', True, False)
+                undeclared = PSBT.from_base64(request)
+                for item in undeclared.i:
+                    item.map.pop(3, None)
+                weak = private.walletprocesspsbt(undeclared.to_base64(), True, 'NONE', True, False)
                 reject(weak['psbt'])
                 response(weak['psbt'])
-                assert wallet.walletprocesspsbt(request, True, 'NONE')['complete']
+                before = count_signs()
+                assert_raises_rpc_error(-22, 'sighash', wallet.walletprocesspsbt, request, True, 'NONE')
+                assert_equal(count_signs(), before)
+                assert wallet.walletprocesspsbt(undeclared.to_base64(), True, 'NONE')['complete']
+                declared_none = PSBT.from_base64(undeclared.to_base64())
+                for item in declared_none.i:
+                    item.map[3] = (2).to_bytes(4, 'little')
+                before = count_signs()
+                assert_raises_rpc_error(-22, 'sighash', wallet.walletprocesspsbt, declared_none.to_base64())
+                assert_equal(count_signs(), before)
+                assert wallet.walletprocesspsbt(declared_none.to_base64(), True, 'NONE')['complete']
+                no_output = PSBT.from_base64(undeclared.to_base64())
+                no_output.tx.vout.clear()
+                no_output.o.clear()
+                no_output.g.map[PSBT_GLOBAL_UNSIGNED_TX] = no_output.tx.serialize()
+                before = count_signs()
+                assert_raises_rpc_error(-22, 'requires an output', wallet.walletprocesspsbt, no_output.to_base64(), True, 'SINGLE')
+                assert_equal(count_signs(), before)
+                # Both enrolled managers must be checked before the device is
+                # called, regardless of where the conflicting input is placed.
+                extra_txid = private.sendtoaddress(change, 1)
+                self.generate(holder, 1)
+                extra_tx = private.gettransaction(extra_txid, verbose=True)['decoded']
+                extra_vout = next(i for i, out in enumerate(extra_tx['vout']) if out['scriptPubKey'].get('address') == change)
+                two = holder.createpsbt([{'txid': txid, 'vout': vout}, {'txid': extra_txid, 'vout': extra_vout}], {receive: Decimal('1.999')})
+                two = PSBT.from_base64(private.walletprocesspsbt(two, False, finalize=False)['psbt'])
+                for reverse in (False, True):
+                    test = PSBT.from_base64(two.to_base64())
+                    test.i[1].map[3] = (2).to_bytes(4, 'little')
+                    if reverse:
+                        test.tx.vin.reverse()
+                        test.i.reverse()
+                        test.g.map[PSBT_GLOBAL_UNSIGNED_TX] = test.tx.serialize()
+                    before = count_signs()
+                    assert_raises_rpc_error(-22, 'sighash', wallet.walletprocesspsbt, test.to_base64())
+                    assert_equal(count_signs(), before)
+
+                # A foreign declaration must survive while the enrolled input
+                # receives ALL, with both transaction input orders.
+                _, foreign_pubkey = generate_keypair_at_index(9999, scheme='7')
+                for reverse in (False, True):
+                    mixed = PSBT.from_base64(undeclared.to_base64())
+                    mixed.tx.vin.append(CTxIn(COutPoint(123, 0)))
+                    mixed.i.append(PSBTMap({PSBT_IN_WITNESS_UTXO: CTxOut(100_000_000, key_to_p2wpkh_script(foreign_pubkey)).serialize(), 3: (0x83).to_bytes(4, 'little')}))
+                    if reverse:
+                        mixed.tx.vin.reverse()
+                        mixed.i.reverse()
+                    mixed.g.map[PSBT_GLOBAL_UNSIGNED_TX] = mixed.tx.serialize()
+                    expected = private.walletprocesspsbt(mixed.to_base64(), finalize=False)['psbt']
+                    response(expected)
+                    foreign_index, owned_index = (0, 1) if reverse else (1, 0)
+                    for explicit in (False, True):
+                        result = wallet.walletprocesspsbt(mixed.to_base64(), finalize=False, **({'sighashtype': 'ALL'} if explicit else {}))
+                        inputs = node.decodepsbt(result['psbt'])['inputs']
+                        assert_equal(inputs[foreign_index]['sighash'], 'SINGLE|ANYONECANPAY')
+                        assert 'partial_signatures' not in inputs[foreign_index]
+                        assert all(bytes.fromhex(sig)[-1] == 1 for sig in inputs[owned_index]['partial_signatures'].values())
+                        assert 'sighash' not in inputs[owned_index]
                 response(request)  # The bridge's complete=true claim is insufficient.
                 assert not wallet.walletprocesspsbt(request)['complete']
                 self.log.info('An unchanged signer label cannot substitute different enrolled keys')

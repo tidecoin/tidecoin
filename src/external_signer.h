@@ -9,6 +9,7 @@
 #include <univalue.h>
 
 #include <string>
+#include <optional>
 #include <vector>
 
 struct PartiallySignedTransaction;
@@ -60,11 +61,12 @@ public:
     //! Sign PartiallySignedTransaction on the device.
     //! Calls `<command> signtx` and passes the PSBT via stdin.
     //! @param[in,out] psbt  PartiallySignedTransaction to be signed
-    bool SignTransaction(PartiallySignedTransaction& psbt, std::string& error, unsigned int script_verify_flags);
+    bool SignTransaction(PartiallySignedTransaction& psbt, std::string& error, unsigned int script_verify_flags,
+                         const std::vector<bool>* targets = nullptr, std::optional<int> requested = std::nullopt);
 
     //! Merge only signatures on the requested transaction. Rejection leaves psbt unchanged.
     static bool MergeSignatures(PartiallySignedTransaction& psbt, const PartiallySignedTransaction& response,
-                               std::string& error, unsigned int script_verify_flags);
+                               std::string& error, unsigned int script_verify_flags, const std::vector<bool>* targets = nullptr);
 };
 
 #endif // BITCOIN_EXTERNAL_SIGNER_H

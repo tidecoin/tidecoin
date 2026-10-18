@@ -1158,7 +1158,7 @@ BOOST_AUTO_TEST_CASE(script_build)
                                 "PQ WIT-V1512-ZERO-SIGHASH-REJECT v1_512", witness_v1_512_flags, false, WitnessMode::SH, 1, 1)
                                    .PushWitSig(key0, 1, 0, 32, 32, SigVersion::WITNESS_V1_512)
                                    .PushWitRedeem()
-                                   .ScriptError(SCRIPT_ERR_EVAL_FALSE));
+                                   .ScriptError(SCRIPT_ERR_SIG_HASHTYPE));
     {
         const CScript witscript = CScript() << ToByteVector(pubkey0) << OP_CHECKSIG;
         tests.push_back(TestBuilder(witscript,
@@ -2143,6 +2143,199 @@ BOOST_AUTO_TEST_CASE(script_witness_v1_512_sigop_activation)
     const CScript v0 = GetScriptForDestination(WitnessV0ScriptHash(witness_script));
     BOOST_CHECK_EQUAL(CountWitnessSigOps(CScript(), v0, &witness, before), 3U);
     BOOST_CHECK_EQUAL(CountWitnessSigOps(CScript(), v0, &witness, after), 3U);
+}
+
+BOOST_AUTO_TEST_CASE(witness_v1_hash_types_are_script_errors)
+{
+    const unsigned block_flags = SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_NULLDUMMY |
+        SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY | SCRIPT_VERIFY_CHECKSEQUENCEVERIFY |
+        SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_SHA512;
+    for (auto scheme : {pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_1024, pq::SchemeId::MLDSA_44, pq::SchemeId::MLDSA_65, pq::SchemeId::MLDSA_87}) {
+        CKey key;
+        key.MakeNewKey(scheme);
+        const auto pubkey = ToByteVector(key.GetPubKey());
+        for (bool wrapped : {false, true}) {
+            for (int form = 0; form < 6; ++form) {
+                const bool multi = form >= 3;
+                const bool negated = form % 3 == 2;
+                const bool verify = form % 3 == 1;
+                CScript script;
+                if (multi) script << OP_1 << pubkey << OP_1 << (verify ? OP_CHECKMULTISIGVERIFY : OP_CHECKMULTISIG);
+                else script << pubkey << (verify ? OP_CHECKSIGVERIFY : OP_CHECKSIG);
+                if (verify) script << OP_TRUE;
+                if (negated) script << OP_NOT;
+                const CScript program = GetScriptForDestination(WitnessV1ScriptHash512(script));
+                const CScript output = wrapped ? GetScriptForDestination(ScriptHash(program)) : program;
+                CMutableTransaction tx;
+                tx.vin.resize(1);
+                tx.vout.emplace_back(1, CScript{} << OP_TRUE);
+                const CScript script_sig = wrapped ? CScript{} << ToByteVector(program) : CScript{};
+                PrecomputedTransactionData data;
+                data.Init(tx, {CTxOut(1000, output)}, true);
+                const MutableTransactionSignatureChecker checker(&tx, 0, 1000, data, MissingDataBehavior::FAIL, false);
+                for (int mode : {1, 2, 3, 0x81, 0x82, 0x83, 0, 4, 0x22, 0x41, 0x43, 0x80, 0x84, 0xff}) {
+                    uint512 hash;
+                    BOOST_REQUIRE(SignatureHash512(hash, script, tx, 0, mode, 1000, &data));
+                    std::vector<unsigned char> sig;
+                    if (!negated) BOOST_REQUIRE(key.Sign512(hash, sig, false));
+                    sig.push_back(mode); // A one-byte signature is invalid for negated controls.
+                    CScriptWitness witness;
+                    if (multi) witness.stack.push_back({});
+                    witness.stack.push_back(sig);
+                    witness.stack.push_back(ToByteVector(script));
+                    for (unsigned flags : {block_flags, block_flags | STANDARD_SCRIPT_VERIFY_FLAGS}) {
+                        const unsigned inactive_flags = flags & ~SCRIPT_VERIFY_WITNESS_V1_512;
+                        ScriptError inactive_error{SCRIPT_ERR_OK};
+                        const bool inactive = VerifyScript(script_sig, output, &witness, inactive_flags, checker, &inactive_error);
+                        // The 64-byte format is an ordinary script before
+                        // activation, so witness data is unexpected. Standard
+                        // flags reject its ordinary stack even earlier.
+                        BOOST_CHECK(!inactive);
+                        BOOST_CHECK_EQUAL(inactive_error, (inactive_flags & SCRIPT_VERIFY_CLEANSTACK) ? SCRIPT_ERR_CLEANSTACK : SCRIPT_ERR_WITNESS_UNEXPECTED);
+                        if (!(inactive_flags & SCRIPT_VERIFY_CLEANSTACK)) {
+                            const CScriptWitness no_witness;
+                            BOOST_CHECK(VerifyScript(script_sig, output, &no_witness, inactive_flags, checker, &inactive_error));
+                        }
+                        ScriptError error{SCRIPT_ERR_OK};
+                        const bool result = VerifyScript(script_sig, output, &witness, flags, checker, &error);
+                        if (mode != 0x01 && mode != 0x02 && mode != 0x03 && mode != 0x81 && mode != 0x82 && mode != 0x83) {
+                            BOOST_CHECK(!result);
+                            BOOST_CHECK_EQUAL(error, SCRIPT_ERR_SIG_HASHTYPE);
+                        } else if (negated && (flags & SCRIPT_VERIFY_NULLFAIL)) {
+                            BOOST_CHECK(!result);
+                            BOOST_CHECK_EQUAL(error, SCRIPT_ERR_SIG_NULLFAIL);
+                        } else {
+                            BOOST_CHECK(result);
+                        }
+                    }
+                }
+                CScriptWitness empty;
+                if (multi) empty.stack.push_back({});
+                empty.stack.push_back({});
+                empty.stack.push_back(ToByteVector(script));
+                for (unsigned flags : {block_flags, block_flags | STANDARD_SCRIPT_VERIFY_FLAGS}) {
+                    ScriptError error{SCRIPT_ERR_OK};
+                    const bool result = VerifyScript(script_sig, output, &empty, flags, checker, &error);
+                    BOOST_CHECK_EQUAL(result, negated);
+                    BOOST_CHECK_EQUAL(error, verify ? (multi ? SCRIPT_ERR_CHECKMULTISIGVERIFY : SCRIPT_ERR_CHECKSIGVERIFY) : (negated ? SCRIPT_ERR_OK : SCRIPT_ERR_EVAL_FALSE));
+                }
+            }
+        }
+    }
+    // The first attempted signature is empty, so matching exits before the
+    // undefined-byte argument. Prechecking must still reject both forms.
+    for (bool negated : {false, true}) {
+        const CScript script{CScript{} << OP_2 << std::vector<unsigned char>{1, 2} << std::vector<unsigned char>{2, 3} << OP_2 << OP_CHECKMULTISIG};
+        CScript actual = script;
+        if (negated) actual << OP_NOT;
+        for (auto version : {SigVersion::BASE, SigVersion::WITNESS_V0, SigVersion::WITNESS_V1_512}) {
+            for (unsigned flags : {block_flags, block_flags | STANDARD_SCRIPT_VERIFY_FLAGS,
+                                   block_flags | SCRIPT_VERIFY_DEFINED_HASHTYPE,
+                                   block_flags | STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DEFINED_HASHTYPE}) {
+                std::vector<std::vector<unsigned char>> stack{{}, {4}, {}};
+                ScriptError error{SCRIPT_ERR_OK};
+                const bool restricted = version == SigVersion::WITNESS_V1_512 || (flags & SCRIPT_VERIFY_DEFINED_HASHTYPE);
+                const auto expected = restricted ? SCRIPT_ERR_SIG_HASHTYPE : (flags & SCRIPT_VERIFY_NULLFAIL) ? SCRIPT_ERR_SIG_NULLFAIL : SCRIPT_ERR_OK;
+                BOOST_CHECK_EQUAL(EvalScript(stack, actual, flags, BaseSignatureChecker{}, version, &error), expected == SCRIPT_ERR_OK);
+                BOOST_CHECK_EQUAL(error, expected);
+            }
+            // Change only the byte; without NULLFAIL the negated form succeeds.
+            std::vector<std::vector<unsigned char>> control{{}, {1}, {}};
+            ScriptError error{SCRIPT_ERR_OK};
+            BOOST_REQUIRE(EvalScript(control, actual, block_flags | SCRIPT_VERIFY_DEFINED_HASHTYPE, BaseSignatureChecker{}, version, &error));
+            BOOST_REQUIRE_EQUAL(control.size(), 1U);
+            BOOST_CHECK_EQUAL(!control[0].empty(), negated);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(legacy_v0_hash_type_controls)
+{
+    static_assert(!(STANDARD_SCRIPT_VERIFY_FLAGS & SCRIPT_VERIFY_DEFINED_HASHTYPE));
+    const unsigned block_flags = SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_NULLDUMMY |
+        SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY | SCRIPT_VERIFY_CHECKSEQUENCEVERIFY |
+        SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_SHA512;
+    for (auto scheme : {pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_1024, pq::SchemeId::MLDSA_44, pq::SchemeId::MLDSA_65, pq::SchemeId::MLDSA_87}) {
+        CKey key;
+        key.MakeNewKey(scheme);
+        for (auto version : {SigVersion::BASE, SigVersion::WITNESS_V0}) {
+            for (int form = 0; form < 6; ++form) {
+                const bool multi = form >= 3, negated = form % 3 == 2, verify = form % 3 == 1;
+                CScript script;
+                if (multi) script << OP_1 << ToByteVector(key.GetPubKey()) << OP_1 << (verify ? OP_CHECKMULTISIGVERIFY : OP_CHECKMULTISIG);
+                else script << ToByteVector(key.GetPubKey()) << (verify ? OP_CHECKSIGVERIFY : OP_CHECKSIG);
+                if (verify) script << OP_TRUE;
+                if (negated) script << OP_NOT;
+                CMutableTransaction tx;
+                tx.vin.resize(1);
+                tx.vout.emplace_back(1, CScript{} << OP_TRUE);
+                const CScript output = version == SigVersion::BASE ? script : GetScriptForDestination(WitnessV0ScriptHash(script));
+                PrecomputedTransactionData data;
+                data.Init(tx, {CTxOut(1000, output)}, true);
+                MutableTransactionSignatureChecker checker(&tx, 0, 1000, data, MissingDataBehavior::FAIL, false);
+                for (int mode : {1, 2, 3, 0x81, 0x82, 0x83, 0, 4, 0x22, 0x41, 0x43, 0x80, 0x84, 0xff}) {
+                    std::vector<unsigned char> sig;
+                    if (!negated) BOOST_REQUIRE(key.Sign(SignatureHash(script, tx, 0, mode, 1000, version, &data), sig, false, 0, false));
+                    if (negated) sig.assign(64, 0);
+                    sig.push_back(mode);
+                    CScript script_sig;
+                    CScriptWitness witness;
+                    if (version == SigVersion::BASE) {
+                        if (multi) script_sig << OP_0;
+                        script_sig << sig;
+                    } else {
+                        if (multi) witness.stack.push_back({});
+                        witness.stack.push_back(sig);
+                        witness.stack.push_back(ToByteVector(script));
+                    }
+                    for (unsigned flags : {block_flags, block_flags | STANDARD_SCRIPT_VERIFY_FLAGS,
+                                           block_flags | SCRIPT_VERIFY_DEFINED_HASHTYPE,
+                                           block_flags | STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DEFINED_HASHTYPE}) {
+                        ScriptError error{SCRIPT_ERR_OK};
+                        const bool result = VerifyScript(script_sig, output, &witness, flags, checker, &error);
+                        const bool defined = mode == 1 || mode == 2 || mode == 3 || mode == 0x81 || mode == 0x82 || mode == 0x83;
+                        const auto expected = !defined && (flags & SCRIPT_VERIFY_DEFINED_HASHTYPE) ? SCRIPT_ERR_SIG_HASHTYPE :
+                            negated && (flags & SCRIPT_VERIFY_NULLFAIL) ? SCRIPT_ERR_SIG_NULLFAIL : SCRIPT_ERR_OK;
+                        BOOST_CHECK_EQUAL(result, expected == SCRIPT_ERR_OK);
+                        BOOST_CHECK_EQUAL(error, expected);
+                    }
+                }
+                // Empty arguments do not trigger the hash-type restriction,
+                // including VERIFY and negated forms.
+                for (unsigned flags : {block_flags, block_flags | SCRIPT_VERIFY_DEFINED_HASHTYPE}) {
+                    std::vector<std::vector<unsigned char>> stack(multi ? 2 : 1);
+                    ScriptError error{SCRIPT_ERR_OK};
+                    const auto expected = verify ? (multi ? SCRIPT_ERR_CHECKMULTISIGVERIFY : SCRIPT_ERR_CHECKSIGVERIFY) : SCRIPT_ERR_OK;
+                    BOOST_CHECK_EQUAL(EvalScript(stack, script, flags, BaseSignatureChecker{}, version, &error), !verify);
+                    BOOST_CHECK_EQUAL(error, expected);
+                    if (!verify) {
+                        BOOST_REQUIRE_EQUAL(stack.size(), 1U);
+                        BOOST_CHECK_EQUAL(!stack[0].empty(), negated);
+                    }
+                }
+            }
+        }
+    }
+    // Empty multisig arguments retain count, dummy and VERIFY errors. The
+    // zero-signature path succeeds; an empty required signature does not.
+    for (auto version : {SigVersion::BASE, SigVersion::WITNESS_V0, SigVersion::WITNESS_V1_512}) {
+        for (bool verify : {false, true}) {
+            for (int required : {0, 1, 2}) {
+                CScript script = CScript{} << required << std::vector<unsigned char>{1, 2} << std::vector<unsigned char>{2, 3} << OP_2 << (verify ? OP_CHECKMULTISIGVERIFY : OP_CHECKMULTISIG);
+                for (bool bad_dummy : {false, true}) {
+                    for (unsigned flags : {block_flags, block_flags | SCRIPT_VERIFY_DEFINED_HASHTYPE}) {
+                        std::vector<std::vector<unsigned char>> stack(required + 1);
+                        if (bad_dummy) stack[0] = {1};
+                        ScriptError error{SCRIPT_ERR_OK};
+                        const bool result = EvalScript(stack, script, flags, BaseSignatureChecker{}, version, &error);
+                        const ScriptError expected = bad_dummy ? SCRIPT_ERR_SIG_NULLDUMMY : verify && required ? SCRIPT_ERR_CHECKMULTISIGVERIFY : SCRIPT_ERR_OK;
+                        BOOST_CHECK_EQUAL(result, expected == SCRIPT_ERR_OK);
+                        BOOST_CHECK_EQUAL(error, expected);
+                    }
+                }
+            }
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

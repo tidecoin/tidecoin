@@ -9,10 +9,15 @@
 #include <interfaces/chain.h>
 #include <interfaces/node.h>
 #include <key_io.h>
+#include <policy/policy.h>
+#include <pq/pq_scheme.h>
 #include <qt/tidecoinamountfield.h>
 #include <qt/tidecoinunits.h>
 #include <qt/clientmodel.h>
 #include <qt/optionsmodel.h>
+#include <qt/psbtoperationsdialog.h>
+#include <qt/walletmodeltransaction.h>
+#include <limits>
 #include <qt/overviewpage.h>
 #include <qt/platformstyle.h>
 #include <qt/qvalidatedlineedit.h>
@@ -252,6 +257,187 @@ public:
 
 };
 
+void TestPSBTAmountRendering(WalletModel& walletModel, ClientModel* client_model)
+{
+    // Amount caps have a distinct result from nonpositive amounts.
+    {
+        SendCoinsRecipient recipient;
+        recipient.address = QString::fromStdString(EncodeDestination(PKHash{}));
+        recipient.amount = MAX_MONEY + 1;
+        WalletModelTransaction excessive({recipient});
+        QCOMPARE(walletModel.prepareTransaction(excessive, wallet::CCoinControl{}).status, WalletModel::AmountExceedsMaximum);
+        recipient.amount = MAX_MONEY;
+        auto second = recipient;
+        second.address = QString::fromStdString(EncodeDestination(WitnessV0KeyHash{}));
+        second.amount = 1;
+        WalletModelTransaction excessive_sum({recipient, second});
+        QCOMPARE(walletModel.prepareTransaction(excessive_sum, wallet::CCoinControl{}).status, WalletModel::AmountExceedsMaximum);
+        recipient.amount = 0;
+        WalletModelTransaction zero({recipient});
+        QCOMPARE(walletModel.prepareTransaction(zero, wallet::CCoinControl{}).status, WalletModel::InvalidAmount);
+    }
+    // Exercise the actual dialog rendering with and without a loaded wallet.
+    for (WalletModel* model : {&walletModel, static_cast<WalletModel*>(nullptr)}) {
+        CMutableTransaction tx;
+        tx.vin.emplace_back(Txid::FromUint256(uint256::ONE), 0);
+        tx.vout.emplace_back(1000, CScript{} << OP_TRUE);
+        PartiallySignedTransaction psbt(tx);
+        PSBTOperationsDialog dialog(nullptr, model, client_model);
+        dialog.openWithPSBT(psbt);
+        auto* description = dialog.findChild<QTextEdit*>("transactionDescription");
+        QVERIFY(description);
+        QVERIFY(description->toPlainText().contains("Unable to calculate"));
+        psbt.inputs[0].witness_utxo = CTxOut(1000, CScript{} << OP_TRUE);
+        dialog.openWithPSBT(psbt);
+        QVERIFY(description->toPlainText().contains("Pays transaction fee:"));
+        QVERIFY(!description->toPlainText().contains("Unable to calculate"));
+        for (CAmount value : {CAmount{-1}, std::numeric_limits<CAmount>::min(), std::numeric_limits<CAmount>::max()}) {
+            auto invalid = psbt;
+            invalid.tx->vout[0].nValue = value;
+            dialog.openWithPSBT(invalid);
+            QVERIFY(description->toPlainText().contains("Invalid transaction", Qt::CaseInsensitive));
+            QVERIFY(!dialog.findChild<QPushButton*>("broadcastTransactionButton")->isEnabled());
+            QVERIFY(!dialog.findChild<QPushButton*>("signTransactionButton")->isEnabled());
+            dialog.signTransaction();
+            QVERIFY(!dialog.findChild<QLabel*>("statusBar")->text().contains("ready", Qt::CaseInsensitive));
+        }
+        for (CAmount value : {std::numeric_limits<CAmount>::min(), std::numeric_limits<CAmount>::max()}) {
+            auto invalid = psbt;
+            invalid.inputs[0].witness_utxo.nValue = value;
+            dialog.openWithPSBT(invalid);
+            QVERIFY(description->toPlainText().contains("Invalid transaction", Qt::CaseInsensitive));
+        }
+        auto nondefault = psbt;
+        CKey key;
+        key.MakeNewKey(pq::SchemeId::FALCON_512);
+        const auto pubkey = key.GetPubKey();
+        const CScript witness_script = CScript{} << ToByteVector(pubkey) << OP_CHECKSIG;
+        nondefault.inputs[0].witness_utxo.scriptPubKey = GetScriptForDestination(WitnessV1ScriptHash512{witness_script});
+        nondefault.inputs[0].witness_script = witness_script;
+        nondefault.inputs[0].sighash_type = SIGHASH_NONE;
+        dialog.openWithPSBT(nondefault);
+        QVERIFY(description->toPlainText().contains("Pays transaction fee:"));
+        QVERIFY(!dialog.findChild<QPushButton*>("broadcastTransactionButton")->isEnabled());
+        FlatSigningProvider provider;
+        provider.keys.emplace(pubkey.GetID(), key);
+        const auto txdata = PrecomputePSBTData(nondefault);
+        constexpr unsigned flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512};
+        QCOMPARE(SignPSBTInput(provider, nondefault, 0, &txdata, SIGHASH_NONE, nullptr, true, flags), common::PSBTError::OK);
+        dialog.openWithPSBT(nondefault);
+        QVERIFY(description->toPlainText().contains("Pays transaction fee:"));
+        QVERIFY(dialog.findChild<QPushButton*>("broadcastTransactionButton")->isEnabled());
+        auto invalid_sum = psbt;
+        invalid_sum.tx->vout.assign(2, CTxOut(std::numeric_limits<CAmount>::max(), CScript{} << OP_TRUE));
+        invalid_sum.outputs.resize(2);
+        dialog.openWithPSBT(invalid_sum);
+        QVERIFY(description->toPlainText().contains("Invalid transaction", Qt::CaseInsensitive));
+    }
+
+}
+
+void TestPSBTSigningStatus(CWallet& wallet, WalletModel& model, ClientModel* client_model)
+{
+    FlatSigningProvider provider;
+    std::vector<CKey> keys;
+    std::vector<CScript> scripts;
+    for (int i = 0; i < 2; ++i) {
+        CKey key;
+        key.MakeNewKey(pq::SchemeId::FALCON_512);
+        keys.push_back(key);
+        std::string error;
+        auto descriptors = Parse("wpkh(" + EncodeSecret(key) + ")", provider, error, false);
+        QVERIFY(!descriptors.empty());
+        WalletDescriptor descriptor(std::move(descriptors[0]), 0, 0, 1, 1);
+        QVERIFY(WITH_LOCK(wallet.cs_wallet, return bool(wallet.AddWalletDescriptor(descriptor, provider, "", false))));
+        scripts.push_back(GetScriptForDestination(WitnessV0KeyHash(key.GetPubKey())));
+    }
+    for (const auto& key : keys) {
+        provider.keys.emplace(key.GetPubKey().GetID(), key);
+        provider.pubkeys.emplace(key.GetPubKey().GetID(), key.GetPubKey());
+    }
+    CMutableTransaction previous;
+    previous.vout = {CTxOut(1000, scripts[0]), CTxOut(1000, scripts[0]), CTxOut(1000, scripts[1])};
+    CMutableTransaction tx;
+    for (int i = 0; i < 3; ++i) tx.vin.emplace_back(previous.GetHash(), i);
+    tx.vout.emplace_back(2000, CScript{} << OP_TRUE);
+    PartiallySignedTransaction original(tx);
+    for (auto& input : original.inputs) input.non_witness_utxo = MakeTransactionRef(previous);
+    PSBTOperationsDialog dialog(nullptr, &model, client_model);
+    auto* sign = dialog.findChild<QPushButton*>("signTransactionButton");
+    auto* broadcast = dialog.findChild<QPushButton*>("broadcastTransactionButton");
+    auto* status = dialog.findChild<QLabel*>("statusBar");
+    auto request = original;
+    for (auto& input : request.inputs) input.sighash_type = SIGHASH_NONE;
+    dialog.openWithPSBT(request);
+    QVERIFY(sign->isEnabled());
+    dialog.copyToClipboard();
+    const auto before = QApplication::clipboard()->text();
+    sign->click();
+    for (int i = 0; i < 3; ++i) QVERIFY(status->text().contains(QString("Input %1: requested mode 1, declared mode 2").arg(i)));
+    QVERIFY(status->text().contains("explicitly"));
+    QVERIFY(!broadcast->isEnabled());
+    dialog.copyToClipboard();
+    QCOMPARE(QApplication::clipboard()->text(), before);
+
+    // A global request cannot silently adopt two owned inputs' different modes.
+    request.inputs[0].sighash_type = SIGHASH_ALL;
+    dialog.openWithPSBT(request);
+    dialog.copyToClipboard();
+    const auto mixed_before = QApplication::clipboard()->text();
+    sign->click();
+    QVERIFY(!status->text().contains("Input 0:"));
+    QVERIFY(status->text().contains("Input 1:"));
+    QVERIFY(status->text().contains("Input 2:"));
+    QVERIFY(!broadcast->isEnabled());
+    dialog.copyToClipboard();
+    QCOMPARE(QApplication::clipboard()->text(), mixed_before);
+
+    // This transaction could be fully signed; invalid amounts must prevent it.
+    request = original;
+    request.tx->vout[0].nValue = MAX_MONEY + 1;
+    dialog.openWithPSBT(request);
+    QVERIFY(!sign->isEnabled());
+    dialog.signTransaction();
+    QVERIFY(!broadcast->isEnabled());
+    QVERIFY(!status->text().contains("ready", Qt::CaseInsensitive));
+
+    for (int mode : {0, -1, 0x101, 4, 0x22, 0x41, 0x43}) {
+        request = original;
+        request.inputs[0].sighash_type = mode;
+        dialog.openWithPSBT(request);
+        QVERIFY(status->text().contains("Input 0:"));
+        QVERIFY(status->text().contains("missing some information"));
+        QVERIFY(!broadcast->isEnabled());
+        dialog.copyToClipboard();
+        const auto before_sign = QApplication::clipboard()->text();
+        dialog.signTransaction();
+        QVERIFY(status->text().contains("Failed to sign transaction"));
+        QVERIFY(!broadcast->isEnabled());
+        dialog.copyToClipboard();
+        QCOMPARE(QApplication::clipboard()->text(), before_sign);
+    }
+
+    // An already final constant-one signature remains valid and its warning
+    // must appear beside, rather than replace, the ready status.
+    const CScript legacy = CScript{} << ToByteVector(keys[1].GetPubKey()) << OP_CHECKSIG;
+    previous.vout[1].scriptPubKey = legacy;
+    tx.vin.resize(2);
+    for (auto& input : tx.vin) input.prevout.hash = previous.GetHash();
+    request = PartiallySignedTransaction(tx);
+    for (auto& input : request.inputs) input.non_witness_utxo = MakeTransactionRef(previous);
+    const auto data = PrecomputePSBTData(request);
+    constexpr unsigned flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512};
+    QCOMPARE(SignPSBTInput(provider, request, 0, &data, SIGHASH_ALL, nullptr, true, flags), common::PSBTError::OK);
+    std::vector<unsigned char> signature;
+    QVERIFY(keys[1].Sign(uint256::ONE, signature, false, 0, false));
+    signature.push_back(SIGHASH_SINGLE);
+    request.inputs[1].final_script_sig = CScript{} << signature;
+    dialog.openWithPSBT(request);
+    QVERIFY(broadcast->isEnabled());
+    QVERIFY(status->text().contains("ready for broadcast"));
+    QVERIFY(status->text().contains("Input 1:"));
+}
+
 //! Simple qt wallet tests.
 //
 // Test widgets can be debugged interactively calling show() on them and
@@ -274,6 +460,28 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CWallet>& wallet)
     WalletModel& walletModel = *mini_gui.walletModel;
     SendCoinsDialog& sendCoinsDialog = mini_gui.sendCoinsDialog;
     TransactionView& transactionView = mini_gui.transactionView;
+
+    TestPSBTAmountRendering(walletModel, mini_gui.clientModel.get());
+    if (!walletModel.wallet().privateKeysDisabled()) TestPSBTSigningStatus(*wallet, walletModel, mini_gui.clientModel.get());
+
+    // Exercise the send dialog's actual message for an excessive aggregate.
+    {
+        SendCoinsRecipient first, second;
+        first.address = QString::fromStdString(EncodeDestination(PKHash{}));
+        second.address = QString::fromStdString(EncodeDestination(WitnessV0KeyHash{}));
+        first.amount = MAX_MONEY;
+        second.amount = COIN;
+        sendCoinsDialog.pasteEntry(first);
+        sendCoinsDialog.pasteEntry(second);
+        QString message;
+        const auto connection = QObject::connect(&sendCoinsDialog, &SendCoinsDialog::message, [&](const QString&, const QString& text, unsigned int) { message = text; });
+        const bool invoked = QMetaObject::invokeMethod(&sendCoinsDialog, "sendButtonClicked", Q_ARG(bool, false));
+        QObject::disconnect(connection);
+        QVERIFY(invoked);
+        QVERIFY(message.contains("total amount exceeds the maximum permitted amount"));
+        QVERIFY(!message.contains("larger than 0"));
+        sendCoinsDialog.clear();
+    }
 
     // Update walletModel cached balance which will trigger an update for the 'labelBalance' QLabel.
     walletModel.pollBalanceChanged();
@@ -404,6 +612,9 @@ void TestGUIWatchOnly(interfaces::Node& node, TestChain100Setup& test)
     mini_gui.initModelForWallet(node, wallet, platformStyle.get());
     WalletModel& walletModel = *mini_gui.walletModel;
     SendCoinsDialog& sendCoinsDialog = mini_gui.sendCoinsDialog;
+
+    TestPSBTAmountRendering(walletModel, mini_gui.clientModel.get());
+    if (!walletModel.wallet().privateKeysDisabled()) TestPSBTSigningStatus(*wallet, walletModel, mini_gui.clientModel.get());
 
     // Update walletModel cached balance which will trigger an update for the 'labelBalance' QLabel.
     walletModel.pollBalanceChanged();

@@ -1011,7 +1011,7 @@ RPCHelpMan signrawtransactionwithwallet()
     pwallet->chain().findCoins(coins);
 
     // Parse the prevtxs array
-    ParsePrevouts(request.params[1], nullptr, coins);
+    const auto missing_amounts = ParsePrevouts(request.params[1], nullptr, coins);
 
     std::optional<int> nHashType = ParseSighashString(request.params[2]);
     if (!nHashType) {
@@ -1021,7 +1021,7 @@ RPCHelpMan signrawtransactionwithwallet()
     // Script verification errors
     std::map<int, bilingual_str> input_errors;
 
-    bool complete = pwallet->SignTransaction(mtx, coins, *nHashType, input_errors);
+    bool complete = pwallet->SignTransaction(mtx, coins, *nHashType, input_errors, &missing_amounts);
     UniValue result(UniValue::VOBJ);
     SignTransactionResultToJSON(mtx, complete, coins, input_errors, result);
     return result;
@@ -1621,6 +1621,11 @@ RPCHelpMan sendall()
 
             CAmount output_amounts_claimed{0};
             for (const CTxOut& out : rawTx.vout) {
+                // Each specified amount is at most MAX_MONEY. Their sum still
+                // has to fit, or the later comparison against the wallet balance wraps.
+                if (out.nValue < 0 || out.nValue > MAX_MONEY - output_amounts_claimed) {
+                    throw JSONRPCError(RPC_INVALID_PARAMETER, "Transaction total amount is too large");
+                }
                 output_amounts_claimed += out.nValue;
             }
 
@@ -1677,12 +1682,14 @@ RPCHelpMan walletprocesspsbt()
         "Update a PSBT with input information from our wallet and then sign inputs\n"
                 "that we can sign for.\n"
         "PQHD origins are added per key only when requested. Existing origins are retained, but conflicts with known wallet paths are rejected.\n"
-        "Origins supplied by another party are metadata, not proof of key ownership.\n" +
+        "Origins supplied by another party are metadata, not proof of key ownership.\n"
+        "With sign=false, omitting sighashtype preserves declarations; an explicit mode declares every unfinished input atomically, including ALL.\n"
+        "Signing preserves unrelated inputs' modes. One call cannot authorize different modes for multiple signing targets.\n" +
         HELP_REQUIRING_PASSPHRASE,
                 {
                     {"psbt", RPCArg::Type::STR, RPCArg::Optional::NO, "The transaction base64 string"},
                     {"sign", RPCArg::Type::BOOL, RPCArg::Default{true}, "Also sign the transaction when updating (requires wallet to be unlocked)"},
-                    {"sighashtype", RPCArg::Type::STR, RPCArg::Default{"ALL"}, "The signature hash type to sign with if not specified by the PSBT. Must be one of\n"
+                    {"sighashtype", RPCArg::Type::STR, RPCArg::Default{"ALL"}, "The signature hash type for new signatures (omitted means ALL). Nondefault signing targets require an explicit matching request. Must be one of\n"
             "       \"ALL\"\n"
             "       \"NONE\"\n"
             "       \"SINGLE\"\n"

@@ -1,7 +1,16 @@
 #include <pq/pq_scheme.h>
 #include <pq/pqhd_params.h>
 
+#include <key.h>
+#include <coins.h>
+#include <common/messages.h>
+#include <node/psbt.h>
+#include <policy/policy.h>
 #include <psbt.h>
+#include <script/solver.h>
+#include <test/util/setup_common.h>
+#include <util/vector.h>
+#include <util/translation.h>
 
 #include <uint256.h>
 
@@ -57,6 +66,68 @@ PartiallySignedTransaction MakeMinimalPSBT()
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(psbt_pqhd_origin_tests)
+
+BOOST_AUTO_TEST_CASE(psbt_missing_witness_script_commitment)
+{
+    const CScript script{CScript{} << OP_TRUE};
+    for (int version : {0, 1}) {
+        const auto commitment = version == 0 ? ToByteVector(WitnessV0ScriptHash{script}) : ToByteVector(WitnessV1ScriptHash512{script});
+        const CScript program{CScript{} << CScript::EncodeOP_N(version) << commitment};
+        for (bool wrapped : {false, true}) {
+            auto psbt = MakeMinimalPSBT();
+            psbt.inputs[0].witness_utxo = CTxOut{1000, wrapped ? GetScriptForDestination(ScriptHash{program}) : program};
+            if (wrapped) psbt.inputs[0].redeem_script = program;
+            for (const CScript& supplied : {CScript{}, CScript{} << OP_FALSE}) {
+                psbt.inputs[0].witness_script = supplied;
+                const auto analysis = node::AnalyzePSBT(psbt, STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_WITNESS_V1_512);
+                BOOST_REQUIRE_EQUAL(analysis.inputs.size(), 1U);
+                BOOST_CHECK(analysis.inputs[0].missing_witness_script == commitment);
+                BOOST_CHECK(analysis.next == PSBTRole::UPDATER);
+                BOOST_CHECK(!analysis.estimated_vsize);
+            }
+        }
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(psbt_witness_v1_analysis_size, BasicTestingSetup)
+{
+    CKey key;
+    key.MakeNewKey(pq::SchemeId::FALCON_512);
+    const auto pubkey = key.GetPubKey();
+    FlatSigningProvider provider;
+    provider.keys.emplace(pubkey.GetID(), key);
+    const CScript script{CScript{} << ToByteVector(pubkey) << OP_CHECKSIG};
+    constexpr unsigned flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512};
+    auto psbt = MakeMinimalPSBT();
+    psbt.inputs[0].witness_utxo = CTxOut{1000, GetScriptForDestination(WitnessV1ScriptHash512{script})};
+    psbt.inputs[0].witness_script = script;
+    const auto unsigned_analysis = node::AnalyzePSBT(psbt, flags);
+    BOOST_CHECK(unsigned_analysis.next == PSBTRole::SIGNER);
+    BOOST_CHECK(unsigned_analysis.estimated_vsize);
+    BOOST_CHECK(unsigned_analysis.estimated_feerate);
+
+    const auto data = PrecomputePSBTData(psbt);
+    BOOST_REQUIRE(SignPSBTInput(provider, psbt, 0, &data, SIGHASH_ALL, nullptr, false, flags) == PSBTError::OK);
+    const auto ready_analysis = node::AnalyzePSBT(psbt, flags);
+    BOOST_CHECK(ready_analysis.next == PSBTRole::FINALIZER);
+    BOOST_REQUIRE(ready_analysis.estimated_vsize);
+    BOOST_CHECK(!PSBTInputSigned(psbt.inputs[0])); // Analysis finalizes only its copy.
+
+    BOOST_REQUIRE(FinalizePSBT(psbt, flags));
+    const auto final_analysis = node::AnalyzePSBT(psbt, flags);
+    BOOST_CHECK(final_analysis.next == PSBTRole::EXTRACTOR);
+    BOOST_CHECK(final_analysis.estimated_vsize == ready_analysis.estimated_vsize);
+    BOOST_CHECK(final_analysis.estimated_feerate == ready_analysis.estimated_feerate);
+    BOOST_REQUIRE(final_analysis.fee);
+    BOOST_CHECK_EQUAL(*final_analysis.fee, 999);
+
+    // Invalid final fields must not be accepted by the dummy signature checker.
+    psbt.inputs[0].final_script_witness.stack[0][0] ^= 1;
+    const auto invalid_analysis = node::AnalyzePSBT(psbt, flags);
+    BOOST_CHECK(invalid_analysis.next == PSBTRole::UPDATER);
+    BOOST_CHECK(!invalid_analysis.estimated_vsize);
+    BOOST_CHECK(!invalid_analysis.estimated_feerate);
+}
 
 BOOST_AUTO_TEST_CASE(invalid_final_fields_do_not_imply_completion)
 {
@@ -131,7 +202,7 @@ BOOST_AUTO_TEST_CASE(psbt_previous_transaction_removal)
         psbt = make_psbt(1, 64);
         psbt.inputs[0].sighash_type = mode;
         RemoveUnnecessaryTransactions(psbt, flags);
-        BOOST_CHECK(psbt.inputs[0].non_witness_utxo);
+        BOOST_CHECK(bool(psbt.inputs[0].non_witness_utxo) == bool(mode & SIGHASH_ANYONECANPAY));
     }
     psbt = make_psbt(1, 64);
     psbt.inputs[0].partial_sigs.emplace(CKeyID{}, SigPair{CPubKey{}, {SIGHASH_ALL | SIGHASH_ANYONECANPAY}});
@@ -435,6 +506,594 @@ BOOST_AUTO_TEST_CASE(combine_psbt_deduplicates_identical_proprietary_records)
     BOOST_CHECK_EQUAL(combined.m_proprietary.size(), 1U);
     BOOST_CHECK_EQUAL(combined.inputs.at(0).m_proprietary.size(), 1U);
     BOOST_CHECK_EQUAL(combined.outputs.at(0).m_proprietary.size(), 1U);
+}
+
+BOOST_FIXTURE_TEST_CASE(psbt_modes_and_cleanup, BasicTestingSetup)
+{
+    constexpr unsigned flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_SHA512};
+    for (auto scheme : {pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_1024, pq::SchemeId::MLDSA_44, pq::SchemeId::MLDSA_65, pq::SchemeId::MLDSA_87}) {
+        CKey key;
+        key.MakeNewKey(scheme);
+        const auto pubkey = key.GetPubKey();
+        FlatSigningProvider provider;
+        provider.keys.emplace(pubkey.GetID(), key);
+        const CScript script{CScript{} << ToByteVector(pubkey) << OP_CHECKSIG};
+        for (bool wrapped : {false, true}) {
+            const CScript program = GetScriptForDestination(WitnessV1ScriptHash512(script));
+            CMutableTransaction previous;
+            previous.vout.emplace_back(1000, wrapped ? GetScriptForDestination(ScriptHash(program)) : program);
+            auto original = MakeMinimalPSBT();
+            original.tx->vin[0].prevout = COutPoint(previous.GetHash(), 0);
+            original.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+            original.inputs[0].witness_utxo = previous.vout[0];
+            original.inputs[0].witness_script = script;
+            if (wrapped) original.inputs[0].redeem_script = program;
+            auto compact = original;
+            RemoveUnnecessaryTransactions(compact, flags);
+            BOOST_CHECK(!compact.inputs[0].non_witness_utxo);
+            BOOST_CHECK(!compact.inputs[0].sighash_type);
+            const auto compact_data = PrecomputePSBTData(compact);
+            auto constrained = compact;
+            constrained.inputs[0].sighash_type = SIGHASH_ALL;
+            BOOST_CHECK(SignPSBTInput(provider, constrained, 0, &compact_data, 0x81, nullptr, false, flags) == PSBTError::SIGHASH_MISMATCH);
+            BOOST_REQUIRE(SignPSBTInput(provider, compact, 0, &compact_data, 0x81, nullptr, false, flags) == PSBTError::OK);
+            BOOST_CHECK(compact.inputs[0].sighash_type == 0x81);
+            for (int mode : {1, 2, 3, 0x81, 0x82, 0x83}) {
+                auto psbt = original;
+                psbt.inputs[0].sighash_type = mode;
+                const auto data = PrecomputePSBTData(psbt);
+                auto analysis = node::AnalyzePSBT(psbt, flags);
+                BOOST_CHECK(analysis.next == PSBTRole::SIGNER);
+                BOOST_CHECK(analysis.estimated_vsize);
+                BOOST_CHECK(analysis.estimated_feerate);
+                BOOST_CHECK(std::set<CKeyID>(analysis.inputs[0].missing_sigs.begin(), analysis.inputs[0].missing_sigs.end()).size() == 1U);
+                BOOST_CHECK(analysis.fee == 999);
+                auto unchanged = psbt;
+                if (mode != SIGHASH_ALL) {
+                    BOOST_CHECK(SignPSBTInput(provider, unchanged, 0, &data, std::nullopt, nullptr, false, flags) == PSBTError::SIGHASH_MISMATCH);
+                    BOOST_CHECK(unchanged.inputs[0].partial_sigs.empty());
+                }
+                BOOST_REQUIRE(SignPSBTInput(provider, psbt, 0, &data, mode, nullptr, false, flags) == PSBTError::OK);
+                BOOST_REQUIRE_EQUAL(psbt.inputs[0].partial_sigs.size(), 1U);
+                BOOST_CHECK_EQUAL(psbt.inputs[0].partial_sigs.begin()->second.second.back(), mode);
+                analysis = node::AnalyzePSBT(psbt, flags);
+                BOOST_CHECK(analysis.next == PSBTRole::FINALIZER);
+                BOOST_CHECK(analysis.estimated_vsize);
+                auto unfinished = psbt;
+                RemoveUnnecessaryTransactions(unfinished, flags);
+                BOOST_CHECK(bool(unfinished.inputs[0].non_witness_utxo) == bool(mode & SIGHASH_ANYONECANPAY));
+                BOOST_REQUIRE(FinalizePSBT(psbt, flags));
+                psbt.inputs[0].sighash_type.reset();
+                const auto witness = psbt.inputs[0].final_script_witness.stack;
+                const auto script_sig = psbt.inputs[0].final_script_sig;
+                analysis = node::AnalyzePSBT(psbt, flags);
+                BOOST_CHECK(analysis.next == PSBTRole::EXTRACTOR);
+                // The only UTXO record must be replaced atomically before removal.
+                psbt.inputs[0].witness_utxo.SetNull();
+                auto corrupt = psbt;
+                corrupt.inputs[0].final_script_witness.stack[0][1] ^= 1;
+                RemoveUnnecessaryTransactions(corrupt, flags);
+                BOOST_CHECK(corrupt.inputs[0].non_witness_utxo);
+                auto conflict = psbt;
+                conflict.inputs[0].sighash_type = mode == 1 ? 2 : 1;
+                RemoveUnnecessaryTransactions(conflict, flags);
+                BOOST_CHECK(conflict.inputs[0].non_witness_utxo);
+                if (wrapped) {
+                    for (bool extra_push : {false, true}) {
+                        auto malformed = psbt;
+                        auto& script_sig = malformed.inputs[0].final_script_sig;
+                        if (extra_push) script_sig << OP_0;
+                        else script_sig.insert(script_sig.begin(), OP_PUSHDATA1);
+                        RemoveUnnecessaryTransactions(malformed, flags);
+                        BOOST_CHECK(malformed.inputs[0].non_witness_utxo);
+                    }
+                    auto missing_script = original;
+                    missing_script.inputs[0].witness_script.clear();
+                    RemoveUnnecessaryTransactions(missing_script, flags);
+                    BOOST_CHECK(missing_script.inputs[0].non_witness_utxo);
+                }
+                RemoveUnnecessaryTransactions(psbt, flags);
+                BOOST_CHECK(bool(psbt.inputs[0].non_witness_utxo) == bool(mode & SIGHASH_ANYONECANPAY));
+                BOOST_CHECK(psbt.inputs[0].final_script_witness.stack == witness);
+                BOOST_CHECK(psbt.inputs[0].final_script_sig == script_sig);
+                BOOST_CHECK(PSBTInputSignedAndVerified(psbt, 0, &data, flags));
+            }
+        }
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(psbt_signing_refusals_and_declarations, BasicTestingSetup)
+{
+    constexpr unsigned flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512};
+    CKey key;
+    key.MakeNewKey(pq::SchemeId::FALCON_512);
+    const auto pubkey = key.GetPubKey();
+    FlatSigningProvider provider;
+    provider.keys.emplace(pubkey.GetID(), key);
+    provider.pubkeys.emplace(pubkey.GetID(), pubkey);
+    const CScript script{CScript{} << ToByteVector(pubkey) << OP_CHECKSIG};
+    for (int kind : {0, 1, 2, 3}) {
+        CMutableTransaction previous;
+        const CScript output = kind == 0 ? script : kind == 1 ? GetScriptForDestination(ScriptHash(script)) :
+            kind == 2 ? GetScriptForDestination(WitnessV0ScriptHash(script)) : GetScriptForDestination(WitnessV1ScriptHash512(script));
+        previous.vout.emplace_back(1000, output);
+        auto base = MakeMinimalPSBT();
+        base.tx->vin[0].prevout = COutPoint(previous.GetHash(), 0);
+        base.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+        if (kind == 1) base.inputs[0].redeem_script = script;
+        if (kind >= 2) base.inputs[0].witness_script = script;
+        for (int mode : {3, 0x83, 0x23, 0x43, 0x63, 0xa3}) {
+            auto psbt = base;
+            psbt.tx->vout.clear();
+            psbt.outputs.clear();
+            psbt.inputs[0].sighash_type = mode;
+            const auto data = PrecomputePSBTData(psbt);
+            MutableTransactionSignatureCreator creator(*psbt.tx, 0, -1, &data, mode, false);
+            creator.SetAmountAvailability(false, false);
+            SignatureData produced;
+            if (kind == 1) produced.redeem_script = script;
+            if (kind >= 2) produced.witness_script = script;
+            BOOST_CHECK(!ProduceSignature(provider, creator, output, produced, flags));
+            BOOST_CHECK(creator.Error() == PSBTError::SINGLE_WITHOUT_OUTPUT);
+            BOOST_CHECK(produced.missing_sigs.empty());
+            BOOST_CHECK(produced.signatures.empty());
+            SignatureData missing;
+            BOOST_CHECK(SignPSBTInput(provider, psbt, 0, &data, mode, &missing, false, flags) == PSBTError::SINGLE_WITHOUT_OUTPUT);
+            BOOST_CHECK(psbt.inputs[0].partial_sigs.empty());
+            BOOST_CHECK(missing.missing_sigs.empty());
+            const auto analysis = node::AnalyzePSBT(psbt, flags);
+            BOOST_REQUIRE_EQUAL(analysis.inputs.size(), 1U);
+            BOOST_CHECK(analysis.inputs[0].issue == PSBTError::SINGLE_WITHOUT_OUTPUT);
+            BOOST_CHECK(analysis.next == PSBTRole::CREATOR);
+            BOOST_CHECK(analysis.error.empty());
+            BOOST_CHECK(analysis.fee == 1000);
+            BOOST_CHECK(!analysis.estimated_vsize);
+        }
+        for (int mode : {0, -1, 0x101, 4, 7, 0x22, 0x41, 0x43}) {
+            auto psbt = base;
+            psbt.inputs[0].sighash_type = mode;
+            const auto data = PrecomputePSBTData(psbt);
+            BOOST_CHECK(SignPSBTInput(provider, psbt, 0, &data, mode, nullptr, false, flags) == PSBTError::SIGHASH_UNSUPPORTED);
+            BOOST_CHECK(psbt.inputs[0].partial_sigs.empty());
+            const auto analysis = node::AnalyzePSBT(psbt, flags);
+            BOOST_CHECK(analysis.inputs[0].issue == PSBTError::SIGHASH_UNSUPPORTED);
+            BOOST_CHECK(analysis.fee == 999);
+            BOOST_CHECK(!analysis.estimated_vsize);
+            if (kind < 3 && mode >= 0 && mode <= 255) {
+                // Existing valid legacy/v0 finals keep their consensus meaning,
+                // even when their byte cannot be requested for new signing.
+                std::vector<unsigned char> signature;
+                const auto version = kind == 2 ? SigVersion::WITNESS_V0 : SigVersion::BASE;
+                BOOST_REQUIRE(key.Sign(SignatureHash(script, *psbt.tx, 0, mode, 1000, version, &data), signature, false, 0, false));
+                signature.push_back(mode);
+                if (kind == 2) psbt.inputs[0].final_script_witness.stack = {signature, ToByteVector(script)};
+                else {
+                    psbt.inputs[0].final_script_sig = CScript{} << signature;
+                    if (kind == 1) psbt.inputs[0].final_script_sig << ToByteVector(script);
+                }
+                BOOST_REQUIRE(PSBTInputSignedAndVerified(psbt, 0, &data, flags));
+                BOOST_CHECK(FinalizePSBT(psbt, flags));
+                BOOST_CHECK(node::AnalyzePSBT(psbt, flags).next == PSBTRole::EXTRACTOR);
+            }
+        }
+        auto partial = base;
+        const auto data = PrecomputePSBTData(partial);
+        BOOST_REQUIRE(SignPSBTInput(provider, partial, 0, &data, SIGHASH_NONE, nullptr, false, flags) == PSBTError::OK);
+        partial.inputs[0].sighash_type = SIGHASH_ALL;
+        BOOST_CHECK(!FinalizePSBT(partial, flags));
+        BOOST_CHECK(node::AnalyzePSBT(partial, flags).inputs[0].issue == PSBTError::SIGHASH_MISMATCH);
+        partial.inputs[0].sighash_type.reset();
+        BOOST_CHECK(!FinalizePSBT(partial, flags));
+        BOOST_CHECK(DeclarePSBTSighash(partial, SIGHASH_ALL) == PSBTError::SIGHASH_MISMATCH);
+        BOOST_REQUIRE(DeclarePSBTSighash(partial, SIGHASH_NONE) == PSBTError::OK);
+        BOOST_CHECK(FinalizePSBT(partial, flags));
+    }
+    auto left = MakeMinimalPSBT();
+    auto right = left;
+    right.inputs[0].sighash_type = SIGHASH_NONE;
+    BOOST_REQUIRE(left.Merge(right));
+    BOOST_CHECK(left.inputs[0].sighash_type == SIGHASH_NONE);
+    right.inputs[0].sighash_type = SIGHASH_SINGLE;
+    BOOST_CHECK(!left.Merge(right));
+    BOOST_CHECK(left.inputs[0].sighash_type == SIGHASH_NONE);
+    auto public_psbt = MakeMinimalPSBT(); // Declaration does not require a UTXO or key.
+    BOOST_CHECK(DeclarePSBTSighash(public_psbt, SIGHASH_ALL) == PSBTError::OK);
+    BOOST_CHECK(public_psbt.inputs[0].sighash_type == SIGHASH_ALL);
+}
+
+BOOST_FIXTURE_TEST_CASE(raw_signing_amount_presence, BasicTestingSetup)
+{
+    constexpr unsigned flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512};
+    for (auto scheme : {pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_1024, pq::SchemeId::MLDSA_44, pq::SchemeId::MLDSA_65, pq::SchemeId::MLDSA_87}) {
+        CKey key;
+        key.MakeNewKey(scheme);
+        const auto pubkey = key.GetPubKey();
+        const CScript script = CScript{} << ToByteVector(pubkey) << OP_CHECKSIG;
+        const CScript v1 = GetScriptForDestination(WitnessV1ScriptHash512{script});
+        FlatSigningProvider provider;
+        provider.keys.emplace(pubkey.GetID(), key);
+        provider.pubkeys.emplace(pubkey.GetID(), pubkey);
+        provider.scripts.emplace(CScriptID(script), script);
+        provider.scripts.emplace(CScriptID(v1), v1);
+        provider.scripts.emplace(CScriptID{RIPEMD160(WitnessV1ScriptHash512{script})}, script);
+        const CScript foreign_script = CScript{} << OP_FALSE;
+        const CScript foreign_v1 = GetScriptForDestination(WitnessV1ScriptHash512{foreign_script});
+        provider.scripts.emplace(CScriptID(foreign_script), foreign_script);
+        provider.scripts.emplace(CScriptID(foreign_v1), foreign_v1);
+        provider.scripts.emplace(CScriptID{RIPEMD160(WitnessV1ScriptHash512{foreign_script})}, foreign_script);
+        for (int kind : {0, 1, 2}) {
+            const CScript own = kind == 0 ? GetScriptForDestination(WitnessV0ScriptHash{script}) : kind == 1 ? v1 : GetScriptForDestination(ScriptHash{v1});
+            for (const CScript& foreign : {GetScriptForDestination(PKHash{}), foreign_script, GetScriptForDestination(WitnessV0ScriptHash{foreign_script}), foreign_v1, GetScriptForDestination(ScriptHash{foreign_v1})}) {
+                CMutableTransaction base;
+                base.vin.emplace_back(Txid::FromUint256(uint256::ONE), 0);
+                base.vin.emplace_back(Txid::FromUint256(uint256::ONE), 1);
+                base.vout.assign(2, CTxOut{0, CScript{} << OP_TRUE});
+                std::map<COutPoint, Coin> coins;
+                coins.emplace(base.vin[0].prevout, Coin{CTxOut{1, own}, 1, false});
+                coins.emplace(base.vin[1].prevout, Coin{CTxOut{0, foreign}, 1, false});
+                for (int mode : {1, 2, 3, 0x81, 0x82, 0x83}) {
+                    auto tx = base;
+                    std::map<int, bilingual_str> errors;
+                    const std::set<COutPoint> missing_foreign{base.vin[1].prevout};
+                    SignTransaction(tx, &provider, coins, mode, errors, flags, &missing_foreign);
+                    if (kind != 0 && !(mode & SIGHASH_ANYONECANPAY)) {
+                        BOOST_CHECK(tx.vin[0].scriptWitness.IsNull());
+                        BOOST_CHECK_EQUAL(errors.at(0).original, common::PSBTErrorString(PSBTError::MISSING_SPENT_AMOUNTS).original);
+                    } else {
+                        BOOST_CHECK(!tx.vin[0].scriptWitness.IsNull());
+                        BOOST_CHECK(!errors.contains(0));
+                    }
+                    // A later keyless manager preserves the precise refusal.
+                    FlatSigningProvider keyless = provider;
+                    keyless.keys.clear();
+                    const auto first_errors = errors;
+                    SignTransaction(tx, &keyless, coins, mode, errors, flags, &missing_foreign);
+                    if (first_errors.contains(0)) BOOST_CHECK_EQUAL(errors.at(0).original, first_errors.at(0).original);
+
+                    tx = base;
+                    errors.clear();
+                    const std::set<COutPoint> missing_own{base.vin[0].prevout};
+                    SignTransaction(tx, &provider, coins, mode, errors, flags, &missing_own);
+                    BOOST_CHECK_EQUAL(errors.at(0).original, "Missing amount");
+                    BOOST_CHECK(tx.vin[0].scriptWitness.IsNull());
+                    SignTransaction(tx, &keyless, coins, mode, errors, flags, &missing_own);
+                    BOOST_CHECK_EQUAL(errors.at(0).original, "Missing amount");
+                }
+                for (CAmount amount : {CAmount{0}, CAmount{1}, MAX_MONEY - 1, MAX_MONEY}) {
+                    coins.at(base.vin[0].prevout).out.nValue = amount;
+                    auto tx = base;
+                    std::map<int, bilingual_str> errors;
+                    SignTransaction(tx, &provider, coins, SIGHASH_ALL, errors, flags);
+                    BOOST_CHECK(!errors.contains(0));
+                    PrecomputedTransactionData data;
+                    data.Init(tx, {coins.at(base.vin[0].prevout).out, coins.at(base.vin[1].prevout).out}, true);
+                    BOOST_CHECK(VerifyScript(tx.vin[0].scriptSig, own, &tx.vin[0].scriptWitness, flags, MutableTransactionSignatureChecker{&tx, 0, amount, data, MissingDataBehavior::FAIL, false}));
+                }
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(single_without_output_predicate)
+{
+    for (int mode : {3, 0x23, 0x43, 0x63, 0x83, 0xa3}) {
+        BOOST_CHECK(SingleWithoutOutput(mode, 1, 1));
+        BOOST_CHECK(!SingleWithoutOutput(mode, 0, 1));
+    }
+    for (int mode : {7, 0x13}) BOOST_CHECK(!SingleWithoutOutput(mode, 1, 1));
+}
+
+BOOST_FIXTURE_TEST_CASE(psbt_cleanup_observes_execution_atomically, BasicTestingSetup)
+{
+    constexpr unsigned flags{SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512};
+    CKey key;
+    key.MakeNewKey(pq::SchemeId::FALCON_512);
+    const auto pub = ToByteVector(key.GetPubKey());
+    const auto make = [&](const CScript& script) {
+        CMutableTransaction previous;
+        previous.vout.emplace_back(1000, GetScriptForDestination(WitnessV1ScriptHash512(script)));
+        auto psbt = MakeMinimalPSBT();
+        psbt.tx->vin[0].prevout = COutPoint(previous.GetHash(), 0);
+        psbt.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+        psbt.inputs[0].witness_utxo = previous.vout[0];
+        psbt.inputs[0].witness_script = script;
+        return psbt;
+    };
+    // Successful execution with no successful signature retains every record.
+    for (const CScript& script : {CScript{} << OP_TRUE, CScript{} << pub << OP_CHECKSIG << OP_NOT, CScript{} << pub << OP_CHECKSIG << OP_DROP << OP_TRUE}) {
+        for (bool empty : {false, true}) {
+            auto psbt = make(script);
+            const auto data = PrecomputePSBTData(psbt);
+            if (script.size() > 1) psbt.inputs[0].final_script_witness.stack.push_back(empty ? std::vector<unsigned char>{} : std::vector<unsigned char>{1});
+            psbt.inputs[0].final_script_witness.stack.push_back(ToByteVector(script));
+            BOOST_REQUIRE(PSBTInputSignedAndVerified(psbt, 0, &data, flags));
+            DataStream before;
+            before << psbt;
+            RemoveUnnecessaryTransactions(psbt, flags);
+            DataStream after;
+            after << psbt;
+            BOOST_CHECK(before.str() == after.str());
+            BOOST_CHECK(PSBTInputSignedAndVerified(psbt, 0, &data, flags));
+        }
+    }
+    {
+        const CScript dropped_script = CScript{} << pub << OP_CHECKSIG << OP_DROP << OP_TRUE;
+        auto dropped = make(dropped_script);
+        const auto data = PrecomputePSBTData(dropped);
+        uint512 digest;
+        BOOST_REQUIRE(SignatureHash512(digest, dropped_script, *dropped.tx, 0, SIGHASH_ALL, 1000, &data));
+        std::vector<unsigned char> sig;
+        BOOST_REQUIRE(key.Sign512(digest, sig, false));
+        sig.push_back(SIGHASH_ALL);
+        dropped.inputs[0].final_script_witness.stack = {sig, ToByteVector(dropped_script)};
+        BOOST_REQUIRE(PSBTInputSignedAndVerified(dropped, 0, &data, flags));
+        const auto witness = dropped.inputs[0].final_script_witness.stack;
+        RemoveUnnecessaryTransactions(dropped, flags);
+        BOOST_CHECK(!dropped.inputs[0].non_witness_utxo);
+        BOOST_CHECK(dropped.inputs[0].final_script_witness.stack == witness);
+        BOOST_CHECK(PSBTInputSignedAndVerified(dropped, 0, &data, flags));
+    }
+    // Unexecuted signature-shaped data does not count as an executed mode.
+    const CScript script{CScript{} << OP_0 << OP_IF << std::vector<unsigned char>{1, 0x81} << OP_DROP << OP_ENDIF << pub << OP_CHECKSIG};
+    auto psbt = make(script);
+    auto data = PrecomputePSBTData(psbt);
+    uint512 hash;
+    BOOST_REQUIRE(SignatureHash512(hash, script, *psbt.tx, 0, SIGHASH_ALL, 1000, &data));
+    std::vector<unsigned char> signature;
+    BOOST_REQUIRE(key.Sign512(hash, signature, false));
+    signature.push_back(SIGHASH_ALL);
+    psbt.inputs[0].final_script_witness.stack = {signature, ToByteVector(script)};
+    BOOST_REQUIRE(PSBTInputSignedAndVerified(psbt, 0, &data, flags));
+    auto eligible = psbt;
+    RemoveUnnecessaryTransactions(eligible, flags);
+    BOOST_CHECK(!eligible.inputs[0].non_witness_utxo);
+    BOOST_CHECK(PSBTInputSignedAndVerified(eligible, 0, &data, flags));
+    // Differing eligible modes and an unsuccessful intermediate key pairing
+    // still qualify when real multisig execution verifies both signatures.
+    CKey middle, last;
+    middle.MakeNewKey(pq::SchemeId::FALCON_512);
+    last.MakeNewKey(pq::SchemeId::FALCON_512);
+    const CScript multisig = CScript{} << OP_2 << pub << ToByteVector(middle.GetPubKey()) << ToByteVector(last.GetPubKey()) << OP_3 << OP_CHECKMULTISIG;
+    for (int second_mode : std::array<int, 3>{SIGHASH_NONE, SIGHASH_SINGLE, SIGHASH_ALL | SIGHASH_ANYONECANPAY}) {
+        auto multi = make(multisig);
+        const auto multi_data = PrecomputePSBTData(multi);
+        std::vector<unsigned char> first_sig, last_sig;
+        BOOST_REQUIRE(SignatureHash512(hash, multisig, *multi.tx, 0, SIGHASH_ALL, 1000, &multi_data));
+        BOOST_REQUIRE(key.Sign512(hash, first_sig, false));
+        first_sig.push_back(SIGHASH_ALL);
+        BOOST_REQUIRE(SignatureHash512(hash, multisig, *multi.tx, 0, second_mode, 1000, &multi_data));
+        BOOST_REQUIRE(last.Sign512(hash, last_sig, false));
+        last_sig.push_back(second_mode);
+        multi.inputs[0].final_script_witness.stack = {{}, first_sig, last_sig, ToByteVector(multisig)};
+        BOOST_REQUIRE(PSBTInputSignedAndVerified(multi, 0, &multi_data, flags));
+        RemoveUnnecessaryTransactions(multi, flags);
+        BOOST_CHECK(bool(multi.inputs[0].non_witness_utxo) == bool(second_mode & SIGHASH_ANYONECANPAY));
+        BOOST_CHECK(PSBTInputSignedAndVerified(multi, 0, &multi_data, flags));
+    }
+    for (int excluded : {-1, 0, 1, 2, 3}) {
+        auto mixed = psbt;
+        // Combine a verified final with an unfinished input. One excluded
+        // input must retain all records; the eligible control removes both.
+        auto extra = make(CScript{} << OP_TRUE);
+        mixed.tx->vin.push_back(extra.tx->vin[0]);
+        mixed.inputs.push_back(extra.inputs[0]);
+        const auto mixed_data = PrecomputePSBTData(mixed);
+        BOOST_REQUIRE(SignatureHash512(hash, script, *mixed.tx, 0, SIGHASH_ALL, 1000, &mixed_data));
+        BOOST_REQUIRE(key.Sign512(hash, signature, false));
+        signature.push_back(SIGHASH_ALL);
+        mixed.inputs[0].final_script_witness.stack[0] = signature;
+        BOOST_REQUIRE(PSBTInputSignedAndVerified(mixed, 0, &mixed_data, flags));
+        if (excluded == 0) mixed.inputs[1].sighash_type = 0x81;
+        if (excluded == 1) mixed.inputs[1].witness_utxo.nValue++;
+        if (excluded == 2) mixed.inputs[1].witness_utxo.SetNull();
+        if (excluded == 3) mixed.inputs[1].partial_sigs.emplace(CKeyID{}, SigPair{CPubKey{}, {}});
+        RemoveUnnecessaryTransactions(mixed, flags);
+        BOOST_CHECK(bool(mixed.inputs[0].non_witness_utxo) == (excluded >= 0));
+        BOOST_CHECK(bool(mixed.inputs[1].non_witness_utxo) == (excluded >= 0));
+    }
+    // A valid SINGLE partial made under legacy rules is not newly finalized.
+    CMutableTransaction previous;
+    const CScript legacy{CScript{} << pub << OP_CHECKSIG};
+    previous.vout.emplace_back(1000, legacy);
+    auto single = MakeMinimalPSBT();
+    single.tx->vout.clear();
+    single.outputs.clear();
+    single.tx->vin[0].prevout = COutPoint(previous.GetHash(), 0);
+    single.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+    BOOST_REQUIRE(key.Sign(uint256::ONE, signature, false, 0, false));
+    signature.push_back(SIGHASH_SINGLE);
+    single.inputs[0].sighash_type = SIGHASH_SINGLE;
+    single.inputs[0].partial_sigs.emplace(key.GetPubKey().GetID(), SigPair{key.GetPubKey(), signature});
+    BOOST_CHECK(!FinalizePSBT(single, flags));
+    BOOST_CHECK(node::AnalyzePSBT(single, flags).inputs[0].issue == PSBTError::SINGLE_WITHOUT_OUTPUT);
+    single.inputs[0].final_script_sig = CScript{} << signature;
+    single.inputs[0].partial_sigs.clear();
+    data = PrecomputePSBTData(single);
+    for (unsigned verify_flags : {flags, flags & ~(SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512)}) {
+        BOOST_CHECK(PSBTInputSignedAndVerified(single, 0, &data, verify_flags));
+    }
+    const auto analysis = node::AnalyzePSBT(single, flags);
+    BOOST_CHECK(analysis.inputs[0].is_final);
+    BOOST_CHECK(analysis.inputs[0].issue == PSBTError::SINGLE_WITHOUT_OUTPUT);
+}
+
+BOOST_FIXTURE_TEST_CASE(psbt_legacy_v0_state_modes_and_maximum, BasicTestingSetup)
+{
+    constexpr unsigned flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512};
+    for (auto scheme : {pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_1024, pq::SchemeId::MLDSA_44, pq::SchemeId::MLDSA_65, pq::SchemeId::MLDSA_87}) {
+        CKey first, second;
+        first.MakeNewKey(scheme);
+        second.MakeNewKey(scheme);
+        FlatSigningProvider provider, other;
+        provider.keys.emplace(first.GetPubKey().GetID(), first);
+        other.keys.emplace(second.GetPubKey().GetID(), second);
+        const CScript script = CScript{} << OP_2 << ToByteVector(first.GetPubKey()) << ToByteVector(second.GetPubKey()) << OP_2 << OP_CHECKMULTISIG;
+        for (int version : {0, 1, 2}) {
+            CMutableTransaction previous;
+            previous.vout.emplace_back(MAX_MONEY, version == 0 ? script : version == 1 ? GetScriptForDestination(WitnessV0ScriptHash(script)) : GetScriptForDestination(WitnessV1ScriptHash512(script)));
+            auto base = MakeMinimalPSBT();
+            base.tx->vin[0].prevout = COutPoint(previous.GetHash(), 0);
+            base.tx->vout[0].nValue = MAX_MONEY - 1;
+            base.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+            if (version) base.inputs[0].witness_script = script;
+            const auto data = PrecomputePSBTData(base);
+            for (int mode : {1, 2, 3, 0x81, 0x82, 0x83}) {
+                auto psbt = base;
+                psbt.inputs[0].sighash_type = mode;
+                auto analysis = node::AnalyzePSBT(psbt, flags);
+                BOOST_CHECK(analysis.next == PSBTRole::SIGNER);
+                BOOST_CHECK_EQUAL(analysis.inputs[0].missing_sigs.size(), 2U);
+                BOOST_CHECK(analysis.fee == 1);
+                BOOST_CHECK(analysis.estimated_vsize && analysis.estimated_feerate);
+                BOOST_CHECK(SignPSBTInput(provider, psbt, 0, &data, mode, nullptr, false, flags) == PSBTError::INCOMPLETE);
+                analysis = node::AnalyzePSBT(psbt, flags);
+                BOOST_CHECK(analysis.next == PSBTRole::SIGNER);
+                BOOST_CHECK(std::set<CKeyID>(analysis.inputs[0].missing_sigs.begin(), analysis.inputs[0].missing_sigs.end()).size() == 1U);
+                if (mode == SIGHASH_ALL) {
+                    for (int unsupported : {0, -1, 0x101, 4, 0x22, 0x41, 0x43}) {
+                        auto refused = psbt;
+                        refused.inputs[0].sighash_type = unsupported;
+                        const auto signatures = refused.inputs[0].partial_sigs;
+                        BOOST_CHECK(SignPSBTInput(other, refused, 0, &data, unsupported, nullptr, false, flags) == PSBTError::SIGHASH_UNSUPPORTED);
+                        BOOST_CHECK(refused.inputs[0].partial_sigs == signatures);
+                        BOOST_CHECK(!PSBTInputSigned(refused.inputs[0]));
+                    }
+                }
+                BOOST_REQUIRE(SignPSBTInput(other, psbt, 0, &data, mode, nullptr, false, flags) == PSBTError::OK);
+                BOOST_CHECK(node::AnalyzePSBT(psbt, flags).next == PSBTRole::FINALIZER);
+                BOOST_REQUIRE(FinalizePSBT(psbt, flags));
+                BOOST_CHECK(node::AnalyzePSBT(psbt, flags).next == PSBTRole::EXTRACTOR);
+                BOOST_CHECK(PSBTInputSignedAndVerified(psbt, 0, &data, flags));
+                if (mode == SIGHASH_ALL) {
+                    for (int unused : {0, -1, 0x101, 4, 0x22, 0x41, 0x43}) {
+                        auto final = psbt;
+                        final.inputs[0].sighash_type = unused;
+                        BOOST_CHECK(FinalizePSBT(final, flags));
+                        BOOST_CHECK(node::AnalyzePSBT(final, flags).next == PSBTRole::EXTRACTOR);
+                    }
+                }
+            }
+        }
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(psbt_cleanup_metadata_and_wrappers, BasicTestingSetup)
+{
+    constexpr unsigned flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512};
+    CKey key;
+    key.MakeNewKey(pq::SchemeId::FALCON_512);
+    FlatSigningProvider provider;
+    provider.keys.emplace(key.GetPubKey().GetID(), key);
+    const CScript script = CScript{} << ToByteVector(key.GetPubKey()) << OP_CHECKSIG;
+    const CScript program = GetScriptForDestination(WitnessV1ScriptHash512(script));
+    CMutableTransaction previous;
+    previous.vout = {CTxOut(1000, program), CTxOut(1000, GetScriptForDestination(ScriptHash(program)))};
+    CMutableTransaction tx;
+    tx.vin.emplace_back(previous.GetHash(), 0);
+    tx.vin.emplace_back(previous.GetHash(), 1);
+    tx.vout.assign(2, CTxOut(999, CScript{} << OP_TRUE));
+    PartiallySignedTransaction base(tx);
+    for (int i = 0; i < 2; ++i) {
+        base.inputs[i].non_witness_utxo = MakeTransactionRef(previous);
+        base.inputs[i].witness_utxo = previous.vout[i];
+        base.inputs[i].witness_script = script;
+        base.inputs[i].unknown[{0xaa}] = {1, 2, 3};
+    }
+    base.inputs[1].redeem_script = program;
+    base.inputs[0].sighash_type = SIGHASH_NONE;
+    base.inputs[1].sighash_type = SIGHASH_SINGLE;
+    const auto bytes = [](const auto& value) { DataStream stream; stream << value; return std::vector<std::byte>(stream.begin(), stream.end()); };
+    for (const auto& excluded_script : {script, GetScriptForDestination(WitnessV0ScriptHash(script)), CScript{} << OP_2 << std::vector<unsigned char>(32, 1)}) {
+        auto mixed = base;
+        CMutableTransaction different = previous;
+        different.vout[1].scriptPubKey = excluded_script;
+        mixed.inputs[1].non_witness_utxo = MakeTransactionRef(different);
+        mixed.inputs[1].witness_utxo = different.vout[1];
+        mixed.inputs[1].redeem_script.clear();
+        mixed.inputs[1].witness_script.clear();
+        mixed.tx->vin[1].prevout.hash = different.GetHash();
+        const auto data = PrecomputePSBTData(mixed);
+        BOOST_REQUIRE(SignPSBTInput(provider, mixed, 0, &data, SIGHASH_NONE, nullptr, true, flags) == PSBTError::OK);
+        BOOST_REQUIRE(PSBTInputSignedAndVerified(mixed, 0, &data, flags));
+        const auto before = bytes(mixed);
+        RemoveUnnecessaryTransactions(mixed, flags);
+        BOOST_CHECK(bytes(mixed) == before);
+    }
+    {
+        auto unknown = base;
+        CMutableTransaction different = previous;
+        different.vout[1].scriptPubKey = CScript{} << OP_2 << std::vector<unsigned char>(32, 1);
+        unknown.inputs[1] = PSBTInput{};
+        unknown.inputs[1].non_witness_utxo = MakeTransactionRef(different);
+        unknown.inputs[1].witness_utxo = different.vout[1];
+        unknown.inputs[1].final_script_witness.stack = {{OP_TRUE}};
+        unknown.tx->vin[1].prevout.hash = different.GetHash();
+        const auto data = PrecomputePSBTData(unknown);
+        const unsigned unknown_flags = flags & ~SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM;
+        BOOST_REQUIRE(SignPSBTInput(provider, unknown, 0, &data, SIGHASH_NONE, nullptr, true, unknown_flags) == PSBTError::OK);
+        BOOST_REQUIRE(PSBTInputSignedAndVerified(unknown, 0, &data, unknown_flags));
+        BOOST_REQUIRE(PSBTInputSignedAndVerified(unknown, 1, &data, unknown_flags));
+        const auto before = bytes(unknown);
+        RemoveUnnecessaryTransactions(unknown, unknown_flags);
+        BOOST_CHECK(bytes(unknown) == before);
+    }
+    for (bool finalized : {false, true}) {
+        auto eligible = base;
+        if (finalized) {
+            const auto data = PrecomputePSBTData(eligible);
+            BOOST_REQUIRE(SignPSBTInput(provider, eligible, 0, &data, SIGHASH_NONE, nullptr, true, flags) == PSBTError::OK);
+            BOOST_REQUIRE(SignPSBTInput(provider, eligible, 1, &data, SIGHASH_SINGLE, nullptr, true, flags) == PSBTError::OK);
+        }
+        for (int excluded = 0; excluded < 12; ++excluded) {
+            auto test = eligible;
+            unsigned test_flags = flags;
+            if (excluded < 3) test.inputs[1].sighash_type = std::array<int, 3>{0, 4, 0x101}[excluded];
+            if (excluded == 3) test.inputs[1].witness_utxo.nValue++;
+            if (excluded == 4) test.inputs[1].sighash_type = 0x81;
+            if (excluded == 5) {
+                if (finalized) test.inputs[1].final_script_witness.stack.back() = {OP_FALSE};
+                else test.inputs[1].witness_script = CScript{} << OP_FALSE;
+            }
+            if (excluded == 6) {
+                const auto wrong_program = GetScriptForDestination(WitnessV0ScriptHash(script));
+                if (finalized) test.inputs[1].final_script_sig = CScript{} << ToByteVector(wrong_program);
+                else test.inputs[1].redeem_script = wrong_program;
+            }
+            if (excluded == 7) {
+                test.inputs[1].redeem_script.clear();
+                if (finalized) test.inputs[1].final_script_sig.clear();
+            }
+            if (excluded == 8) test_flags &= ~SCRIPT_VERIFY_WITNESS_V1_512;
+            if (excluded == 9 || excluded == 10) {
+                CMutableTransaction wrong = previous;
+                wrong.vout[1].scriptPubKey = excluded == 9 ? GetScriptForDestination(ScriptHash(CScript{} << OP_TRUE)) : GetScriptForDestination(WitnessV0ScriptHash(program));
+                test.inputs[1].non_witness_utxo = MakeTransactionRef(wrong);
+                test.inputs[1].witness_utxo = wrong.vout[1];
+                test.tx->vin[1].prevout.hash = wrong.GetHash();
+                if (finalized) {
+                    // The changed outpoint is committed by input 0 as well.
+                    // Restore its valid final before testing input 1's wrapper.
+                    test.inputs[0] = base.inputs[0];
+                    const auto data = PrecomputePSBTData(test);
+                    BOOST_REQUIRE(SignPSBTInput(provider, test, 0, &data, SIGHASH_NONE, nullptr, true, flags) == PSBTError::OK);
+                    BOOST_REQUIRE(PSBTInputSignedAndVerified(test, 0, &data, flags));
+                    const MutableTransactionSignatureChecker checker{&*test.tx, 1, wrong.vout[1].nValue, data, MissingDataBehavior::FAIL, false};
+                    ScriptError error{SCRIPT_ERR_OK};
+                    BOOST_REQUIRE(!VerifyScript(test.inputs[1].final_script_sig, wrong.vout[1].scriptPubKey, &test.inputs[1].final_script_witness, flags, checker, &error));
+                    BOOST_CHECK_EQUAL(error, excluded == 9 ? SCRIPT_ERR_EVAL_FALSE : SCRIPT_ERR_WITNESS_MALLEATED);
+                }
+            }
+            if (excluded == 11) {
+                test.inputs[1].witness_utxo.SetNull();
+                test.inputs[1].non_witness_utxo.reset();
+            }
+            const auto before = bytes(test);
+            RemoveUnnecessaryTransactions(test, test_flags);
+            BOOST_CHECK(bytes(test) == before);
+        }
+        RemoveUnnecessaryTransactions(eligible, flags);
+        BOOST_CHECK(!eligible.inputs[0].non_witness_utxo && !eligible.inputs[1].non_witness_utxo);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

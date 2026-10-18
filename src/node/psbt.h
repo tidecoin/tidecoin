@@ -17,11 +17,13 @@ struct PSBTInputAnalysis {
     bool has_utxo; //!< Whether we have UTXO information for this input
     bool is_final; //!< Whether the input has all required information including signatures
     PSBTRole next; //!< Which of the BIP 174 roles needs to handle this input next
+    std::optional<PSBTError> issue;
+    std::string issue_message;
 
     std::vector<CKeyID> missing_pubkeys; //!< Pubkeys whose BIP32 derivation path is missing
     std::vector<CKeyID> missing_sigs;    //!< Pubkeys whose signatures are missing
     uint160 missing_redeem_script;       //!< Hash160 of redeem script, if missing
-    uint256 missing_witness_script;      //!< SHA256 of witness script, if missing
+    std::vector<unsigned char> missing_witness_script;      //!< SHA256 (v0) or SHA512 (v1) of missing witness script; empty if none
 };
 
 /**

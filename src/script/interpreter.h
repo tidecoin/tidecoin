@@ -121,6 +121,10 @@ enum : uint32_t {
     // Enable OP_SHA512 opcode (post-auxpow).
     SCRIPT_VERIFY_SHA512 = (1U << 15),
 
+    // Require defined hash-type bytes for nonempty legacy/v0 signatures.
+    // Mempool policy only; active witness v1 enforces this without the flag.
+    SCRIPT_VERIFY_DEFINED_HASHTYPE = (1U << 16),
+
     // Constants to point to the highest flag in use. Add new flags above this line.
     //
     SCRIPT_VERIFY_END_MARKER

@@ -122,6 +122,9 @@ CBlockHeader ConsumeHeader(FuzzedDataProvider& fuzzed_data_provider,
     header.nTime = ConsumeTime(fuzzed_data_provider);
     header.hashPrevBlock = prev_hash;
     header.nVersion = fuzzed_data_provider.ConsumeIntegral<int32_t>();
+    // This harness never builds a CAuxPow. The serializer throws if version
+    // bit 8 is set while auxpow is null, before the message reaches the node.
+    header.SetAuxpowVersion(false);
     return header;
 }
 

@@ -5,6 +5,7 @@
 #include <chainparams.h>
 #include <algorithm>
 #include <consensus/amount.h>
+#include <key_io.h>
 #include <policy/fees.h>
 #include <script/solver.h>
 #include <util/result.h>
@@ -109,6 +110,38 @@ BOOST_FIXTURE_TEST_CASE(SubtractFee, TestChain100Setup)
     BOOST_CHECK_EQUAL(fee, check_tx(fee + 123));
 }
 
+BOOST_FIXTURE_TEST_CASE(witness_v1_coin_classification, TestChain100Setup)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    auto wallet = CreateSyncedWallet(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
+    LOCK(wallet->cs_wallet);
+    FlatSigningProvider provider;
+    CMutableTransaction tx;
+    tx.vin.emplace_back(Txid::FromUint256(uint256::ONE), 0);
+    for (bool wrapped : {false, true}) {
+        std::string error;
+        std::string descriptor = "wsh512(pk(" + EncodeSecret(coinbaseKey) + "))";
+        if (wrapped) descriptor = "sh(" + descriptor + ")";
+        auto parsed = Parse(descriptor, provider, error, false);
+        BOOST_REQUIRE(!parsed.empty());
+        std::vector<CScript> scripts;
+        FlatSigningProvider expanded;
+        BOOST_REQUIRE(parsed[0]->Expand(0, provider, scripts, expanded));
+        WalletDescriptor desc(std::move(parsed[0]), 0, 0, 1, 1);
+        BOOST_REQUIRE(wallet->AddWalletDescriptor(desc, provider, "", false));
+        tx.vout.emplace_back(COIN, scripts[0]);
+    }
+    const auto block = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip()->GetBlockHash());
+    BOOST_REQUIRE(wallet->AddToWallet(MakeTransactionRef(tx), TxStateConfirmed{block, 100, 0}));
+    const auto coins = AvailableCoins(*wallet);
+    for (int index = 0; index < 2; ++index) {
+        const auto type = index ? OutputType::P2SH_SEGWIT : OutputType::BECH32PQ;
+        BOOST_REQUIRE(coins.coins.contains(type));
+        const auto& group = coins.coins.at(type);
+        BOOST_CHECK(std::any_of(group.begin(), group.end(), [&](const auto& coin) { return coin.outpoint == COutPoint(tx.GetHash(), index); }));
+    }
+}
+
 BOOST_FIXTURE_TEST_CASE(wallet_duplicated_preset_inputs_test, TestChain100Setup)
 {
     REQUIRE_WALLET_TESTS_ENABLED();
@@ -151,6 +184,24 @@ BOOST_FIXTURE_TEST_CASE(wallet_duplicated_preset_inputs_test, TestChain100Setup)
     // Second case, don't use 'subtract_fee_from_outputs'.
     recipients[0].fSubtractFeeFromAmount = false;
     BOOST_CHECK(!CreateTransaction(*wallet, recipients, /*change_pos=*/std::nullopt, coin_control));
+}
+
+BOOST_AUTO_TEST_CASE(recipient_total_rejects_sum_above_max_money)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    // Two individually valid maximum outputs exceed MAX_MONEY.
+    // CreateTransaction must reject the total before adding the second amount.
+    const CRecipient one{CNoDestination{}, MAX_MONEY, false};
+    CCoinControl coin_control;
+    const auto overflow = CreateTransaction(m_wallet, {one, one}, /*change_pos=*/std::nullopt, coin_control);
+    BOOST_CHECK(!overflow);
+    BOOST_CHECK(util::ErrorString(overflow).original.find("too large") != std::string::npos);
+
+    // A single maximum output is representable. An empty wallet fails later
+    // for lack of funds, not because the amount itself was rejected.
+    const auto one_output = CreateTransaction(m_wallet, {one}, /*change_pos=*/std::nullopt, coin_control);
+    BOOST_CHECK(!one_output);
+    BOOST_CHECK(util::ErrorString(one_output).original.find("Insufficient funds") != std::string::npos);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

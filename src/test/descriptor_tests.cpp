@@ -4,6 +4,9 @@
 
 #include <script/descriptor.h>
 #include <script/signingprovider.h>
+#include <script/script.h>
+#include <addresstype.h>
+#include <consensus/consensus.h>
 #include <pq/pq_scheme.h>
 #include <key.h>
 #include <key_io.h>
@@ -213,6 +216,35 @@ BOOST_AUTO_TEST_CASE(descriptor_explicit_pq_pubkey_matrix)
         parse_ok("combo(" + hex + ")");
         parse_ok("wsh(pk(" + hex + "))");
         parse_ok("wsh512(pk(" + hex + "))");
+        parse_fail("wsh(wsh512(pk(" + hex + ")))", "Can only have wsh512() at top level or inside sh()");
+        parse_fail("wsh512(wsh512(pk(" + hex + ")))", "Can only have wsh512() at top level or inside sh()");
+        parse_fail("sh(sh(wsh512(pk(" + hex + "))))", "Can only have sh() at top level");
+        for (const auto& inner : {"pk(" + hex + ")", "multi(1," + hex + ")"}) {
+            for (bool wrapped : {false, true}) {
+                const std::string desc = wrapped ? "sh(wsh512(" + inner + "))" : "wsh512(" + inner + ")";
+                auto parsed = parse_ok(desc);
+                BOOST_CHECK(parsed[0]->GetOutputType() == (wrapped ? OutputType::P2SH_SEGWIT : OutputType::BECH32PQ));
+                if (wrapped) {
+                    FlatSigningProvider native_provider;
+                    std::string native_error;
+                    auto native = Parse("wsh512(" + inner + ")", native_provider, native_error);
+                    BOOST_REQUIRE(!native.empty());
+                    BOOST_REQUIRE(parsed[0]->MaxSatisfactionWeight(true));
+                    BOOST_REQUIRE(native[0]->MaxSatisfactionWeight(true));
+                    BOOST_CHECK_EQUAL(*parsed[0]->MaxSatisfactionWeight(true), *native[0]->MaxSatisfactionWeight(true) + 67 * WITNESS_SCALE_FACTOR);
+                }
+                std::vector<CScript> scripts;
+                FlatSigningProvider expanded;
+                BOOST_REQUIRE(parsed[0]->Expand(0, out, scripts, expanded));
+                auto inferred = InferDescriptor(scripts[0], expanded);
+                BOOST_CHECK(EqualDescriptor(desc, inferred->ToString()));
+                auto roundtrip = parse_ok(inferred->ToString());
+                std::vector<CScript> again;
+                FlatSigningProvider again_provider;
+                BOOST_REQUIRE(roundtrip[0]->Expand(0, out, again, again_provider));
+                BOOST_CHECK(again == scripts);
+            }
+        }
         parse_ok("multi(1," + hex + ")");
         parse_ok("sortedmulti(1," + hex + ")");
         parse_ok("wsh(multi(1," + hex + "))");
@@ -227,6 +259,24 @@ BOOST_AUTO_TEST_CASE(descriptor_explicit_pq_pubkey_matrix)
     parse_fail("pk(0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798)", "is invalid");
     // BIP32/xpub/xprv expressions are not part of Tidecoin PQ descriptor surface.
     parse_fail("wpkh(xpub661MyMwAqRbcF9QxvA3GvH7Tn2Y4m4v5hJ4Qqg1j9n7S7g7J8q9r3kQ3mLZ2kJ1w4Vw1Y8r6mQ6W2j3s5E5n7jL9pQ2aB6v2mN2QhM8mY8/0/*)", "not valid");
+}
+
+BOOST_AUTO_TEST_CASE(wsh512_inference_checks_full_commitment)
+{
+    struct InconsistentProvider : SigningProvider {
+        bool GetCScript(const CScriptID&, CScript& script) const override { script = CScript{} << OP_TRUE; return true; }
+    } provider;
+    const CScript output{CScript{} << OP_1 << std::vector<unsigned char>(64, 42)};
+    const auto inferred = InferDescriptor(output, provider);
+    FlatSigningProvider parsed_provider;
+    std::string error;
+    auto parsed = Parse(inferred->ToString(), parsed_provider, error);
+    BOOST_REQUIRE(!parsed.empty());
+    std::vector<CScript> scripts;
+    FlatSigningProvider expanded;
+    BOOST_REQUIRE(parsed[0]->Expand(0, parsed_provider, scripts, expanded));
+    BOOST_REQUIRE_EQUAL(scripts.size(), 1U);
+    BOOST_CHECK(scripts[0] == output);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

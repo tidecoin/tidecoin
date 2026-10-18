@@ -51,7 +51,7 @@ Parser context rules:
 
 - `sh(...)`: top-level only.
 - `wsh(...)`: top-level or inside `sh(...)`.
-- `wsh512(...)`: top-level only.
+- `wsh512(...)`: top-level or inside one top-level `sh(...)`.
 - `wpkh(...)`: top-level or inside `sh(...)`.
 - `combo(...)`, `addr(...)`, `raw(...)`: top-level only.
 - `multi(...)` / `sortedmulti(...)`: top-level, inside `sh(...)`, inside
@@ -111,6 +111,7 @@ Single-key examples:
 - `wpkh(<pq_pubkey_hex>)`
 - `sh(wpkh(<pq_pubkey_hex>))`
 - `wsh512(pk(<pq_pubkey_hex>))`
+- `sh(wsh512(pk(<pq_pubkey_hex>)))`
 
 Multisig examples:
 

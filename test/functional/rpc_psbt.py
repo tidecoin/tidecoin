@@ -316,6 +316,7 @@ class PSBTTest(BitcoinTestFramework):
             mod_psbt.i[1].map[PSBT_IN_SIGHASH_TYPE] = (SIGHASH_ALL).to_bytes(4, byteorder="little")
             psbt = mod_psbt.to_base64()
             fin_res = self.nodes[0].finalizepsbt(psbt)
+            assert_equal(fin_res["complete"], False)
 
         self.log.info("Test DEFAULT sighash string is rejected")
         default_psbt = wallet.walletcreatefundedpsbt([], [{def_wallet.getnewaddress(): 0.5}])["psbt"]
@@ -731,7 +732,8 @@ class PSBTTest(BitcoinTestFramework):
         # Update psbts with explicit PQHD origin opt-in. Should only have data for one input and not the other.
         psbt1 = self.nodes[1].walletprocesspsbt(psbt_orig, False, "ALL", False, True)['psbt']
         psbt1_decoded = self.nodes[0].decodepsbt(psbt1)
-        assert psbt1_decoded['inputs'][0] and not psbt1_decoded['inputs'][1]
+        assert psbt1_decoded['inputs'][0]
+        assert_equal(psbt1_decoded['inputs'][1], {'sighash': 'ALL'})
         # Tidecoin PQ wallet does not support BIP32 derivation paths in PSBT.
         self.psbt_bip32_derivs_supported = "bip32_derivs" in psbt1_decoded['inputs'][0]
         assert not self.psbt_bip32_derivs_supported
@@ -739,7 +741,8 @@ class PSBTTest(BitcoinTestFramework):
         assert "pqhd_origins" not in psbt1_decoded['inputs'][1]
         psbt2 = self.nodes[2].walletprocesspsbt(psbt_orig, False, "ALL", False, True)['psbt']
         psbt2_decoded = self.nodes[0].decodepsbt(psbt2)
-        assert not psbt2_decoded['inputs'][0] and psbt2_decoded['inputs'][1]
+        assert_equal(psbt2_decoded['inputs'][0], {'sighash': 'ALL'})
+        assert psbt2_decoded['inputs'][1]
         # Check that BIP32 paths were not added
         assert "bip32_derivs" not in psbt2_decoded['inputs'][1]
         assert "pqhd_origins" not in psbt2_decoded['inputs'][0]

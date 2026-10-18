@@ -15,6 +15,7 @@
 #include <qt/transactiontablemodel.h>
 
 #include <common/args.h>
+#include <consensus/amount.h>
 #include <interfaces/handler.h>
 #include <interfaces/node.h>
 #include <key_io.h>
@@ -172,10 +173,11 @@ WalletModel::SendCoinsReturn WalletModel::prepareTransaction(WalletModelTransact
             {
                 return InvalidAddress;
             }
-            if(rcp.amount <= 0)
+            if (rcp.amount <= 0)
             {
                 return InvalidAmount;
             }
+            if (rcp.amount > MAX_MONEY - total) return AmountExceedsMaximum;
             setAddress.insert(rcp.address);
             ++nAddresses;
 

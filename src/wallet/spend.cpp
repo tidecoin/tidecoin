@@ -300,7 +300,7 @@ static OutputType GetOutputType(TxoutType type, bool is_from_p2sh)
             if (is_from_p2sh) return OutputType::P2SH_SEGWIT;
             else return OutputType::BECH32;
         case TxoutType::WITNESS_V1_SCRIPTHASH_512:
-            return OutputType::BECH32PQ;
+            return is_from_p2sh ? OutputType::P2SH_SEGWIT : OutputType::BECH32PQ;
         case TxoutType::SCRIPTHASH:
         case TxoutType::PUBKEYHASH:
             return OutputType::LEGACY;
@@ -1167,6 +1167,11 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
 
         // Include the fee cost for outputs.
         coin_selection_params.tx_noinputs_size += GetSerializeSizeForRecipient(recipient);
+        // Each amount can be MAX_MONEY. Adding them in place overflows CAmount
+        // once the running total cannot hold the next one (4,393 max outputs).
+        if (recipient.nAmount > MAX_MONEY - recipients_sum) {
+            return util::Error{_("Transaction total amount is too large")};
+        }
         recipients_sum += recipient.nAmount;
 
         if (recipient.fSubtractFeeFromAmount) {

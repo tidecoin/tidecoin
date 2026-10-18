@@ -6,6 +6,7 @@
 
 #include <chainparams.h>
 #include <common/messages.h>
+#include <consensus/amount.h>
 #include <core_io.h>
 #include <interfaces/node.h>
 #include <key_io.h>
@@ -100,22 +101,38 @@ void PSBTOperationsDialog::openWithPSBT(PartiallySignedTransaction psbtx)
 
 void PSBTOperationsDialog::signTransaction()
 {
+    // Recheck here as well as disabling the button: the slot can be invoked
+    // directly, and invalid amounts must never reach signing.
+    if (!m_wallet_model || !AnalyzePSBT(m_transaction_data, GetPSBTAnalysisFlags(m_client_model)).error.empty()) {
+        updateTransactionDisplay();
+        return;
+    }
     bool complete;
     size_t n_signed;
 
     WalletModel::UnlockContext ctx(m_wallet_model->requestUnlock());
+    std::vector<common::PSBTInputError> input_errors;
 
     const auto err{m_wallet_model->wallet().fillPSBT(std::nullopt, /*sign=*/true,
                                                      &n_signed, m_transaction_data, complete,
-                                                     /*include_pqhd_origins=*/false)};
+                                                     /*include_pqhd_origins=*/false, &input_errors)};
 
     if (err) {
-        showStatus(tr("Failed to sign transaction: %1")
-            .arg(QString::fromStdString(PSBTErrorString(*err).translated)), StatusLevel::ERR);
+        QString message = tr("Failed to sign transaction: %1").arg(QString::fromStdString(PSBTErrorString(*err).translated));
+        for (const auto& issue : input_errors) {
+            message += tr(" Input %1: requested mode %2, declared mode %3.")
+                .arg(issue.input).arg(issue.requested_mode)
+                .arg(issue.declared_mode ? QString::number(*issue.declared_mode) : tr("absent"));
+        }
+        if (*err == common::PSBTError::SIGHASH_MISMATCH) message += tr(" Select the matching mode explicitly through a signing interface that supports it.");
+        showStatus(message, StatusLevel::ERR);
         return;
     }
 
     updateTransactionDisplay();
+
+    const auto analysis = AnalyzePSBT(m_transaction_data, GetPSBTAnalysisFlags(m_client_model));
+    if (!analysis.error.empty()) return;
 
     if (!complete && !ctx.isValid()) {
         showStatus(tr("Cannot sign inputs while wallet is locked."), StatusLevel::WARN);
@@ -125,9 +142,13 @@ void PSBTOperationsDialog::signTransaction()
         showStatus(tr("Signed %1 inputs, but more signatures are still required.").arg(n_signed),
             StatusLevel::INFO);
     } else {
-        showStatus(tr("Signed transaction successfully. Transaction is ready to broadcast."),
-            StatusLevel::INFO);
         m_ui->broadcastTransactionButton->setEnabled(true);
+    }
+    // Preserve the role and per-input issues alongside the signing result.
+    if (!complete) {
+        const auto signing_status = m_ui->statusBar->text();
+        showTransactionStatus(m_transaction_data);
+        m_ui->statusBar->setText(signing_status + " " + m_ui->statusBar->text());
     }
 }
 
@@ -202,10 +223,13 @@ void PSBTOperationsDialog::updateTransactionDisplay() {
 
 QString PSBTOperationsDialog::renderTransaction(const PartiallySignedTransaction &psbtx)
 {
+    const PSBTAnalysis analysis = AnalyzePSBT(psbtx, GetPSBTAnalysisFlags(m_client_model));
+    if (!analysis.error.empty()) return tr("Invalid transaction: %1").arg(QString::fromStdString(analysis.error).toHtmlEscaped());
     QString tx_description;
     QLatin1String bullet_point(" * ");
     CAmount totalAmount = 0;
     for (const CTxOut& out : psbtx.tx->vout) {
+        if (!MoneyRange(out.nValue) || out.nValue > MAX_MONEY - totalAmount) return tr("Invalid transaction output total.");
         CTxDestination address;
         ExtractDestination(out.scriptPubKey, address);
         totalAmount += out.nValue;
@@ -217,14 +241,16 @@ QString PSBTOperationsDialog::renderTransaction(const PartiallySignedTransaction
         tx_description.append("<br>");
     }
 
-    PSBTAnalysis analysis = AnalyzePSBT(psbtx, GetPSBTAnalysisFlags(m_client_model));
     tx_description.append(bullet_point);
-    if (!*analysis.fee) {
+    if (!analysis.fee) {
         // This happens if the transaction is missing input UTXO information.
         tx_description.append(tr("Unable to calculate transaction fee or total transaction amount."));
     } else {
         tx_description.append(tr("Pays transaction fee: "));
         tx_description.append(BitcoinUnits::formatWithUnit(BitcoinUnit::BTC, *analysis.fee));
+        if (std::any_of(psbtx.inputs.begin(), psbtx.inputs.end(), [](const PSBTInput& input) { return !input.non_witness_utxo; })) {
+            tx_description.append("<br>").append(tr("Some input amounts have no full previous transaction for verification."));
+        }
 
         // add total amount in all subdivision units
         tx_description.append("<hr />");
@@ -288,6 +314,16 @@ size_t PSBTOperationsDialog::couldSignInputs(const PartiallySignedTransaction &p
 
 void PSBTOperationsDialog::showTransactionStatus(const PartiallySignedTransaction &psbtx) {
     PSBTAnalysis analysis = AnalyzePSBT(psbtx, GetPSBTAnalysisFlags(m_client_model));
+    if (!analysis.error.empty()) {
+        showStatus(QString::fromStdString(analysis.error), StatusLevel::ERR);
+        m_ui->signTransactionButton->setEnabled(false);
+        m_ui->broadcastTransactionButton->setEnabled(false);
+        return;
+    }
+    QStringList issues;
+    for (size_t i = 0; i < analysis.inputs.size(); ++i) {
+        if (analysis.inputs[i].issue) issues.append(tr("Input %1: %2").arg(i).arg(QString::fromStdString(analysis.inputs[i].issue_message)));
+    }
     size_t n_could_sign = couldSignInputs(psbtx);
 
     switch (analysis.next) {
@@ -321,4 +357,5 @@ void PSBTOperationsDialog::showTransactionStatus(const PartiallySignedTransactio
             break;
         }
     }
+    if (!issues.empty()) showStatus(m_ui->statusBar->text() + " " + issues.join(" "), StatusLevel::WARN);
 }

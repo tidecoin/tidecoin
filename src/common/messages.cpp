@@ -112,6 +112,14 @@ bilingual_str PSBTErrorString(PSBTError err)
             return Untranslated("Inputs missing or spent");
         case PSBTError::SIGHASH_MISMATCH:
             return Untranslated("Specified sighash value does not match value stored in PSBT");
+        case PSBTError::SIGHASH_UNSUPPORTED:
+            return Untranslated("Unsupported signature hash type");
+        case PSBTError::SINGLE_WITHOUT_OUTPUT:
+            return Untranslated("SINGLE signature requires an output at the input's index");
+        case PSBTError::MISSING_AMOUNT:
+            return Untranslated("Missing amount");
+        case PSBTError::MISSING_SPENT_AMOUNTS:
+            return Untranslated("Missing amount for another input required by witness v1 signing");
         case PSBTError::PQHD_ORIGIN_MISMATCH:
             return Untranslated("PQHD origin conflicts with wallet metadata");
         case PSBTError::EXTERNAL_SIGNER_NOT_FOUND:

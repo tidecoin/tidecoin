@@ -39,6 +39,7 @@ struct PartiallySignedTransaction;
 struct bilingual_str;
 namespace common {
 enum class PSBTError;
+struct PSBTInputError;
 } // namespace common
 namespace node {
 enum class TransactionError;
@@ -221,7 +222,7 @@ public:
         size_t* n_signed,
         PartiallySignedTransaction& psbtx,
         bool& complete,
-        bool include_pqhd_origins = false) = 0;
+        bool include_pqhd_origins = false, std::vector<common::PSBTInputError>* input_errors = nullptr) = 0;
 
     //! Get balances.
     virtual WalletBalances getBalances() = 0;

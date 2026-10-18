@@ -76,11 +76,27 @@ UniValue ExternalSigner::GetDescriptors(const int account) const
     return RunCommandParseJSON(Cat(Cat(m_command, {"--fingerprint", m_fingerprint}), Cat(NetworkArg(), {"getdescriptors", "--account", strprintf("%d", account)})));
 }
 
-bool ExternalSigner::SignTransaction(PartiallySignedTransaction& psbtx, std::string& error, unsigned int script_verify_flags)
+bool ExternalSigner::SignTransaction(PartiallySignedTransaction& psbtx, std::string& error, unsigned int script_verify_flags,
+                                     const std::vector<bool>* targets, std::optional<int> requested)
 {
+    auto staged = psbtx;
+    if (targets) {
+        if (targets->size() != staged.inputs.size()) { error = "Invalid signing targets"; return false; }
+        for (size_t i = 0; i < targets->size(); ++i) {
+            if (!(*targets)[i]) continue;
+            const int mode = requested.value_or(SIGHASH_ALL);
+            if (SingleWithoutOutput(mode, i, staged.tx->vout.size()) || !IsSupportedSighash(mode)) { error = "Invalid signing mode or missing SINGLE output"; return false; }
+            auto& input = staged.inputs[i];
+            if (input.sighash_type && *input.sighash_type != mode) { error = "Conflicting signing mode"; return false; }
+            for (const auto& [_, sig] : input.partial_sigs) {
+                if (sig.second.empty() || sig.second.back() != mode || sig.second.back() != input.sighash_type.value_or(SIGHASH_ALL)) { error = "Conflicting existing signature mode"; return false; }
+            }
+            if (mode != SIGHASH_ALL) input.sighash_type = mode;
+        }
+    }
     // Serialize the PSBT
     DataStream ssTx{};
-    ssTx << psbtx;
+    ssTx << staged;
     // The wallet checks enrolled public descriptors before selecting this signer.
 
     const auto command{Cat(Cat(m_command, {"--stdin", "--fingerprint", m_fingerprint}), NetworkArg())};
@@ -105,7 +121,24 @@ bool ExternalSigner::SignTransaction(PartiallySignedTransaction& psbtx, std::str
         return false;
     }
 
-    return MergeSignatures(psbtx, signer_psbtx, error, script_verify_flags);
+    if (!MergeSignatures(staged, signer_psbtx, error, script_verify_flags, targets)) return false;
+    const auto txdata = PrecomputePSBTData(staged);
+    for (size_t i = 0; i < staged.inputs.size(); ++i) {
+        if (!psbtx.inputs[i].sighash_type && staged.inputs[i].sighash_type && staged.inputs[i].partial_sigs == psbtx.inputs[i].partial_sigs) {
+            // A completed signatureless path does not establish that the device
+            // created a signature with the staged non-default mode.
+            bool signed_final{false};
+            CTxOut utxo;
+            if (PSBTInputSigned(staged.inputs[i]) && staged.GetInputUTXO(utxo, i)) {
+                const MutableTransactionSignatureChecker checker{&*staged.tx, static_cast<unsigned int>(i), utxo.nValue, txdata, MissingDataBehavior::FAIL, !(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT)};
+                const SignatureCheckObserver observer{checker, i, staged.tx->vout.size()};
+                signed_final = VerifyScript(staged.inputs[i].final_script_sig, utxo.scriptPubKey, &staged.inputs[i].final_script_witness, script_verify_flags, observer) && observer.successful_signature;
+            }
+            if (!signed_final) staged.inputs[i].sighash_type.reset();
+        }
+    }
+    psbtx = std::move(staged);
+    return true;
 }
 
 namespace {
@@ -156,7 +189,7 @@ public:
 } // namespace
 
 bool ExternalSigner::MergeSignatures(PartiallySignedTransaction& psbt, const PartiallySignedTransaction& response,
-                                     std::string& error, unsigned int script_verify_flags)
+                                     std::string& error, unsigned int script_verify_flags, const std::vector<bool>* targets)
 {
     const auto fail = [&](const char* reason) { error = reason; return false; };
     if (!psbt.tx || !response.tx || psbt.tx->GetHash() != response.tx->GetHash() ||
@@ -186,20 +219,31 @@ bool ExternalSigner::MergeSignatures(PartiallySignedTransaction& psbt, const Par
         }
     }
     auto merged = psbt;
+    if (targets && targets->size() != psbt.inputs.size()) return fail("Invalid signing targets");
+    const auto request_txdata = PrecomputePSBTData(psbt);
     for (size_t i = 0; i < merged.inputs.size(); ++i) {
         auto& input = merged.inputs[i];
         const auto& returned = response.inputs[i];
         const int sighash = input.sighash_type.value_or(SIGHASH_ALL);
         for (const auto& [key, sig] : returned.partial_sigs) {
+            if (const auto existing = input.partial_sigs.find(key); existing != input.partial_sigs.end()) {
+                if (existing->second != sig) return fail("Signer changed an existing signature");
+                continue;
+            }
+            if (targets && !(*targets)[i]) return fail("Signer signed an unrelated input");
             if (sig.second.empty() || sig.second.back() != sighash) return fail("Signer used an unexpected sighash type");
+            if (!IsSupportedSighash(sig.second.back()) || SingleWithoutOutput(sig.second.back(), i, psbt.tx->vout.size())) return fail("Signer returned an unsupported signature mode or SINGLE without output");
+            if (!VerifyPSBTPartialSignature(psbt, i, sig, request_txdata, script_verify_flags)) return fail("Signer returned an invalid partial signature");
             const auto [it, inserted] = input.partial_sigs.emplace(key, sig);
             if (!inserted && it->second != sig) return fail("Signer changed an existing signature");
         }
         if (!returned.final_script_sig.empty()) {
+            if (targets && !(*targets)[i] && input.final_script_sig != returned.final_script_sig) return fail("Signer finalized an unrelated input");
             if (!input.final_script_sig.empty() && input.final_script_sig != returned.final_script_sig) return fail("Signer changed an existing final script");
             input.final_script_sig = returned.final_script_sig;
         }
         if (!returned.final_script_witness.IsNull()) {
+            if (targets && !(*targets)[i] && input.final_script_witness.stack != returned.final_script_witness.stack) return fail("Signer finalized an unrelated input");
             if (!input.final_script_witness.IsNull() && input.final_script_witness.stack != returned.final_script_witness.stack) return fail("Signer changed an existing final witness");
             input.final_script_witness = returned.final_script_witness;
         }
@@ -215,9 +259,14 @@ bool ExternalSigner::MergeSignatures(PartiallySignedTransaction& psbt, const Par
         // Do not impose this signing request's default on a previously finalized,
         // verified input from another participant whose sighash field was removed.
         const bool already_verified = PSBTInputSignedAndVerified(psbt, i, &txdata, script_verify_flags);
-        const RequestedSighashChecker requested{checker, already_verified ? std::nullopt : std::optional{input.sighash_type.value_or(SIGHASH_ALL)}};
+        const SignatureCheckObserver observer{checker, i, merged.tx->vout.size()};
+        const RequestedSighashChecker requested{observer, already_verified ? std::nullopt : std::optional{input.sighash_type.value_or(SIGHASH_ALL)}};
         if (!VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, script_verify_flags, requested) || !requested.SighashMatches()) {
             return fail("Signer returned an invalid final script or unexpected sighash type");
+        }
+        if (!already_verified && (observer.single_without_output ||
+            std::any_of(observer.modes.begin(), observer.modes.end(), [](int mode) { return !IsSupportedSighash(mode); }))) {
+            return fail("Signer returned an unsupported signature mode or SINGLE without output");
         }
     }
     psbt = std::move(merged);

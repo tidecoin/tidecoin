@@ -1025,7 +1025,10 @@ protected:
         return ret;
     }
 
-    bool IsSegwit() const { return m_subdescriptor_args[0]->GetOutputType() == OutputType::BECH32; }
+    bool IsSegwit() const {
+        const auto type = m_subdescriptor_args[0]->GetOutputType();
+        return type == OutputType::BECH32 || type == OutputType::BECH32PQ;
+    }
 
 public:
     SHDescriptor(std::unique_ptr<DescriptorImpl> desc) : DescriptorImpl({}, std::move(desc), "sh") {}
@@ -1752,7 +1755,7 @@ std::vector<std::unique_ptr<DescriptorImpl>> ParseScript(uint32_t& key_exp_index
         error = "Can only have wsh() at top level or inside sh()";
         return {};
     }
-    if (ctx == ParseScriptContext::TOP && Func("wsh512", expr)) {
+    if ((ctx == ParseScriptContext::TOP || ctx == ParseScriptContext::P2SH) && Func("wsh512", expr)) {
         auto descs = ParseScript(key_exp_index, expr, ParseScriptContext::P2WSH, out, error);
         if (descs.empty() || expr.size()) return {};
         for (auto& desc : descs) {
@@ -1760,7 +1763,7 @@ std::vector<std::unique_ptr<DescriptorImpl>> ParseScript(uint32_t& key_exp_index
         }
         return ret;
     } else if (Func("wsh512", expr)) {
-        error = "Can only have wsh512() at top level";
+        error = "Can only have wsh512() at top level or inside sh()";
         return {};
     }
     if (ctx == ParseScriptContext::TOP && Func("addr", expr)) {
@@ -1940,8 +1943,11 @@ std::unique_ptr<DescriptorImpl> InferScript(const CScript& script, ParseScriptCo
         CScriptID scriptid{RIPEMD160(data[0])};
         CScript subscript;
         if (provider.GetCScript(scriptid, subscript)) {
-            auto sub = InferScript(subscript, ParseScriptContext::P2WSH, provider);
-            if (sub) return std::make_unique<WSH512Descriptor>(std::move(sub));
+            const WitnessV1ScriptHash512 commitment{subscript};
+            if (std::equal(data[0].begin(), data[0].end(), commitment.begin(), commitment.end())) {
+                auto sub = InferScript(subscript, ParseScriptContext::P2WSH, provider);
+                if (sub) return std::make_unique<WSH512Descriptor>(std::move(sub));
+            }
         }
     }
     if (ctx == ParseScriptContext::P2WSH) {

@@ -1306,7 +1306,7 @@ bool DescriptorScriptPubKeyMan::CanProvide(const CScript& script, SignatureData&
     return IsMine(script);
 }
 
-bool DescriptorScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, std::optional<unsigned int> script_verify_flags) const
+bool DescriptorScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, std::optional<unsigned int> script_verify_flags, const std::set<COutPoint>* missing_amounts) const
 {
     std::unique_ptr<FlatSigningProvider> keys = std::make_unique<FlatSigningProvider>();
     for (const auto& coin_pair : coins) {
@@ -1318,7 +1318,7 @@ bool DescriptorScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const s
     }
 
     const unsigned int effective_flags = script_verify_flags.value_or(STANDARD_SCRIPT_VERIFY_FLAGS);
-    return ::SignTransaction(tx, keys.get(), coins, sighash, input_errors, effective_flags);
+    return ::SignTransaction(tx, keys.get(), coins, sighash, input_errors, effective_flags, missing_amounts);
 }
 
 SigningResult DescriptorScriptPubKeyMan::SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const
@@ -1370,8 +1370,9 @@ bool DescriptorScriptPubKeyMan::UpdatePQHDOrigins(const FlatSigningProvider& pro
     return true;
 }
 
-std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbtx, const PrecomputedTransactionData& txdata, std::optional<int> sighash_type, bool sign, int* n_signed, bool finalize, bool include_pqhd_origins, std::optional<unsigned int> script_verify_flags) const
+std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbtx, const PrecomputedTransactionData& txdata, std::optional<int> sighash_type, bool sign, int* n_signed, bool finalize, bool include_pqhd_origins, std::optional<unsigned int> script_verify_flags, std::vector<common::PSBTInputError>* input_errors) const
 {
+    std::optional<PSBTError> refusal;
     const unsigned int effective_flags = script_verify_flags.value_or(STANDARD_SCRIPT_VERIFY_FLAGS);
     if (n_signed) {
         *n_signed = 0;
@@ -1469,18 +1470,19 @@ std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTran
         if (!UpdatePQHDOrigins(*keys, input.m_proprietary, PSBT_IN_PROPRIETARY, include_pqhd_origins)) return PSBTError::PQHD_ORIGIN_MISMATCH;
         if (PSBTInputSigned(input)) continue;
 
-        PSBTError res = SignPSBTInput(HidingSigningProvider(keys.get(), /*hide_secret=*/!sign), psbtx, i, &txdata, sighash_type, nullptr, finalize, effective_flags);
+        const auto previous_signatures = input.partial_sigs.size();
+        PSBTError res = SignPSBTInput(HidingSigningProvider(keys.get(), /*hide_secret=*/!sign), psbtx, i, &txdata, sighash_type, nullptr, finalize, effective_flags, sign ? PSBTInputIntent::SIGN : PSBTInputIntent::INSPECT);
         if (res != PSBTError::OK && res != PSBTError::INCOMPLETE) {
-            return res;
+            // Public filling preserves unresolved mode metadata for analysis;
+            // it does not authorize signing or newly finalize conflicting data.
+            if (!sign && (res == PSBTError::SIGHASH_MISMATCH || res == PSBTError::SIGHASH_UNSUPPORTED || res == PSBTError::SINGLE_WITHOUT_OUTPUT)) continue;
+            if (input_errors) input_errors->push_back({i, sighash_type.value_or(SIGHASH_ALL), input.sighash_type, res});
+            if (!refusal) refusal = res;
+            continue;
         }
 
-        bool signed_one = PSBTInputSigned(input);
-        if (n_signed && (signed_one || !sign)) {
-            // If sign is false, we assume that we _could_ sign if we get here. This
-            // will never have false negatives; it is hard to tell under what i
-            // circumstances it could have false positives.
-            (*n_signed)++;
-        }
+        const bool signed_one = PSBTInputSigned(input) || input.partial_sigs.size() > previous_signatures;
+        if (n_signed && (sign ? signed_one : !keys->pubkeys.empty())) ++*n_signed;
     }
 
     for (unsigned int i = 0; i < psbtx.tx->vout.size(); ++i) {
@@ -1498,7 +1500,7 @@ std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTran
         }
     }
 
-    return {};
+    return refusal;
 }
 
 std::unique_ptr<CKeyMetadata> DescriptorScriptPubKeyMan::GetMetadata(const CTxDestination& dest) const

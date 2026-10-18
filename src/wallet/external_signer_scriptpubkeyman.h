@@ -40,7 +40,9 @@ class ExternalSignerScriptPubKeyMan : public DescriptorScriptPubKeyMan
   */
  util::Result<void> DisplayAddress(const CTxDestination& dest, const ExternalSigner& signer) const;
 
-  std::optional<common::PSBTError> FillPSBT(PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata, std::optional<int> sighash_type = std::nullopt, bool sign = true, int* n_signed = nullptr, bool finalize = true, bool include_pqhd_origins = false, std::optional<unsigned int> script_verify_flags = std::nullopt) const override;
+  std::optional<common::PSBTError> CheckPSBTSigningIntent(const PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata, int mode, unsigned int flags, std::vector<common::PSBTInputError>* input_errors) const override;
+
+  std::optional<common::PSBTError> FillPSBT(PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata, std::optional<int> sighash_type = std::nullopt, bool sign = true, int* n_signed = nullptr, bool finalize = true, bool include_pqhd_origins = false, std::optional<unsigned int> script_verify_flags = std::nullopt, std::vector<common::PSBTInputError>* input_errors = nullptr) const override;
 };
 } // namespace wallet
 #endif // BITCOIN_WALLET_EXTERNAL_SIGNER_SCRIPTPUBKEYMAN_H

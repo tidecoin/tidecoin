@@ -397,3 +397,28 @@ their foundational work.
 The post-quantum cryptographic integration, PQHD wallet, ML-KEM transport,
 YespowerTIDE mining, AuxPoW infrastructure, and script extensions were
 developed by the Tidecoin contributors.
+
+### PSBT signing and witness-v1 hash types
+
+New signatures refuse SINGLE when the input has no corresponding output.
+PSBT inspection uses per-input declarations, while signing requires explicit
+matching consent for nondefault modes on signing targets. Public wallet updates
+can deliberately declare modes, including ALL; combining preserves declarations.
+Raw signing tracks missing amounts separately and preserves known node amounts.
+Qt displays missing/zero fees and excessive totals correctly. Wrapped wsh512
+supports descriptor round trips and verified, transaction-wide PSBT cleanup.
+
+Active witness-v1 nonempty signature arguments are restricted to hash-type
+bytes 01, 02, 03, 81, 82 and 83. Other bytes
+cause SIG_HASHTYPE, including unused arguments of an executed multisig opcode.
+Empty signatures, legacy and witness-v0 verification remain unchanged. Activation
+heights and the committed v1 message layout are unchanged. Include this change
+in the planned testnet relaunch; deploying after that relaunch requires a further
+coordinated restart. Existing testnet history is not a supported migration path.
+
+Mempool admission and relay also require the six defined hash-type bytes for
+nonempty legacy and witness-v0 signature arguments. This policy does not change
+block validity, existing-final verification, or raw signing, and requires no
+activation or chain restart. Transactions from other software using undefined
+bytes will no longer relay through upgraded nodes, but may still appear in valid
+blocks. Empty signatures retain their existing behavior.

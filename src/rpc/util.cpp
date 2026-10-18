@@ -364,6 +364,10 @@ RPCErrorCode RPCErrorFromPSBTError(PSBTError err)
             return RPC_INVALID_PARAMETER;
         case PSBTError::UTXO_MISMATCH:
         case PSBTError::SIGHASH_MISMATCH:
+        case PSBTError::SIGHASH_UNSUPPORTED:
+        case PSBTError::SINGLE_WITHOUT_OUTPUT:
+        case PSBTError::MISSING_AMOUNT:
+        case PSBTError::MISSING_SPENT_AMOUNTS:
         case PSBTError::PQHD_ORIGIN_MISMATCH:
             return RPC_DESERIALIZATION_ERROR;
         default: break;

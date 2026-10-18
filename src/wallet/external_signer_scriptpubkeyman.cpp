@@ -104,19 +104,44 @@ util::Result<void> ExternalSignerScriptPubKeyMan::DisplayAddress(const CTxDestin
     return util::Result<void>();
 }
 
+std::optional<PSBTError> ExternalSignerScriptPubKeyMan::CheckPSBTSigningIntent(const PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata, int mode, unsigned int flags, std::vector<common::PSBTInputError>* input_errors) const
+{
+    std::optional<PSBTError> result;
+    for (size_t i = 0; i < psbt.inputs.size(); ++i) {
+        if (PSBTInputSignedAndVerified(psbt, i, &txdata, flags)) continue;
+        CTxOut utxo;
+        if (!psbt.GetInputUTXO(utxo, i) || !GetSolvingProvider(utxo.scriptPubKey)) continue;
+        const auto& input = psbt.inputs[i];
+        std::optional<PSBTError> error;
+        if (SingleWithoutOutput(mode, i, psbt.tx->vout.size())) error = PSBTError::SINGLE_WITHOUT_OUTPUT;
+        else if (!IsSupportedSighash(mode)) error = PSBTError::SIGHASH_UNSUPPORTED;
+        else if (input.sighash_type && *input.sighash_type != mode) error = PSBTError::SIGHASH_MISMATCH;
+        else for (const auto& [_, sig] : input.partial_sigs) {
+            if (sig.second.empty() || sig.second.back() != mode || sig.second.back() != input.sighash_type.value_or(SIGHASH_ALL)) error = PSBTError::SIGHASH_MISMATCH;
+        }
+        if (error) {
+            if (!result) result = error;
+            if (input_errors) input_errors->push_back({i, mode, input.sighash_type, *error});
+        }
+    }
+    return result;
+}
+
 // If sign is true, transaction must previously have been filled
-std::optional<PSBTError> ExternalSignerScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata, std::optional<int> sighash_type, bool sign, int* n_signed, bool finalize, bool include_pqhd_origins, std::optional<unsigned int> script_verify_flags) const
+std::optional<PSBTError> ExternalSignerScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata, std::optional<int> sighash_type, bool sign, int* n_signed, bool finalize, bool include_pqhd_origins, std::optional<unsigned int> script_verify_flags, std::vector<common::PSBTInputError>* input_errors) const
 {
     if (!sign) {
         return DescriptorScriptPubKeyMan::FillPSBT(psbt, txdata, sighash_type, false, n_signed, finalize, include_pqhd_origins, script_verify_flags);
     }
 
     const unsigned int effective_flags = script_verify_flags.value_or(STANDARD_SCRIPT_VERIFY_FLAGS);
+    sighash_type = sighash_type.value_or(SIGHASH_ALL);
     if (n_signed) *n_signed = 0;
     if (const auto error = DescriptorScriptPubKeyMan::FillPSBT(psbt, txdata, sighash_type, false, nullptr, false, include_pqhd_origins, effective_flags)) return error;
 
     // Do not contact a signer for unrelated managers or already verified inputs.
     bool needs_signer{false};
+    std::vector<bool> targets(psbt.inputs.size());
     std::vector<bool> previously_verified(psbt.inputs.size());
     for (size_t i = 0; i < psbt.inputs.size(); ++i) {
         previously_verified[i] = PSBTInputSignedAndVerified(psbt, i, &txdata, effective_flags);
@@ -130,7 +155,20 @@ std::optional<PSBTError> ExternalSignerScriptPubKeyMan::FillPSBT(PartiallySigned
         } else if (!input.witness_utxo.IsNull()) {
             script = input.witness_utxo.scriptPubKey;
         }
-        needs_signer |= static_cast<bool>(GetSolvingProvider(script));
+        targets[i] = static_cast<bool>(GetSolvingProvider(script));
+        if (targets[i]) {
+            const auto refuse = [&](PSBTError error) -> std::optional<PSBTError> {
+                if (input_errors) input_errors->push_back({i, *sighash_type, input.sighash_type, error});
+                return error;
+            };
+            if (SingleWithoutOutput(*sighash_type, i, psbt.tx->vout.size())) return refuse(PSBTError::SINGLE_WITHOUT_OUTPUT);
+            if (!IsSupportedSighash(*sighash_type)) return refuse(PSBTError::SIGHASH_UNSUPPORTED);
+            if (input.sighash_type && input.sighash_type != sighash_type) return refuse(PSBTError::SIGHASH_MISMATCH);
+            for (const auto& [_, sig] : input.partial_sigs) {
+                if (sig.second.empty() || sig.second.back() != *sighash_type || sig.second.back() != input.sighash_type.value_or(SIGHASH_ALL)) return refuse(PSBTError::SIGHASH_MISMATCH);
+            }
+        }
+        needs_signer |= targets[i];
     }
     if (!needs_signer) return {};
 
@@ -145,7 +183,7 @@ std::optional<PSBTError> ExternalSignerScriptPubKeyMan::FillPSBT(PartiallySigned
         return PSBTError::EXTERNAL_SIGNER_FAILED;
     }
     std::string failure_reason;
-    if (!signer->SignTransaction(psbt, failure_reason, effective_flags)) {
+    if (!signer->SignTransaction(psbt, failure_reason, effective_flags, &targets, sighash_type)) {
         LogWarning("Failed to sign: %s\n", failure_reason);
         return PSBTError::EXTERNAL_SIGNER_FAILED;
     }

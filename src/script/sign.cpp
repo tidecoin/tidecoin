@@ -6,6 +6,7 @@
 #include <script/sign.h>
 
 #include <consensus/amount.h>
+#include <common/messages.h>
 #include <key.h>
 #include <policy/policy.h>
 #include <primitives/transaction.h>
@@ -24,6 +25,22 @@
 typedef std::vector<unsigned char> valtype;
 
 static constexpr bool ALLOW_LEGACY_STANDARD = !(STANDARD_SCRIPT_VERIFY_FLAGS & SCRIPT_VERIFY_PQ_STRICT);
+
+bool SignatureCheckObserver::CheckPostQuantumSignature(const std::vector<unsigned char>& sig, const std::vector<unsigned char>& key,
+                                                       const CScript& script, SigVersion version) const
+{
+    const bool result = m_checker.CheckPostQuantumSignature(sig, key, script, version);
+    if (!sig.empty()) {
+        const int mode = sig.back();
+        modes.insert(mode);
+        successful_signature |= result;
+        all_full_commitment &= version == SigVersion::WITNESS_V1_512 && (mode == SIGHASH_ALL || mode == SIGHASH_NONE || mode == SIGHASH_SINGLE);
+        successful_v1 |= result && version == SigVersion::WITNESS_V1_512 && IsSupportedSighash(mode);
+        single_without_output |= SingleWithoutOutput(mode, m_input, m_outputs);
+        legacy_single_without_output |= result && version == SigVersion::BASE && SingleWithoutOutput(mode, m_input, m_outputs);
+    }
+    return result;
+}
 
 MutableTransactionSignatureCreator::MutableTransactionSignatureCreator(const CMutableTransaction& tx, unsigned int input_idx, const CAmount& amount, int hash_type)
     : MutableTransactionSignatureCreator(tx, input_idx, amount, nullptr, hash_type, ALLOW_LEGACY_STANDARD)
@@ -56,6 +73,21 @@ bool MutableTransactionSignatureCreator::CreateSig(const SigningProvider& provid
     if (!provider.GetKey(address, key))
         return false;
 
+    const auto refuse = [&](common::PSBTError error) { m_error = error; return false; };
+    // Refuse SINGLE ((nHashType & 0x1f) == SIGHASH_SINGLE, the same test the
+    // signature hashes use) when the input has no output at its index. Legacy
+    // hashing returns the constant 1 (an unbound, reusable signature); witness
+    // v0 still commits to the spent input but uses a zero output hash, so outputs
+    // are not committed; witness v1 fails in SignatureHash512. Consensus
+    // verification is unchanged.
+    if (SingleWithoutOutput(nHashType, nIn, m_txto.vout.size())) return refuse(common::PSBTError::SINGLE_WITHOUT_OUTPUT);
+    if (!IsSupportedSighash(nHashType)) return refuse(common::PSBTError::SIGHASH_UNSUPPORTED);
+    if ((m_declared_sighash && *m_declared_sighash != nHashType) || !m_existing_signatures_match) return refuse(common::PSBTError::SIGHASH_MISMATCH);
+    if (sigversion != SigVersion::BASE && !m_amount_known) {
+        return refuse(common::PSBTError::MISSING_AMOUNT);
+    }
+    if (sigversion == SigVersion::WITNESS_V1_512 && !(nHashType & SIGHASH_ANYONECANPAY) && !m_all_amounts_known) return refuse(common::PSBTError::MISSING_SPENT_AMOUNTS);
+
     // Signing without known amount does not work in witness scripts.
     if ((sigversion == SigVersion::WITNESS_V0 || sigversion == SigVersion::WITNESS_V1_512) && !MoneyRange(amount)) return false;
 
@@ -70,6 +102,7 @@ bool MutableTransactionSignatureCreator::CreateSig(const SigningProvider& provid
             return false;
         }
         vchSig.push_back((unsigned char)nHashType);
+        m_signed = true;
         return true;
     }
 
@@ -77,6 +110,7 @@ bool MutableTransactionSignatureCreator::CreateSig(const SigningProvider& provid
     if (!key.Sign(hash, vchSig, false, 0, m_allow_legacy))
         return false;
     vchSig.push_back((unsigned char)nHashType);
+    m_signed = true;
     return true;
 }
 
@@ -123,7 +157,7 @@ static bool CreateSig(const BaseSignatureCreator& creator, SignatureData& sigdat
         return true;
     }
     // Could not make signature or signature not found, add keyid to missing
-    sigdata.missing_sigs.push_back(keyid);
+    if (creator.Error() == common::PSBTError::OK) sigdata.missing_sigs.push_back(keyid);
     return false;
 }
 
@@ -338,7 +372,7 @@ static bool SignStep(const SigningProvider& provider, const BaseSignatureCreator
             return true;
         }
         // Could not find witnessScript, add to missing
-        sigdata.missing_witness_script = uint256(vSolutions[0]);
+        sigdata.missing_witness_script = vSolutions[0];
         return false;
     case TxoutType::WITNESS_V1_SCRIPTHASH_512: {
         // Provider keys differ from CScriptID(script) for witness v1. Check
@@ -349,7 +383,10 @@ static bool SignStep(const SigningProvider& provider, const BaseSignatureCreator
         if (!provider.GetCScript(CScriptID{RIPEMD160(vSolutions[0])}, scriptRet) || !matches(scriptRet)) {
             scriptRet = sigdata.witness_script;
         }
-        if (!matches(scriptRet)) return false;
+        if (!matches(scriptRet)) {
+            sigdata.missing_witness_script = vSolutions[0];
+            return false;
+        }
         ret.emplace_back(scriptRet.begin(), scriptRet.end());
         return true;
     }
@@ -695,9 +732,8 @@ bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, 
     return SignTransaction(mtx, keystore, coins, nHashType, input_errors, STANDARD_SCRIPT_VERIFY_FLAGS);
 }
 
-bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, const std::map<COutPoint, Coin>& coins, int nHashType, std::map<int, bilingual_str>& input_errors, unsigned int script_verify_flags)
+bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, const std::map<COutPoint, Coin>& coins, int nHashType, std::map<int, bilingual_str>& input_errors, unsigned int script_verify_flags, const std::set<COutPoint>* missing_amounts)
 {
-    bool fHashSingle = ((nHashType & ~SIGHASH_ANYONECANPAY) == SIGHASH_SINGLE);
     const bool allow_legacy = !(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT);
 
     // Use CTransaction for the constant parts of the
@@ -709,7 +745,7 @@ bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, 
     for (unsigned int i = 0; i < mtx.vin.size(); ++i) {
         CTxIn& txin = mtx.vin[i];
         auto coin = coins.find(txin.prevout);
-        if (coin == coins.end() || coin->second.IsSpent()) {
+        if (coin == coins.end() || coin->second.IsSpent() || (missing_amounts && missing_amounts->contains(txin.prevout))) {
             txdata.Init(txConst, /*spent_outputs=*/{}, /*force=*/true);
             break;
         } else {
@@ -729,20 +765,30 @@ bool SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, 
             continue;
         }
         const CScript& prevPubKey = coin->second.out.scriptPubKey;
-        const CAmount& amount = coin->second.out.nValue;
-
-        SignatureData sigdata = DataFromTransaction(mtx, i, coin->second.out, script_verify_flags, &txdata);
-        // Only sign SIGHASH_SINGLE if there's a corresponding output:
-        if (!fHashSingle || (i < mtx.vout.size())) {
-            ProduceSignature(*keystore, MutableTransactionSignatureCreator(mtx, i, amount, &txdata, nHashType, allow_legacy), prevPubKey, sigdata, script_verify_flags);
-        }
-
-        UpdateInput(txin, sigdata);
-
-        // amount must be specified for valid segwit signature
-        if (amount == MAX_MONEY && !txin.scriptWitness.IsNull()) {
-            input_errors[i] = _("Missing amount");
+        const bool amount_known = !missing_amounts || !missing_amounts->contains(txin.prevout);
+        const CAmount amount = amount_known ? coin->second.out.nValue : -1;
+        CTxOut signing_output{amount, prevPubKey};
+        SignatureData sigdata = DataFromTransaction(mtx, i, signing_output, script_verify_flags, &txdata);
+        MutableTransactionSignatureCreator creator(mtx, i, amount, &txdata, nHashType, allow_legacy);
+        creator.SetAmountAvailability(!missing_amounts || !missing_amounts->contains(txin.prevout), txdata.m_spent_outputs_ready);
+        ProduceSignature(*keystore, creator, prevPubKey, sigdata, script_verify_flags);
+        if (creator.Error() != common::PSBTError::OK) {
+            input_errors[i] = common::PSBTErrorString(creator.Error());
             continue;
+        }
+        // Preserve the original bytes, including foreign inputs and existing
+        // signatures. Producing solving data can also produce placeholders.
+        if (!SingleWithoutOutput(nHashType, i, mtx.vout.size())) UpdateInput(txin, sigdata);
+        // A later manager without the key must not replace an earlier manager's
+        // precise signing refusal with a generic incomplete-script diagnostic.
+        if (const auto it = input_errors.find(i); it != input_errors.end()) {
+            bool signing_refusal{false};
+            for (auto error : {common::PSBTError::SINGLE_WITHOUT_OUTPUT, common::PSBTError::MISSING_AMOUNT,
+                               common::PSBTError::MISSING_SPENT_AMOUNTS, common::PSBTError::SIGHASH_UNSUPPORTED,
+                               common::PSBTError::SIGHASH_MISMATCH}) {
+                signing_refusal |= it->second.original == common::PSBTErrorString(error).original;
+            }
+            if (signing_refusal) continue;
         }
 
         ScriptError serror = SCRIPT_ERR_OK;

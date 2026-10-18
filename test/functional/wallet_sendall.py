@@ -164,6 +164,18 @@ class SendallTest(BitcoinTestFramework):
         assert_raises_rpc_error(-6, "Dynamically assigned remainder results in dust output.", self.wallet.sendall,
                 [{self.recipient: pre_sendall_balance - fee - Decimal(0.00000010)}, self.remainder_target])
 
+    @cleanup
+    def sendall_rejects_excessive_specified_total(self):
+        self.log.info("Test sendall rejects specified amounts whose sum exceeds MAX_MONEY")
+        self.add_utxos([1])
+        assert_raises_rpc_error(
+            -8,
+            "Transaction total amount is too large",
+            self.wallet.sendall,
+            [{self.recipient: 21000000}, {self.split_target: 21000000}, self.remainder_target],
+        )
+        assert_equal(1, self.wallet.getbalances()["mine"]["trusted"])
+
     # @cleanup not needed because different wallet used
     def sendall_negative_effective_value(self):
         self.log.info("Test that sendall fails if all UTXOs have negative effective value")
@@ -500,6 +512,9 @@ class SendallTest(BitcoinTestFramework):
 
         # Sendall fails when trying to spend more than the balance
         self.sendall_invalid_amounts()
+
+        # Specified amounts are each within range, but their sum is not
+        self.sendall_rejects_excessive_specified_total()
 
         # Sendall fails when wallet has no economically spendable UTXOs
         self.sendall_negative_effective_value()

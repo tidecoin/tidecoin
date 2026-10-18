@@ -772,7 +772,7 @@ public:
     /** Fetch the inputs and sign with SIGHASH_ALL. */
     bool SignTransaction(CMutableTransaction& tx) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     /** Sign the tx given the input coins and sighash. */
-    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const;
+    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, const std::set<COutPoint>* missing_amounts = nullptr) const;
     SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const;
 
     /**
@@ -796,7 +796,7 @@ public:
                   bool sign = true,
                   size_t* n_signed = nullptr,
                   bool finalize = true,
-                  bool include_pqhd_origins = false) const;
+                  bool include_pqhd_origins = false, std::vector<common::PSBTInputError>* input_errors = nullptr) const;
 
     /**
      * Submit the transaction to the node's mempool and then relay to peers.

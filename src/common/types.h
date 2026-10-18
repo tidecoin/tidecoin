@@ -13,17 +13,31 @@
 #ifndef BITCOIN_COMMON_TYPES_H
 #define BITCOIN_COMMON_TYPES_H
 
+#include <cstddef>
+#include <optional>
+
 namespace common {
 enum class PSBTError {
     UTXO_MISMATCH,
     MISSING_INPUTS,
     SIGHASH_MISMATCH,
+    SIGHASH_UNSUPPORTED,
+    SINGLE_WITHOUT_OUTPUT,
+    MISSING_AMOUNT,
+    MISSING_SPENT_AMOUNTS,
     PQHD_ORIGIN_MISMATCH,
     EXTERNAL_SIGNER_NOT_FOUND,
     EXTERNAL_SIGNER_FAILED,
     UNSUPPORTED,
     INCOMPLETE,
     OK,
+};
+
+struct PSBTInputError {
+    size_t input;
+    int requested_mode;
+    std::optional<int> declared_mode;
+    PSBTError error;
 };
 } // namespace common
 

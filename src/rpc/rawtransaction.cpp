@@ -180,7 +180,7 @@ static std::vector<RPCArg> CreateTxDoc()
 
 // Update PSBT with information from the mempool, the UTXO set, the txindex, and the provided descriptors.
 // Optionally, sign the inputs that we can using information from the descriptors.
-PartiallySignedTransaction ProcessPSBT(const std::string& psbt_string, const std::any& context, const HidingSigningProvider& provider, std::optional<int> sighash_type, bool finalize, std::optional<unsigned int> script_verify_flags)
+PartiallySignedTransaction ProcessPSBT(const std::string& psbt_string, const std::any& context, const HidingSigningProvider& provider, std::optional<int> sighash_type, bool finalize, std::optional<unsigned int> script_verify_flags, PSBTInputIntent intent)
 {
     // Unserialize the transactions
     PartiallySignedTransaction psbtx;
@@ -254,13 +254,11 @@ PartiallySignedTransaction ProcessPSBT(const std::string& psbt_string, const std
             continue;
         }
 
-        // Update script/keypath information using descriptor data.
-        // Note that SignPSBTInput does a lot more than just constructing ECDSA signatures.
-        // We only actually care about those if our signing provider doesn't hide private
-        // information, as is the case with `descriptorprocesspsbt`
-        // Only error for mismatching sighash types as it is critical that the sighash to sign with matches the PSBT's
-        if (SignPSBTInput(provider, psbtx, /*index=*/i, &txdata, sighash_type, /*out_sigdata=*/nullptr, finalize, script_verify_flags) == common::PSBTError::SIGHASH_MISMATCH) {
-            throw JSONRPCPSBTError(common::PSBTError::SIGHASH_MISMATCH);
+        // Public updates inspect stored modes. Signing refusals apply only when
+        // this provider attempts to create a signature for the input.
+        const auto error = SignPSBTInput(provider, psbtx, /*index=*/i, &txdata, sighash_type, /*out_sigdata=*/nullptr, finalize, script_verify_flags, intent);
+        if (error == common::PSBTError::SIGHASH_MISMATCH || error == common::PSBTError::SIGHASH_UNSUPPORTED || error == common::PSBTError::SINGLE_WITHOUT_OUTPUT) {
+            if (intent == PSBTInputIntent::SIGN) throw JSONRPCPSBTError(error);
         }
     }
 
@@ -831,10 +829,10 @@ static RPCHelpMan signrawtransactionwithkey()
     FindCoins(node, coins);
 
     // Parse the prevtxs array
-    ParsePrevouts(request.params[2], &keystore, coins);
+    const auto missing_amounts = ParsePrevouts(request.params[2], &keystore, coins);
 
     UniValue result(UniValue::VOBJ);
-    SignTransaction(mtx, &keystore, coins, request.params[3], result, GetCurrentScriptVerifyFlags(request.context));
+    SignTransaction(mtx, &keystore, coins, request.params[3], result, GetCurrentScriptVerifyFlags(request.context), &missing_amounts);
     return result;
 },
     };
@@ -1554,7 +1552,7 @@ static RPCHelpMan utxoupdatepsbt()
         HidingSigningProvider(&provider, /*hide_secret=*/true),
         /*sighash_type=*/std::nullopt,
         /*finalize=*/false,
-        GetCurrentScriptVerifyFlags(request.context));
+        GetCurrentScriptVerifyFlags(request.context), PSBTInputIntent::INSPECT);
 
     DataStream ssTx{};
     ssTx << psbtx;
@@ -1675,6 +1673,8 @@ static RPCHelpMan analyzepsbt()
                         {
                             {RPCResult::Type::BOOL, "has_utxo", "Whether a UTXO is provided"},
                             {RPCResult::Type::BOOL, "is_final", "Whether the input is finalized"},
+                            {RPCResult::Type::STR, "issue", /*optional=*/true, "Per-input issue: single_without_output, unsupported_sighash, or sighash_mismatch"},
+                            {RPCResult::Type::STR, "issue_message", /*optional=*/true, "Explanation of the per-input issue; inspect this regardless of the next role"},
                             {RPCResult::Type::OBJ, "missing", /*optional=*/true, "Things that are missing that are required to complete this input",
                             {
                                 {RPCResult::Type::ARR, "pubkeys", /*optional=*/true, "",
@@ -1686,7 +1686,7 @@ static RPCHelpMan analyzepsbt()
                                     {RPCResult::Type::STR_HEX, "keyid", "Public key ID, hash160 of the public key, of a public key whose signature is missing"},
                                 }},
                                 {RPCResult::Type::STR_HEX, "redeemscript", /*optional=*/true, "Hash160 of the redeem script that is missing"},
-                                {RPCResult::Type::STR_HEX, "witnessscript", /*optional=*/true, "SHA256 of the witness script that is missing"},
+                                {RPCResult::Type::STR_HEX, "witnessscript", /*optional=*/true, "SHA256 (witness v0) or SHA512 (witness v1) of the witness script that is missing"},
                             }},
                             {RPCResult::Type::STR, "next", /*optional=*/true, "Role of the next person that this input needs to go to"},
                         }},
@@ -1722,6 +1722,12 @@ static RPCHelpMan analyzepsbt()
         input_univ.pushKV("has_utxo", input.has_utxo);
         input_univ.pushKV("is_final", input.is_final);
         input_univ.pushKV("next", PSBTRoleName(input.next));
+        if (input.issue) {
+            const char* code = *input.issue == common::PSBTError::SINGLE_WITHOUT_OUTPUT ? "single_without_output" :
+                               *input.issue == common::PSBTError::SIGHASH_UNSUPPORTED ? "unsupported_sighash" : "sighash_mismatch";
+            input_univ.pushKV("issue", code);
+            input_univ.pushKV("issue_message", input.issue_message);
+        }
 
         if (!input.missing_pubkeys.empty()) {
             UniValue missing_pubkeys_univ(UniValue::VARR);
@@ -1733,7 +1739,7 @@ static RPCHelpMan analyzepsbt()
         if (!input.missing_redeem_script.IsNull()) {
             missing.pushKV("redeemscript", HexStr(input.missing_redeem_script));
         }
-        if (!input.missing_witness_script.IsNull()) {
+        if (!input.missing_witness_script.empty()) {
             missing.pushKV("witnessscript", HexStr(input.missing_witness_script));
         }
         if (!input.missing_sigs.empty()) {
@@ -1775,6 +1781,7 @@ RPCHelpMan descriptorprocesspsbt()
         "descriptorprocesspsbt",
         "Update all segwit inputs in a PSBT with information from output descriptors, the UTXO set or the mempool. \n"
                 "Then, sign using only private keys supplied in the descriptors.\n"
+                "Signing leaves foreign inputs undeclared. To declare a mode for all unfinished inputs, use walletprocesspsbt with sign=false and an explicit sighashtype.\n"
                 "Registered PQHD descriptors may resolve public data through an explicitly selected wallet (-rpcwallet).\n"
                 "This does not authorize use of wallet private keys or seeds for signing; use walletprocesspsbt for wallet signing.\n",
                 {
@@ -1786,7 +1793,7 @@ RPCHelpMan descriptorprocesspsbt()
                              {"range", RPCArg::Type::RANGE, RPCArg::Default{1000}, "Up to what index HD chains should be explored (either end or [begin,end])"},
                         }},
                     }},
-                    {"sighashtype", RPCArg::Type::STR, RPCArg::Default{"ALL"}, "The signature hash type to sign with if not specified by the PSBT. Must be one of\n"
+                    {"sighashtype", RPCArg::Type::STR, RPCArg::Default{"ALL"}, "The signature hash type for new signatures (omitted means ALL). Nondefault signing targets require an explicit matching request. Must be one of\n"
             "       \"ALL\"\n"
             "       \"NONE\"\n"
             "       \"SINGLE\"\n"
@@ -1829,7 +1836,7 @@ RPCHelpMan descriptorprocesspsbt()
         HidingSigningProvider(&provider, /*hide_secret=*/false),
         sighash_type,
         finalize,
-        GetCurrentScriptVerifyFlags(request.context));
+        GetCurrentScriptVerifyFlags(request.context), PSBTInputIntent::SIGN);
 
     // Presence of final fields is not proof that their scripts/signatures verify.
     const auto txdata = PrecomputePSBTData(psbtx);

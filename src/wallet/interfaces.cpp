@@ -400,10 +400,10 @@ public:
         size_t* n_signed,
         PartiallySignedTransaction& psbtx,
         bool& complete,
-        bool include_pqhd_origins) override
+        bool include_pqhd_origins, std::vector<common::PSBTInputError>* input_errors) override
     {
         return m_wallet->FillPSBT(psbtx, complete, sighash_type, sign, n_signed,
-                                  /*finalize=*/true, include_pqhd_origins);
+                                  /*finalize=*/true, include_pqhd_origins, input_errors);
     }
     WalletBalances getBalances() override
     {

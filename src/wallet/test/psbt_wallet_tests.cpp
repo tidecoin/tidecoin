@@ -3,6 +3,9 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <key.h>
+#include <key_io.h>
+#include <script/descriptor.h>
+#include <streams.h>
 #include <node/types.h>
 #include <addresstype.h>
 #include <pq/pq_api.h>
@@ -13,6 +16,8 @@
 #include <test/util/test_controls.h>
 #include <util/strencodings.h>
 #include <wallet/wallet.h>
+
+#include <algorithm>
 
 #include <boost/test/unit_test.hpp>
 #include <test/util/setup_common.h>
@@ -262,6 +267,67 @@ BOOST_AUTO_TEST_CASE(public_fallback_and_multikey_origins)
     }
     BOOST_REQUIRE(m_wallet.Unlock(SecureString{"pass"}));
     BOOST_REQUIRE(!m_wallet.FillPSBT(updated, complete, std::nullopt, true));
+    BOOST_CHECK(complete);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// This small regression suite runs without opting into the expensive wallet suites.
+BOOST_FIXTURE_TEST_SUITE(psbt_wallet_policy_tests, WalletTestingSetup)
+
+BOOST_AUTO_TEST_CASE(psbt_collects_all_refusals_atomically)
+{
+    LOCK(m_wallet.cs_wallet);
+    m_wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+    std::vector<CScript> scripts;
+    for (int i = 0; i < 2; ++i) {
+        CKey key;
+        key.MakeNewKey(pq::SchemeId::FALCON_512);
+        FlatSigningProvider provider;
+        std::string error;
+        auto descriptors = Parse("wpkh(" + EncodeSecret(key) + ")", provider, error, false);
+        BOOST_REQUIRE_EQUAL(descriptors.size(), 1U);
+        WalletDescriptor descriptor(std::move(descriptors[0]), 0, 0, 1, 1);
+        BOOST_REQUIRE(m_wallet.AddWalletDescriptor(descriptor, provider, "", false));
+        scripts.push_back(GetScriptForDestination(WitnessV0KeyHash(key.GetPubKey())));
+    }
+    CMutableTransaction previous;
+    previous.vout = {CTxOut(1000, scripts[0]), CTxOut(1000, scripts[0]), CTxOut(1000, scripts[1])};
+    CMutableTransaction tx;
+    for (int i = 0; i < 3; ++i) tx.vin.emplace_back(previous.GetHash(), i);
+    tx.vout.emplace_back(2000, CScript{} << OP_TRUE);
+    PartiallySignedTransaction original(tx);
+    for (auto& input : original.inputs) input.non_witness_utxo = MakeTransactionRef(previous);
+    const auto bytes = [](const auto& value) { DataStream stream; stream << value; return HexStr(stream); };
+    // Two inputs belong to one manager and the third to another. Reversing
+    // the inputs also checks that diagnostics use transaction input indices.
+    for (bool reverse : {false, true}) {
+        for (bool mixed : {false, true}) {
+            auto request = original;
+            if (reverse) std::reverse(request.tx->vin.begin(), request.tx->vin.end());
+            for (auto& input : request.inputs) input.sighash_type = SIGHASH_NONE;
+            if (mixed) request.inputs[0].sighash_type = SIGHASH_ALL;
+            const auto before = bytes(request);
+            bool complete{true};
+            size_t signed_count{99};
+            std::vector<common::PSBTInputError> errors;
+            const auto error = m_wallet.FillPSBT(request, complete, SIGHASH_ALL, true, &signed_count, true, false, &errors);
+            BOOST_REQUIRE(error);
+            BOOST_CHECK(*error == common::PSBTError::SIGHASH_MISMATCH);
+            BOOST_CHECK(!complete);
+            BOOST_CHECK_EQUAL(signed_count, 0U);
+            BOOST_CHECK_EQUAL(bytes(request), before);
+            BOOST_REQUIRE_EQUAL(errors.size(), mixed ? 2U : 3U);
+            for (size_t i = 0; i < errors.size(); ++i) {
+                BOOST_CHECK_EQUAL(errors[i].input, i + (mixed ? 1 : 0));
+                BOOST_CHECK_EQUAL(errors[i].requested_mode, SIGHASH_ALL);
+                BOOST_REQUIRE(errors[i].declared_mode);
+                BOOST_CHECK_EQUAL(*errors[i].declared_mode, SIGHASH_NONE);
+            }
+        }
+    }
+    bool complete{false};
+    BOOST_REQUIRE(!m_wallet.FillPSBT(original, complete, SIGHASH_ALL, true));
     BOOST_CHECK(complete);
 }
 

@@ -179,6 +179,18 @@ public:
 };
 }
 
+static bool CheckSignatureHashType(const valtype& signature, SigVersion version, unsigned int flags, ScriptError* serror)
+{
+    if (signature.empty()) return true;
+    if (version != SigVersion::WITNESS_V1_512 && !(flags & SCRIPT_VERIFY_DEFINED_HASHTYPE)) return true;
+    switch (signature.back()) {
+    case 0x01: case 0x02: case 0x03: case 0x81: case 0x82: case 0x83:
+        return true;
+    default:
+        return set_error(serror, SCRIPT_ERR_SIG_HASHTYPE);
+    }
+}
+
 static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPubKey, CScript::const_iterator pbegincodehash, CScript::const_iterator pend, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror, bool& fSuccess)
 {
     assert(sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0 || sigversion == SigVersion::WITNESS_V1_512);
@@ -193,6 +205,7 @@ static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPu
             return set_error(serror, SCRIPT_ERR_SIG_FINDANDDELETE);
     }
 
+    if (!CheckSignatureHashType(vchSig, sigversion, flags, serror)) return false;
     fSuccess = checker.CheckPostQuantumSignature(vchSig, vchPubKey, scriptCode, sigversion);
 
     if (!fSuccess && (flags & SCRIPT_VERIFY_NULLFAIL) && vchSig.size())
@@ -944,6 +957,9 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     for (int k = 0; k < nSigsCount; k++)
                     {
                         valtype& vchSig = stacktop(-isig-k);
+                        // Validate every argument before matching, including
+                        // signatures the matching loop may never reach.
+                        if (!CheckSignatureHashType(vchSig, sigversion, flags, serror)) return false;
                         if (sigversion == SigVersion::BASE) {
                             int found = FindAndDelete(scriptCode, CScript() << vchSig);
                             if (found > 0 && (flags & SCRIPT_VERIFY_CONST_SCRIPTCODE))

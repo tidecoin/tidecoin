@@ -69,6 +69,7 @@ static std::map<std::string, unsigned int> mapFlagNames = {
     {std::string("WITNESS_V1_512"), (unsigned int)SCRIPT_VERIFY_WITNESS_V1_512},
     {std::string("CONST_SCRIPTCODE"), (unsigned int)SCRIPT_VERIFY_CONST_SCRIPTCODE},
     {std::string("PQ_STRICT"), (unsigned int)SCRIPT_VERIFY_PQ_STRICT},
+    {std::string("DEFINED_HASHTYPE"), (unsigned int)SCRIPT_VERIFY_DEFINED_HASHTYPE},
 };
 
 unsigned int ParseScriptFlags(std::string strFlags)
@@ -317,6 +318,9 @@ BOOST_FIXTURE_TEST_SUITE(transaction_tests, BasicTestingSetup)
 BOOST_AUTO_TEST_CASE(tx_valid)
 {
     BOOST_CHECK_MESSAGE(CheckMapFlagNames(), "mapFlagNames is missing a script verification flag");
+    // This relay-only flag is deliberately absent from STANDARD_SCRIPT_VERIFY_FLAGS.
+    BOOST_CHECK_EQUAL(ParseScriptFlags("DEFINED_HASHTYPE"), SCRIPT_VERIFY_DEFINED_HASHTYPE);
+    BOOST_CHECK_EQUAL(FormatScriptFlags(SCRIPT_VERIFY_DEFINED_HASHTYPE), "DEFINED_HASHTYPE");
 
     const char* const env_valid_output{std::getenv("TIDE_TX_VALID_GEN_OUTPUT")};
     const char* const env_invalid_output{std::getenv("TIDE_TX_INVALID_GEN_OUTPUT")};

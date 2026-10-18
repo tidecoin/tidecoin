@@ -3,12 +3,14 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <coins.h>
+#include <common/messages.h>
 #include <consensus/amount.h>
 #include <consensus/tx_verify.h>
 #include <node/psbt.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <tinyformat.h>
+#include <util/translation.h>
 
 #include <numeric>
 
@@ -29,6 +31,10 @@ PSBTAnalysis AnalyzePSBT(PartiallySignedTransaction psbtx, unsigned int script_v
     for (unsigned int i = 0; i < psbtx.tx->vin.size(); ++i) {
         PSBTInput& input = psbtx.inputs[i];
         PSBTInputAnalysis& input_analysis = result.inputs[i];
+        if (!input.IsUTXOConsistent(psbtx.tx->vin[i].prevout)) {
+            result.SetInvalid(strprintf("PSBT is not valid. Input %u has inconsistent UTXO data", i));
+            return result;
+        }
 
         // We set next role here and ratchet backwards as required
         input_analysis.next = PSBTRole::EXTRACTOR;
@@ -64,7 +70,8 @@ PSBTAnalysis AnalyzePSBT(PartiallySignedTransaction psbtx, unsigned int script_v
 
             // Figure out what is missing
             SignatureData outdata;
-            bool complete = SignPSBTInput(DUMMY_SIGNING_PROVIDER, psbtx, i, &txdata, std::nullopt, &outdata, /*finalize=*/true, script_verify_flags) == PSBTError::OK;
+            const auto error = SignPSBTInput(DUMMY_SIGNING_PROVIDER, psbtx, i, &txdata, input.sighash_type, &outdata, /*finalize=*/true, script_verify_flags, PSBTInputIntent::INSPECT);
+            const bool complete = error == PSBTError::OK;
 
             // Things are missing
             if (!complete) {
@@ -74,7 +81,7 @@ PSBTAnalysis AnalyzePSBT(PartiallySignedTransaction psbtx, unsigned int script_v
                 input_analysis.missing_sigs = outdata.missing_sigs;
 
                 // If we are only missing signatures and nothing else, then next is signer
-                if (outdata.missing_pubkeys.empty() && outdata.missing_redeem_script.IsNull() && outdata.missing_witness_script.IsNull() && !outdata.missing_sigs.empty()) {
+                if (outdata.missing_pubkeys.empty() && outdata.missing_redeem_script.IsNull() && outdata.missing_witness_script.empty() && !outdata.missing_sigs.empty()) {
                     input_analysis.next = PSBTRole::SIGNER;
                 } else {
                     input_analysis.next = PSBTRole::UPDATER;
@@ -82,8 +89,31 @@ PSBTAnalysis AnalyzePSBT(PartiallySignedTransaction psbtx, unsigned int script_v
             } else {
                 input_analysis.next = PSBTRole::FINALIZER;
             }
+            if (!complete || !IsSupportedSighash(input.sighash_type.value_or(SIGHASH_ALL))) {
+                const int mode = input.sighash_type.value_or(SIGHASH_ALL);
+                if (error == PSBTError::SINGLE_WITHOUT_OUTPUT || SingleWithoutOutput(mode, i, psbtx.tx->vout.size())) {
+                    input_analysis.issue = PSBTError::SINGLE_WITHOUT_OUTPUT;
+                    input_analysis.next = PSBTRole::CREATOR;
+                } else if (!IsSupportedSighash(mode)) {
+                    input_analysis.issue = PSBTError::SIGHASH_UNSUPPORTED;
+                    input_analysis.next = PSBTRole::UPDATER;
+                } else if (error == PSBTError::SIGHASH_MISMATCH) {
+                    input_analysis.issue = error;
+                    input_analysis.next = PSBTRole::UPDATER;
+                }
+                if (input_analysis.issue) {
+                    input_analysis.issue_message = common::PSBTErrorString(*input_analysis.issue).original;
+                    input_analysis.missing_sigs.clear();
+                }
+            }
         } else if (!utxo.IsNull()){
             input_analysis.is_final = true;
+            const MutableTransactionSignatureChecker checker{&*psbtx.tx, i, utxo.nValue, txdata, MissingDataBehavior::FAIL, !(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT)};
+            const SignatureCheckObserver observer{checker, i, psbtx.tx->vout.size()};
+            if (VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, script_verify_flags, observer) && observer.legacy_single_without_output) {
+                input_analysis.issue = PSBTError::SINGLE_WITHOUT_OUTPUT;
+                input_analysis.issue_message = "Existing legacy SINGLE signature is not bound to this transaction";
+            }
         }
     }
 
@@ -93,7 +123,6 @@ PSBTAnalysis AnalyzePSBT(PartiallySignedTransaction psbtx, unsigned int script_v
         PSBTInputAnalysis& input_analysis = result.inputs[i];
         result.next = std::min(result.next, input_analysis.next);
     }
-    assert(result.next > PSBTRole::CREATOR);
 
     if (calc_fee) {
         // Get the output amount
@@ -123,8 +152,15 @@ PSBTAnalysis AnalyzePSBT(PartiallySignedTransaction psbtx, unsigned int script_v
         for (unsigned int i = 0; i < psbtx.tx->vin.size(); ++i) {
             PSBTInput& input = psbtx.inputs[i];
             Coin newcoin;
+            if (result.inputs[i].issue && !result.inputs[i].is_final) {
+                success = false;
+                break;
+            }
 
-            if (SignPSBTInput(DUMMY_SIGNING_PROVIDER, psbtx, i, nullptr, std::nullopt, nullptr, /*finalize=*/true, script_verify_flags) != PSBTError::OK || !psbtx.GetInputUTXO(newcoin.out, i)) {
+            // Verify final fields with the spent outputs, including inputs finalized
+            // above. Only unfinished inputs need dummy signatures for estimation.
+            const auto* input_txdata = PSBTInputSigned(input) ? &txdata : nullptr;
+            if (SignPSBTInput(DUMMY_SIGNING_PROVIDER, psbtx, i, input_txdata, input.sighash_type, nullptr, /*finalize=*/true, script_verify_flags, PSBTInputIntent::INSPECT) != PSBTError::OK || !psbtx.GetInputUTXO(newcoin.out, i)) {
                 success = false;
                 break;
             } else {

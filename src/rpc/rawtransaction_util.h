@@ -8,6 +8,7 @@
 #include <addresstype.h>
 #include <consensus/amount.h>
 #include <map>
+#include <set>
 #include <string>
 #include <optional>
 
@@ -28,7 +29,7 @@ class SigningProvider;
  * @param  hashType      The signature hash type
  * @param result         JSON object where signed transaction results accumulate
  */
-void SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, const std::map<COutPoint, Coin>& coins, const UniValue& hashType, UniValue& result, std::optional<unsigned int> script_verify_flags = std::nullopt);
+void SignTransaction(CMutableTransaction& mtx, const SigningProvider* keystore, const std::map<COutPoint, Coin>& coins, const UniValue& hashType, UniValue& result, std::optional<unsigned int> script_verify_flags = std::nullopt, const std::set<COutPoint>* missing_amounts = nullptr);
 void SignTransactionResultToJSON(CMutableTransaction& mtx, bool complete, const std::map<COutPoint, Coin>& coins, const std::map<int, bilingual_str>& input_errors, UniValue& result);
 
 /**
@@ -37,8 +38,9 @@ void SignTransactionResultToJSON(CMutableTransaction& mtx, bool complete, const 
   * @param  prevTxsUnival Array of previous txns outputs that tx depends on but may not yet be in the block chain
   * @param  keystore      A pointer to the temporary keystore if there is one
   * @param  coins         Map of unspent outputs - coins in mempool and current chain UTXO set, may be extended by previous txns outputs after call
+  * @return Outpoints whose amounts remain unknown. Their placeholder values must not be used for witness signing.
   */
-void ParsePrevouts(const UniValue& prevTxsUnival, FlatSigningProvider* keystore, std::map<COutPoint, Coin>& coins);
+std::set<COutPoint> ParsePrevouts(const UniValue& prevTxsUnival, FlatSigningProvider* keystore, std::map<COutPoint, Coin>& coins);
 
 /** Normalize univalue-represented inputs and add them to the transaction */
 void AddInputs(CMutableTransaction& rawTx, const UniValue& inputs_in, bool rbf);

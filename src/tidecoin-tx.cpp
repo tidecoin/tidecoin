@@ -570,8 +570,9 @@ static std::vector<unsigned char> ParseHexUV(const UniValue& v, const std::strin
     return ParseHex(strHex);
 }
 
-static void AddPrevTxsToView(CCoinsViewCache& view, const UniValue& prevtxsObj)
+static std::set<COutPoint> AddPrevTxsToView(CCoinsViewCache& view, const UniValue& prevtxsObj)
 {
+    std::set<COutPoint> missing_amounts;
     for (unsigned int previdx = 0; previdx < prevtxsObj.size(); previdx++) {
         const UniValue& prevOut = prevtxsObj[previdx];
         if (!prevOut.isObject())
@@ -608,14 +609,21 @@ static void AddPrevTxsToView(CCoinsViewCache& view, const UniValue& prevtxsObj)
             }
             Coin newcoin;
             newcoin.out.scriptPubKey = scriptPubKey;
-            newcoin.out.nValue = MAX_MONEY;
+            const bool known = !coin.IsSpent() && !missing_amounts.contains(out);
+            newcoin.out.nValue = known ? coin.out.nValue : 0;
             if (prevOut.exists("amount")) {
-                newcoin.out.nValue = AmountFromValue(prevOut["amount"]);
+                const CAmount supplied = AmountFromValue(prevOut["amount"]);
+                if (known && supplied != newcoin.out.nValue) throw std::runtime_error("Previous output amount mismatch");
+                newcoin.out.nValue = supplied;
+                missing_amounts.erase(out);
+            } else if (!known) {
+                missing_amounts.insert(out);
             }
             newcoin.nHeight = 1;
             view.AddCoin(out, std::move(newcoin), true);
         }
     }
+    return missing_amounts;
 }
 
 static unsigned int GetScriptVerifyFlags()
@@ -723,7 +731,7 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
     if (!registers.count("prevtxs"))
         throw std::runtime_error("prevtxs register variable must be set.");
     UniValue prevtxsObj = registers["prevtxs"];
-    AddPrevTxsToView(view, prevtxsObj);
+    const auto missing_amounts = AddPrevTxsToView(view, prevtxsObj);
     for (unsigned int previdx = 0; previdx < prevtxsObj.size(); previdx++) {
         const UniValue& prevOut = prevtxsObj[previdx];
         std::vector<unsigned char> pkData(ParseHexUV(prevOut["scriptPubKey"], "scriptPubKey"));
@@ -733,13 +741,11 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
 
     const FlatSigningProvider& keystore = tempKeystore;
 
-    bool fHashSingle = ((nHashType & ~SIGHASH_ANYONECANPAY) == SIGHASH_SINGLE);
-
     PrecomputedTransactionData txdata;
     std::vector<CTxOut> spent_outputs;
     for (const auto& input : mergedTx.vin) {
         const Coin& coin = view.AccessCoin(input.prevout);
-        if (coin.IsSpent() || coin.out.nValue == MAX_MONEY) {
+        if (coin.IsSpent() || missing_amounts.contains(input.prevout)) {
             spent_outputs.clear();
             break;
         }
@@ -748,6 +754,7 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
     txdata.Init(mergedTx, std::move(spent_outputs), true);
 
     // Sign what we can:
+    std::optional<unsigned int> incomplete_input;
     for (unsigned int i = 0; i < mergedTx.vin.size(); i++) {
         CTxIn& txin = mergedTx.vin[i];
         const Coin& coin = view.AccessCoin(txin.prevout);
@@ -755,25 +762,36 @@ static void MutateTxSign(CMutableTransaction& tx, const std::string& flagStr)
             continue;
         }
         const CScript& prevPubKey = coin.out.scriptPubKey;
-        const CAmount& amount = coin.out.nValue;
-
-        SignatureData sigdata = DataFromTransaction(mergedTx, i, coin.out, script_verify_flags, &txdata);
-        // Only sign SIGHASH_SINGLE if there's a corresponding output:
-        if (!fHashSingle || (i < mergedTx.vout.size())) {
-            ProduceSignature(keystore, MutableTransactionSignatureCreator(mergedTx, i, amount, &txdata, nHashType, allow_legacy), prevPubKey, sigdata, script_verify_flags);
+        const CAmount amount = missing_amounts.contains(txin.prevout) ? -1 : coin.out.nValue;
+        SignatureData sigdata = DataFromTransaction(mergedTx, i, CTxOut{amount, prevPubKey}, script_verify_flags, &txdata);
+        MutableTransactionSignatureCreator creator(mergedTx, i, amount, &txdata, nHashType, allow_legacy);
+        creator.SetAmountAvailability(!missing_amounts.contains(txin.prevout), txdata.m_spent_outputs_ready);
+        ProduceSignature(keystore, creator, prevPubKey, sigdata, script_verify_flags);
+        if (creator.Error() == common::PSBTError::SINGLE_WITHOUT_OUTPUT) {
+            throw std::runtime_error(strprintf("SINGLE signature requires an output at input %u", i));
         }
 
-        if (fVerify && !sigdata.complete) {
-            throw std::runtime_error(strprintf("signing failed for input %u", i));
-        }
-
-        if (amount == MAX_MONEY && !sigdata.scriptWitness.IsNull()) {
+        if (creator.Error() == common::PSBTError::MISSING_AMOUNT) {
             throw std::runtime_error(strprintf("Missing amount for CTxOut with scriptPubKey=%s", HexStr(prevPubKey)));
         }
+        if (creator.Error() == common::PSBTError::MISSING_SPENT_AMOUNTS) {
+            for (size_t j = 0; j < mergedTx.vin.size(); ++j) {
+                const auto& prevout = mergedTx.vin[j].prevout;
+                if (missing_amounts.contains(prevout) || view.AccessCoin(prevout).IsSpent()) {
+                    throw std::runtime_error(strprintf("Missing amount for input %u (%s:%u)", j, prevout.hash.ToString(), prevout.n));
+                }
+            }
+        }
+        if (fVerify && !sigdata.complete) {
+            if (!incomplete_input) incomplete_input = i;
+        }
+
+        if (SingleWithoutOutput(nHashType, i, mergedTx.vout.size())) continue;
 
         UpdateInput(txin, sigdata);
     }
 
+    if (incomplete_input) throw std::runtime_error(strprintf("signing failed for input %u", *incomplete_input));
     tx = mergedTx;
 }
 
@@ -787,12 +805,12 @@ static void VerifyTx(const CTransaction& tx)
     UniValue prevtxsObj = registers["prevtxs"];
     CCoinsView viewDummy;
     CCoinsViewCache view(&viewDummy);
-    AddPrevTxsToView(view, prevtxsObj);
+    const auto missing_amounts = AddPrevTxsToView(view, prevtxsObj);
 
     std::vector<CTxOut> spent_outputs;
     for (const auto& input : tx.vin) {
         const Coin& coin = view.AccessCoin(input.prevout);
-        if (coin.IsSpent() || coin.out.nValue == MAX_MONEY) {
+        if (coin.IsSpent() || missing_amounts.contains(input.prevout)) {
             spent_outputs.clear();
             break;
         }
@@ -806,7 +824,7 @@ static void VerifyTx(const CTransaction& tx)
         if (coin.IsSpent()) {
             throw std::runtime_error("prevtxs missing for input");
         }
-        if (coin.out.nValue == MAX_MONEY && !txin.scriptWitness.IsNull()) {
+        if (missing_amounts.contains(txin.prevout) && !txin.scriptWitness.IsNull()) {
             throw std::runtime_error(strprintf("Missing amount for CTxOut with scriptPubKey=%s", HexStr(coin.out.scriptPubKey)));
         }
         ScriptError serror = SCRIPT_ERR_OK;

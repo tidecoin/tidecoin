@@ -93,23 +93,74 @@ hardware implementations will typically implement multiple roles simultaneously.
 
 ### Tidecoin-specific PSBT behavior
 
+- Existing legacy/v0 finals with undefined hash-type bytes remain verifiable
+  and extractable. Mempool admission and relay require nonempty signatures to
+  use `ALL`, `NONE` or `SINGLE`, optionally with `ANYONECANPAY`, so verification
+  does not guarantee broadcast acceptance. Active witness v1 enforces these
+  six bytes as a consensus rule as well.
 - Witness-v1 signatures without `ANYONECANPAY` commit to every input's amount
   and locking script, in input order. Signing and verification require all spent
   outputs; missing data does not fall back to an older signature calculation.
   Incorrect supplied amounts or scripts therefore cannot produce signatures that
-  validate against the actual outputs. Witness-v0 rules are unchanged.
+  validate against the actual outputs. Witness-v0 signature hashing is unchanged.
 - `ANYONECANPAY` continues to cover only the current input's amount and script
   code. `NONE` and `SINGLE` do not cover all outputs. These modes do not approve a
   fixed total fee. Witness-v1 `SINGLE` fails if its corresponding output is absent.
 - A full previous transaction and a separate witness output, when both present,
   must agree on the amount and locking script. Contradictory records are rejected,
   including when combining PSBTs or adding wallet information.
+- `analyzepsbt` verifies finalized inputs using the supplied spent outputs and
+  uses dummy signatures to estimate unfinished inputs when enough solving data
+  is available. Its `missing.witnessscript` field reports the expected SHA-256
+  hash for witness v0 or SHA-512 hash for witness v1, as 64 or 128 hex characters
+  respectively.
 - Wallet and descriptor processing can omit full previous transactions when
-  witness-v1 is active and every input is native witness-v1 with a 64-byte
-  program, all declared and partial-signature modes are `ALL`, and no input has
-  final signature fields. Separate previous-output records are kept. Other cases,
-  including mixed witness-v0 inputs, wrapped inputs, `ANYONECANPAY`, finalized
-  inputs and unknown witness versions, retain supplied full transactions.
+  witness-v1 is active and every input qualifies: native or authenticated
+  `sh(wsh512(...))`, with defined `ALL`, `NONE` or `SINGLE` modes and no
+  `ANYONECANPAY`. Unfinished native inputs need no witness script to classify
+  their output; wrapped inputs require the committed redeem and witness scripts.
+  Final inputs require full script verification and at least one successful v1
+  signature check. All executed nonempty checks must use eligible modes, and
+  any present declaration must agree. Signatureless finals retain full records.
+  Separate previous-output records are preserved. One excluded or inconsistent
+  input retains every full transaction. Standalone `finalizepsbt` does not run
+  this cleanup.
+- Cleanup is a storage policy, not authentication of witness-only fee data.
+  An absent declaration still permits a later explicitly requested
+  `ANYONECANPAY` signature. For offline/device signing in that mode, foreign
+  witness-only amounts do not provide authenticated fee evidence. Keep available
+  full transactions when preparing such requests.
+- New signing, explicit public declarations and size estimation support exactly
+  `ALL`, `NONE`, `SINGLE`, and those three modes with `ANYONECANPAY`.
+  Omitted signing mode means `ALL`; the stored field does not authorize a
+  different mode. Consent is checked only for inputs whose keys are used.
+  Foreign inputs retain their own modes. A single call cannot authorize
+  different modes for multiple owned inputs.
+- `walletprocesspsbt(sign=false)` with omitted mode preserves declarations.
+  An explicit mode atomically declares every unfinished input, including inputs
+  with no UTXO or wallet keys. Explicit public `ALL` is recorded; ordinary default
+  ALL signing does not add it. Existing declarations and partial signatures must
+  agree. New nondefault signing declarations are published only with valid new
+  signatures. Verified finals are preserved. `descriptorprocesspsbt` has no
+  public-only switch; use `utxoupdatepsbt` for public updates and the wallet's
+  explicit public-declaration operation for coordinator requests.
+- Combining PSBTs preserves declarations and rejects conflicting declarations.
+  Finalization checks existing signature bytes even for ALL. An absent declaration
+  means ALL for standalone finalization; an undeclared NONE partial is unfinished.
+- SINGLE without a corresponding output is refused for new signatures in every
+  signature version, including external signing. Existing such partials are not
+  newly finalized. Already verified finals keep their consensus validity.
+  `analyzepsbt` reports per-input `issue` and `issue_message`, including on finals.
+  An impossible SINGLE layout reports `next=creator` with no top-level error;
+  unsupported metadata reports `next=updater`. Independently computable fees are
+  retained, while unresolved size/fee-rate estimates are omitted. Consumers must
+  inspect issues regardless of the aggregate role.
+- Active witness-v1 signature opcodes require every nonempty signature argument
+  to end in `01`, `02`, `03`, `81`, `82` or `83` (hex). Other bytes cause a
+  `SIG_HASHTYPE` script error, including arguments a multisig matching loop would
+  not reach. Empty signatures retain their existing behavior. This consensus
+  restriction does not apply to legacy or witness v0; their valid final signatures
+  with other bytes remain verifiable even though new signing requests are narrower.
 - This witness-v1 signature calculation changes the earlier development/testnet
   rules. Existing ordinary witness-v1 signatures must be regenerated. Deployment
   requires a restarted testnet; this is not a transition for the old testnet's
