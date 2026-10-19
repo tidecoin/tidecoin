@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <tidecoin-build-config.h> // IWYU pragma: keep
 #include <key.h>
 #include <key_io.h>
 #include <script/descriptor.h>
@@ -274,6 +275,74 @@ BOOST_AUTO_TEST_SUITE_END()
 
 // This small regression suite runs without opting into the expensive wallet suites.
 BOOST_FIXTURE_TEST_SUITE(psbt_wallet_tests_policy, WalletTestingSetup)
+
+#ifdef ENABLE_EXTERNAL_SIGNER
+BOOST_AUTO_TEST_CASE(psbt_external_legacy_preflight)
+{
+    LOCK(m_wallet.cs_wallet);
+    m_wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+    m_wallet.SetWalletFlag(WALLET_FLAG_DISABLE_PRIVATE_KEYS);
+    m_wallet.SetWalletFlag(WALLET_FLAG_EXTERNAL_SIGNER);
+    std::vector<DescriptorScriptPubKeyMan*> managers;
+    CMutableTransaction previous;
+    for (int i = 0; i < 2; ++i) {
+        const CKey key = GenerateRandomKey(pq::SchemeId::FALCON_512);
+        FlatSigningProvider provider;
+        std::string error;
+        auto descriptors = Parse("pkh(" + HexStr(key.GetPubKey()) + ")", provider, error, false);
+        BOOST_REQUIRE_EQUAL(descriptors.size(), 1U);
+        WalletDescriptor descriptor(std::move(descriptors[0]), 0, 0, 1, 1);
+        auto added = m_wallet.AddWalletDescriptor(descriptor, provider, "", false);
+        BOOST_REQUIRE(added);
+        managers.push_back(&added->get());
+        previous.vout.emplace_back(1000, GetScriptForDestination(PKHash(key.GetPubKey())));
+    }
+    CMutableTransaction tx;
+    tx.vin.emplace_back(previous.GetHash(), 0);
+    tx.vin.emplace_back(previous.GetHash(), 1);
+    tx.vout.emplace_back(1900, CScript{} << OP_TRUE);
+    PartiallySignedTransaction original(tx);
+    for (size_t i = 0; i < 2; ++i) original.inputs[i].witness_utxo = previous.vout[i];
+    const auto bytes = [](const auto& value) { DataStream stream; stream << value; return HexStr(stream); };
+    const auto data = PrecomputePSBTData(original);
+    // Exercise the direct manager entry point as well as the wallet's
+    // all-manager preflight. No signer is configured: reaching it is an error.
+    for (auto* manager : managers) {
+        auto request = original;
+        std::vector<common::PSBTInputError> errors;
+        int count{99};
+        const auto error = manager->FillPSBT(request, data, SIGHASH_ALL, true, &count, false, false, std::nullopt, &errors);
+        BOOST_REQUIRE(error);
+        BOOST_CHECK(*error == common::PSBTError::MISSING_NON_WITNESS_UTXO);
+        BOOST_REQUIRE_EQUAL(errors.size(), 1U);
+        BOOST_CHECK_EQUAL(count, 0);
+        BOOST_CHECK_EQUAL(bytes(request), bytes(original));
+    }
+    for (bool reverse : {false, true}) {
+        auto request = original;
+        if (reverse) {
+            std::reverse(request.inputs.begin(), request.inputs.end());
+            std::reverse(request.tx->vin.begin(), request.tx->vin.end());
+        }
+        const auto before = bytes(request);
+        std::vector<common::PSBTInputError> errors;
+        bool complete{true};
+        size_t count{99};
+        const auto error = m_wallet.FillPSBT(request, complete, SIGHASH_ALL, true, &count, false, false, &errors);
+        BOOST_REQUIRE(error);
+        BOOST_CHECK(*error == common::PSBTError::MISSING_NON_WITNESS_UTXO);
+        BOOST_CHECK(!complete);
+        BOOST_CHECK_EQUAL(count, 0U);
+        BOOST_CHECK_EQUAL(bytes(request), before);
+        BOOST_REQUIRE_EQUAL(errors.size(), 2U);
+        std::sort(errors.begin(), errors.end(), [](const auto& a, const auto& b) { return a.input < b.input; });
+        for (size_t i = 0; i < errors.size(); ++i) {
+            BOOST_CHECK_EQUAL(errors[i].input, i);
+            BOOST_CHECK(errors[i].error == common::PSBTError::MISSING_NON_WITNESS_UTXO);
+        }
+    }
+}
+#endif
 
 BOOST_AUTO_TEST_CASE(psbt_collects_all_refusals_atomically)
 {

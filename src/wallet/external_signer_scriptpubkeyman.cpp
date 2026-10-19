@@ -113,7 +113,8 @@ std::optional<PSBTError> ExternalSignerScriptPubKeyMan::CheckPSBTSigningIntent(c
         if (!psbt.GetInputUTXO(utxo, i) || !GetSolvingProvider(utxo.scriptPubKey)) continue;
         const auto& input = psbt.inputs[i];
         std::optional<PSBTError> error;
-        if (SingleWithoutOutput(mode, i, psbt.tx->vout.size())) error = PSBTError::SINGLE_WITHOUT_OUTPUT;
+        if (!PSBTInputHasSigningUTXO(psbt, i, flags)) error = PSBTError::MISSING_NON_WITNESS_UTXO;
+        else if (SingleWithoutOutput(mode, i, psbt.tx->vout.size())) error = PSBTError::SINGLE_WITHOUT_OUTPUT;
         else if (!IsSupportedSighash(mode)) error = PSBTError::SIGHASH_UNSUPPORTED;
         else if (input.sighash_type && *input.sighash_type != mode) error = PSBTError::SIGHASH_MISMATCH;
         else for (const auto& [_, sig] : input.partial_sigs) {
@@ -138,6 +139,7 @@ std::optional<PSBTError> ExternalSignerScriptPubKeyMan::FillPSBT(PartiallySigned
     sighash_type = sighash_type.value_or(SIGHASH_ALL);
     if (n_signed) *n_signed = 0;
     if (const auto error = DescriptorScriptPubKeyMan::FillPSBT(psbt, txdata, sighash_type, false, nullptr, false, include_pqhd_origins, effective_flags)) return error;
+    if (const auto error = CheckPSBTSigningIntent(psbt, txdata, *sighash_type, effective_flags, input_errors)) return error;
 
     // Do not contact a signer for unrelated managers or already verified inputs.
     bool needs_signer{false};

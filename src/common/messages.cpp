@@ -110,6 +110,8 @@ bilingual_str PSBTErrorString(PSBTError err)
             return Untranslated("PSBT previous output information is inconsistent");
         case PSBTError::MISSING_INPUTS:
             return Untranslated("Inputs missing or spent");
+        case PSBTError::MISSING_NON_WITNESS_UTXO:
+            return Untranslated("Full previous transaction required for this signing input; supply non_witness_utxo");
         case PSBTError::SIGHASH_MISMATCH:
             return Untranslated("Specified sighash value does not match value stored in PSBT");
         case PSBTError::SIGHASH_UNSUPPORTED:

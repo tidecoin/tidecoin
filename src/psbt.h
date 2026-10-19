@@ -896,6 +896,12 @@ PrecomputedTransactionData PrecomputePSBTData(const PartiallySignedTransaction& 
 /** Checks whether a PSBTInput is already signed by checking for non-null finalized fields. */
 bool PSBTInputSigned(const PSBTInput& input);
 
+/** Check previous-output data for new signing: legacy requires a full previous
+ * transaction; supported witness inputs may use an output summary. This does
+ * not establish confirmation, unspentness, or other inputs' amounts. */
+bool PSBTInputHasSigningUTXO(const PartiallySignedTransaction& psbt, size_t index, unsigned int flags);
+
+/** Verify a newly supplied partial signature using data sufficient for signing. */
 bool VerifyPSBTPartialSignature(const PartiallySignedTransaction& psbt, size_t index, const SigPair& signature,
                                 const PrecomputedTransactionData& txdata, unsigned int flags);
 

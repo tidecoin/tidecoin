@@ -93,6 +93,12 @@ hardware implementations will typically implement multiple roles simultaneously.
 
 ### Tidecoin-specific PSBT behavior
 
+- External signing requires a full previous transaction for each unfinished
+  legacy signing target, including legacy P2SH. All enrolled targets are checked
+  before any device signs. Newly returned legacy partial signatures and finals
+  enforce the same requirement. Native and wrapped witness inputs retain their
+  existing data requirements; unrelated inputs and unchanged verified finals are
+  preserved. See [external signing](external-signer.md#signing-responses-and-completion).
 - Existing legacy/v0 finals with undefined hash-type bytes remain verifiable
   and extractable. Mempool admission and relay require nonempty signatures to
   use `ALL`, `NONE` or `SINGLE`, optionally with `ANYONECANPAY`, so verification

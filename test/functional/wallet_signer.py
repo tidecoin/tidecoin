@@ -10,11 +10,11 @@ from pathlib import Path
 
 from test_framework.descriptors import descsum_create
 from test_framework.messages import CTransaction, CTxOut, CTxIn, COutPoint, from_binary
-from test_framework.psbt import PSBT, PSBTMap, PSBT_GLOBAL_UNSIGNED_TX, PSBT_IN_WITNESS_UTXO, PSBT_IN_FINAL_SCRIPTWITNESS
+from test_framework.psbt import PSBT, PSBTMap, PSBT_GLOBAL_UNSIGNED_TX, PSBT_IN_WITNESS_UTXO, PSBT_IN_NON_WITNESS_UTXO, PSBT_IN_FINAL_SCRIPTWITNESS
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error
 from test_framework.wallet_util import generate_keypair_at_index
-from test_framework.script_util import key_to_p2wpkh_script
+from test_framework.script_util import key_to_p2pkh_script
 
 
 class WalletSignerTest(BitcoinTestFramework):
@@ -200,7 +200,7 @@ class WalletSignerTest(BitcoinTestFramework):
                 for reverse in (False, True):
                     mixed = PSBT.from_base64(undeclared.to_base64())
                     mixed.tx.vin.append(CTxIn(COutPoint(123, 0)))
-                    mixed.i.append(PSBTMap({PSBT_IN_WITNESS_UTXO: CTxOut(100_000_000, key_to_p2wpkh_script(foreign_pubkey)).serialize(), 3: (0x83).to_bytes(4, 'little')}))
+                    mixed.i.append(PSBTMap({PSBT_IN_WITNESS_UTXO: CTxOut(100_000_000, key_to_p2pkh_script(foreign_pubkey)).serialize(), 3: (0x83).to_bytes(4, 'little')}))
                     if reverse:
                         mixed.tx.vin.reverse()
                         mixed.i.reverse()
@@ -297,6 +297,8 @@ class WalletSignerTest(BitcoinTestFramework):
                 self.generate(holder, 1)
                 assert_equal(wallet.gettransaction(spend)['confirmations'], 1)
 
+        self.test_signing_utxos(holder, node, state, save, count_signs)
+
         self.log.info('Reject ambiguous device selection')
         state['devices'] = [{'fingerprint': 'one'}, {'fingerprint': 'two'}]
         save()
@@ -313,6 +315,86 @@ class WalletSignerTest(BitcoinTestFramework):
         save()
         assert_raises_rpc_error(-1, 'public descriptors only', node.createwallet,
                                 wallet_name='private_descriptor', disable_private_keys=True, external_signer=True)
+
+    def test_signing_utxos(self, holder, node, state, save, count_signs):
+        self.log.info('External signing requires full legacy transactions before any device request')
+        templates = ['pkh({})', 'sh(pk({}))', 'wpkh({})', 'sh(wpkh({}))', 'wsh512(pk({}))', 'sh(wsh512(pk({})))']
+        for number, template in enumerate(templates):
+            keys = [generate_keypair_at_index(9100 + 2 * number + i, scheme='7') for i in range(2)]
+            secrets = [descsum_create(template.format(secret)) for secret, _ in keys]
+            public = [holder.getdescriptorinfo(desc)['descriptor'] for desc in secrets]
+            addresses = [holder.deriveaddresses(desc)[0] for desc in public]
+            state.clear()
+            state.update(descriptors={'receive': [public[0]], 'internal': [public[1]]},
+                         addresses=dict(zip(public, addresses)))
+            save()
+            name = f'utxo_signer_{number}'
+            node.createwallet(wallet_name=name, disable_private_keys=True, external_signer=True)
+            wallet = node.get_wallet_rpc(name)
+            # The funding transaction has never been broadcast or stored in either
+            # wallet. Only the PSBT can supply it; no wallet lookup can mask the test.
+            previous = CTransaction()
+            previous.vin = [CTxIn(COutPoint(9000 + number, 0))]
+            previous.vout = [CTxOut(100_000_000, bytes.fromhex(holder.validateaddress(address)['scriptPubKey'])) for address in addresses]
+            blank = holder.createpsbt([{'txid': previous.txid_hex, 'vout': i} for i in range(2)], {addresses[0]: Decimal('1.99')})
+            full = PSBT.from_base64(blank)
+            for i in range(2):
+                full.i[i].map[PSBT_IN_NON_WITNESS_UTXO] = previous.serialize()
+                full.i[i].map[PSBT_IN_WITNESS_UTXO] = previous.vout[i].serialize()
+            full = PSBT.from_base64(holder.descriptorprocesspsbt(full.to_base64(), public, 'ALL', False)['psbt'])
+            legacy = number < 2
+            if legacy:
+                for missing in ((0,), (1,), (0, 1)):
+                    for reverse in (False, True):
+                        request = PSBT.from_base64(full.to_base64())
+                        for index in missing:
+                            del request.i[index].map[PSBT_IN_NON_WITNESS_UTXO]
+                        if reverse:
+                            request.tx.vin.reverse()
+                            request.i.reverse()
+                            request.g.map[PSBT_GLOBAL_UNSIGNED_TX] = request.tx.serialize()
+                        before = count_signs()
+                        assert_raises_rpc_error(-25, 'Full previous transaction required for this signing input; supply non_witness_utxo', wallet.walletprocesspsbt, request.to_base64())
+                        assert_equal(count_signs(), before)
+            else:
+                for entry in full.i:
+                    entry.map.pop(PSBT_IN_NON_WITNESS_UTXO, None)
+
+            two_inputs = full
+            # Each device response is restricted to the current manager's targets.
+            # Use one target for the successful response; the two-manager cases
+            # above check refusal before either manager contacts the device.
+            full = PSBT.from_base64(full.to_base64())
+            full.tx.vin = full.tx.vin[:1]
+            full.i = full.i[:1]
+            full.tx.vout[0].nValue = 99_000_000
+            full.g.map[PSBT_GLOBAL_UNSIGNED_TX] = full.tx.serialize()
+            for final in (False, True):
+                expected = holder.descriptorprocesspsbt(full.to_base64(), secrets, 'ALL', final)
+                state['response'] = {'psbt': expected['psbt']}
+                save()
+                before = count_signs()
+                result = wallet.walletprocesspsbt(psbt=full.to_base64(), finalize=final)
+                assert count_signs() > before
+                if final:
+                    assert result['complete']
+                    # Existing verified legacy finals need not reacquire full
+                    # transactions, and must not cause another signing request.
+                    existing = PSBT.from_base64(result['psbt'])
+                    for i, entry in enumerate(existing.i):
+                        entry.map.pop(PSBT_IN_NON_WITNESS_UTXO, None)
+                        entry.map[PSBT_IN_WITNESS_UTXO] = previous.vout[i].serialize()
+                    before = count_signs()
+                    assert wallet.walletprocesspsbt(existing.to_base64())['complete']
+                    assert_equal(count_signs(), before)
+                else:
+                    assert all('partial_signatures' in entry for entry in node.decodepsbt(result['psbt'])['inputs'])
+            if legacy:
+                conflicting = PSBT.from_base64(two_inputs.to_base64())
+                conflicting.i[1].map[PSBT_IN_WITNESS_UTXO] = CTxOut(1, previous.vout[1].scriptPubKey).serialize()
+                before = count_signs()
+                assert_raises_rpc_error(-22, 'inconsistent', wallet.walletprocesspsbt, conflicting.to_base64())
+                assert_equal(count_signs(), before)
 
 
 if __name__ == '__main__':

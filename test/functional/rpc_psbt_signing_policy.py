@@ -4,15 +4,15 @@
 """Signing intent, declarations, missing amounts, and SINGLE output requirements."""
 
 from decimal import Decimal
-from hashlib import sha512
+from hashlib import sha256, sha512
 import json
 import subprocess
 
 from rpc_psbt_witness_v1 import WitnessV1PSBTTest
 from test_framework.authproxy import JSONRPCException
 from test_framework.descriptors import descsum_create
-from test_framework.messages import tx_from_hex
-from test_framework.psbt import PSBT, PSBT_GLOBAL_UNSIGNED_TX, PSBT_IN_NON_WITNESS_UTXO, PSBT_IN_SIGHASH_TYPE
+from test_framework.messages import CTxOut, tx_from_hex
+from test_framework.psbt import PSBT, PSBT_GLOBAL_UNSIGNED_TX, PSBT_IN_NON_WITNESS_UTXO, PSBT_IN_SIGHASH_TYPE, PSBT_IN_WITNESS_UTXO
 from test_framework.script import CScript, OP_1, OP_CHECKSIG, SegwitV0SignatureHash
 from test_framework.script_util import key_to_p2pkh_script, key_to_p2wpkh_script, script_to_p2sh_script
 from test_framework.util import assert_equal, assert_raises_rpc_error
@@ -33,6 +33,29 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
         self.generate(node, 201, sync_fun=self.no_op)
         destination = node.getnewaddress()
         other_destination = node.getnewaddress()
+        self.log.info('Analysis retains missing witness scripts alongside partial-signature issues')
+        _, pub = generate_keypair(wif=True, scheme='7')
+        witness_script = CScript([pub, OP_CHECKSIG])
+        for version in ([0] if self.options.preactivation else [0, 1]):
+            commitment = (sha256 if version == 0 else sha512)(witness_script).digest()
+            program = CScript([version, commitment])
+            for single in (False, True):
+                psbt = PSBT.from_base64(node.createpsbt([{'txid': '01' * 32, 'vout': 0}], {destination: Decimal('0.5')}))
+                psbt.i[0].map[PSBT_IN_WITNESS_UTXO] = CTxOut(100_000_000, program).serialize()
+                if single:
+                    psbt.tx.vout.clear()
+                    psbt.o.clear()
+                    psbt.g.map[PSBT_GLOBAL_UNSIGNED_TX] = psbt.tx.serialize()
+                control = offline.analyzepsbt(psbt.to_base64())
+                assert_equal(control['inputs'][0]['missing']['witnessscript'], commitment.hex())
+                psbt.i[0].map[b'\x02' + pub] = bytes([1, 3 if single else 2])
+                result = offline.analyzepsbt(psbt.to_base64())
+                assert_equal(result['inputs'][0]['missing']['witnessscript'], commitment.hex())
+                assert_equal(result['inputs'][0]['issue'], 'single_without_output' if single else 'sighash_mismatch')
+                assert_equal(result['next'], 'creator' if single else 'updater')
+                assert_equal(result['fee'], control['fee'])
+                assert 'signatures' not in result['inputs'][0]['missing']
+
         templates = ['pkh({})', 'sh(pk({}))', 'wpkh({})']
         if not self.options.preactivation:
             templates += ['wsh512(pk({}))', 'sh(wsh512(pk({})))', 'wsh512(multi(1,{}))', 'sh(wsh512(multi(1,{})))']

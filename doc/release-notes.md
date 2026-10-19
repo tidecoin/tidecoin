@@ -1,4 +1,4 @@
-Tidecoin v1.0.0rc1 Release Notes
+Tidecoin v1.0.0rc2 Release Notes
 ===============================
 
 Downloads:
@@ -400,6 +400,26 @@ developed by the Tidecoin contributors.
 
 ### PSBT signing and witness-v1 hash types
 
+Compared with rc1, witness-v1 signatures without ANYONECANPAY now commit to all
+spent amounts and locking scripts, in input order. External v1 signers must use
+the updated message format; signatures made with the rc1 format for these inputs
+must be regenerated. ANYONECANPAY signatures do not gain these aggregate fields.
+Witness-v1 SINGLE without a corresponding output is now rejected, including with
+ANYONECANPAY. These are consensus changes for active witness v1.
+
+External signing now requires the full previous transaction before requesting a
+new legacy signature, including legacy P2SH inputs. Requests missing that data
+are refused before contacting the signing device, with an explicit request to
+supply `non_witness_utxo`. GUI per-input errors show mode details only for
+signing-mode refusals. Native and wrapped witness
+inputs retain their existing data requirements, and unchanged verified finals
+remain usable. Newly returned legacy partial signatures and finals enforce the
+same previous-transaction requirement. This does not independently authenticate
+every other input amount used in a displayed fee.
+
+PSBT analysis retains missing public-key and script details alongside signing-mode
+issues, while continuing to omit requests for signatures until the issue is fixed.
+
 New signatures refuse SINGLE when the input has no corresponding output.
 PSBT inspection uses per-input declarations, while signing requires explicit
 matching consent for nondefault modes on signing targets. Public wallet updates
@@ -412,8 +432,8 @@ Active witness-v1 nonempty signature arguments are restricted to hash-type
 bytes 01, 02, 03, 81, 82 and 83. Other bytes
 cause SIG_HASHTYPE, including unused arguments of an executed multisig opcode.
 Empty signatures, legacy and witness-v0 verification remain unchanged. Activation
-heights and the committed v1 message layout are unchanged. Include this change
-in the planned testnet relaunch; deploying after that relaunch requires a further
+heights are unchanged. Include the v1 message and hash-type changes in the planned
+testnet relaunch; deploying after that relaunch requires a further
 coordinated restart. Existing testnet history is not a supported migration path.
 
 Mempool admission and relay also require the six defined hash-type bytes for

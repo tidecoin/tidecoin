@@ -259,6 +259,9 @@ bool ExternalSigner::MergeSignatures(PartiallySignedTransaction& psbt, const Par
         // Do not impose this signing request's default on a previously finalized,
         // verified input from another participant whose sighash field was removed.
         const bool already_verified = PSBTInputSignedAndVerified(psbt, i, &txdata, script_verify_flags);
+        if (!already_verified && !PSBTInputHasSigningUTXO(psbt, i, script_verify_flags)) {
+            return fail("Missing previous transaction for signer final script");
+        }
         const SignatureCheckObserver observer{checker, i, merged.tx->vout.size()};
         const RequestedSighashChecker requested{observer, already_verified ? std::nullopt : std::optional{input.sighash_type.value_or(SIGHASH_ALL)}};
         if (!VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, script_verify_flags, requested) || !requested.SighashMatches()) {

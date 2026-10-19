@@ -110,6 +110,17 @@ selection.
 
 ## Signing responses and completion
 
+Before any device signing request, the wallet checks all enrolled signing
+targets. An unfinished legacy input, including a legacy P2SH input, requires
+the full previous transaction (`non_witness_utxo`). Its transaction ID, output
+index and any separate output summary must agree. Native and wrapped witness
+inputs may use an output summary under their applicable rules. Missing legacy
+transaction data is reported with a request to supply `non_witness_utxo` before
+any signing device is contacted; unchanged
+verified finals and unrelated inputs do not acquire a new signing requirement.
+This check does not independently establish every other input amount used in a
+displayed fee.
+
 The host retains its requested unsigned transaction and metadata. A response may
 omit metadata removed by finalization, but any metadata it returns must already
 match the request. A witness UTXO exactly matching the original full previous
@@ -123,10 +134,12 @@ hash types must match the request (ALL by default). Previously verified finalize
 inputs retain their existing hash types even if finalization removed their
 sighash metadata. Every returned final script
 must verify against the retained transaction and UTXO under the applicable
-Tidecoin script rules. The signer's `complete` claim is ignored. Partial updates
-can remain incomplete; individual partial signatures are not independently
-certified by acceptance of an incomplete response. A completed result requires
-script verification. Rejection preserves the host's original PSBT.
+Tidecoin script rules. Each new partial signature is checked against the retained
+transaction and script, and new legacy partials and finals require the full
+previous transaction. The signer's `complete` claim is ignored. Partial updates
+can remain incomplete even when their individual signatures verify; a completed
+result requires full script verification. Rejection preserves the host's original
+PSBT.
 
 `finalizepsbt`, `descriptorprocesspsbt` and wallet completion checks do not treat
 the mere presence of final fields as proof of validity. Verification is relative

@@ -371,9 +371,29 @@ bool PSBTInputSigned(const PSBTInput& input)
     return !input.final_script_sig.empty() || !input.final_script_witness.IsNull();
 }
 
+bool PSBTInputHasSigningUTXO(const PartiallySignedTransaction& psbt, size_t index, unsigned int flags)
+{
+    if (!psbt.tx || index >= psbt.inputs.size() || index >= psbt.tx->vin.size()) return false;
+    CTxOut utxo;
+    if (!psbt.GetInputUTXO(utxo, index)) return false;
+    const auto& input = psbt.inputs[index];
+    if (input.non_witness_utxo) return true;
+    CScript script = utxo.scriptPubKey;
+    if (script.IsPayToScriptHash()) {
+        if (GetScriptForDestination(ScriptHash(input.redeem_script)) != script) return false;
+        script = input.redeem_script;
+    }
+    int version;
+    std::vector<unsigned char> program;
+    if (!script.IsWitnessProgram(version, program)) return false;
+    return (version == 0 && (program.size() == 20 || program.size() == 32)) ||
+           (version == 1 && program.size() == WITNESS_V1_SCRIPTHASH_512_SIZE && (flags & SCRIPT_VERIFY_WITNESS_V1_512));
+}
+
 bool VerifyPSBTPartialSignature(const PartiallySignedTransaction& psbt, size_t index, const SigPair& signature,
                                 const PrecomputedTransactionData& txdata, unsigned int flags)
 {
+    if (signature.second.empty() || !PSBTInputHasSigningUTXO(psbt, index, flags)) return false;
     CTxOut utxo;
     if (!psbt.GetInputUTXO(utxo, index)) return false;
     const auto& input = psbt.inputs[index];
@@ -403,6 +423,7 @@ bool VerifyPSBTPartialSignature(const PartiallySignedTransaction& psbt, size_t i
             return false;
         }
     }
+    if (sigversion == SigVersion::WITNESS_V1_512 && !IsSupportedSighash(signature.second.back())) return false;
     const MutableTransactionSignatureChecker checker{&*psbt.tx, static_cast<unsigned int>(index), utxo.nValue, txdata, MissingDataBehavior::FAIL, !(flags & SCRIPT_VERIFY_PQ_STRICT)};
     return checker.CheckPostQuantumSignature(signature.second, std::vector<unsigned char>(signature.first.begin(), signature.first.end()), script, sigversion);
 }
@@ -552,14 +573,25 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
     }
 
     const int requested = intent == PSBTInputIntent::SIGN ? sighash.value_or(SIGHASH_ALL) : input.sighash_type.value_or(SIGHASH_ALL);
+    const auto report_missing = [&] {
+        if (!out_sigdata) return;
+        out_sigdata->missing_pubkeys = sigdata.missing_pubkeys;
+        out_sigdata->missing_sigs = sigdata.missing_sigs;
+        out_sigdata->missing_redeem_script = sigdata.missing_redeem_script;
+        out_sigdata->missing_witness_script = sigdata.missing_witness_script;
+    };
     const auto preserve_public_metadata = [&] {
         if (intent != PSBTInputIntent::INSPECT || !txdata) return;
         // Resolve scripts without creating signatures or publishing a final.
+        // A preceding signing attempt may already have recorded these keys.
+        sigdata.missing_pubkeys.clear();
+        sigdata.missing_sigs.clear();
         MutableTransactionSignatureCreator creator(tx, index, utxo.nValue, txdata, requested, allow_legacy);
         ProduceSignature(HidingSigningProvider(&provider, true), creator, utxo.scriptPubKey, sigdata, effective_flags);
         sigdata.complete = false;
         input.FromSignatureData(sigdata);
         if (sigdata.witness) input.witness_utxo = utxo;
+        report_missing();
     };
     bool existing_match{true};
     bool declaration_match{true};
@@ -600,12 +632,7 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
     }
 
     // Report missing solving data even if no witness could be constructed.
-    if (out_sigdata) {
-        out_sigdata->missing_pubkeys = sigdata.missing_pubkeys;
-        out_sigdata->missing_sigs = sigdata.missing_sigs;
-        out_sigdata->missing_redeem_script = sigdata.missing_redeem_script;
-        out_sigdata->missing_witness_script = sigdata.missing_witness_script;
-    }
+    report_missing();
 
     // Verify that a witness signature was produced in case one was required.
     if (require_witness_sig && !sigdata.witness) return PSBTError::INCOMPLETE;

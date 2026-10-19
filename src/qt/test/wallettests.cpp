@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <tidecoin-build-config.h> // IWYU pragma: keep
 #include <qt/test/wallettests.h>
 #include <qt/test/util.h>
 
@@ -438,6 +439,61 @@ void TestPSBTSigningStatus(CWallet& wallet, WalletModel& model, ClientModel* cli
     QVERIFY(status->text().contains("Input 1:"));
 }
 
+#ifdef ENABLE_EXTERNAL_SIGNER
+void TestPSBTSigningDataStatus(interfaces::Node& node)
+{
+    auto wallet = std::make_shared<CWallet>(node.context()->chain.get(), "signing-data-status", CreateMockableWalletDatabase());
+    wallet->LoadWallet();
+    std::vector<CScript> scripts;
+    {
+        LOCK(wallet->cs_wallet);
+        wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+        wallet->SetWalletFlag(WALLET_FLAG_DISABLE_PRIVATE_KEYS);
+        wallet->SetWalletFlag(wallet::WALLET_FLAG_EXTERNAL_SIGNER);
+        for (bool witness : {false, true}) {
+            const CKey key = GenerateRandomKey(pq::SchemeId::FALCON_512);
+            FlatSigningProvider provider;
+            std::string error;
+            auto descriptors = Parse(std::string(witness ? "wpkh(" : "pkh(") + HexStr(key.GetPubKey()) + ")", provider, error, false);
+            QVERIFY(!descriptors.empty());
+            WalletDescriptor descriptor(std::move(descriptors[0]), 0, 0, 1, 1);
+            QVERIFY(wallet->AddWalletDescriptor(descriptor, provider, "", false));
+            scripts.push_back(witness ? GetScriptForDestination(WitnessV0KeyHash(key.GetPubKey())) : GetScriptForDestination(PKHash(key.GetPubKey())));
+        }
+    }
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    MiniGUI gui(node, style.get());
+    gui.initModelForWallet(node, wallet, style.get());
+    for (bool mixed : {false, true}) {
+        CMutableTransaction tx;
+        tx.vin.emplace_back(Txid::FromUint256(uint256::ONE), 0);
+        if (mixed) tx.vin.emplace_back(Txid::FromUint256(uint256::ONE), 1);
+        tx.vout.emplace_back(500, CScript{} << OP_TRUE);
+        PartiallySignedTransaction request(tx);
+        for (size_t i = 0; i < request.inputs.size(); ++i) request.inputs[i].witness_utxo = CTxOut(1000, scripts[i]);
+        if (mixed) request.inputs[1].sighash_type = SIGHASH_NONE;
+        PSBTOperationsDialog dialog(nullptr, gui.walletModel.get(), gui.clientModel.get());
+        dialog.openWithPSBT(request);
+        dialog.copyToClipboard();
+        const auto before = QApplication::clipboard()->text();
+        // Invoke the slot directly: external wallets currently have the dialog's
+        // sign button disabled, but still use the same refusal rendering path.
+        dialog.signTransaction();
+        const auto text = dialog.findChild<QLabel*>("statusBar")->text();
+        QVERIFY(text.contains("Input 0: Full previous transaction required for this signing input; supply non_witness_utxo"));
+        QVERIFY(!text.contains("Input 0: requested mode"));
+        if (mixed) QVERIFY(text.contains("Input 1: requested mode 1, declared mode 2."));
+        else {
+            QVERIFY(!text.contains("requested mode"));
+            QVERIFY(!text.contains("declared mode"));
+        }
+        QVERIFY(!dialog.findChild<QPushButton*>("broadcastTransactionButton")->isEnabled());
+        dialog.copyToClipboard();
+        QCOMPARE(QApplication::clipboard()->text(), before);
+    }
+}
+#endif
+
 //! Simple qt wallet tests.
 //
 // Test widgets can be debugged interactively calling show() on them and
@@ -673,6 +729,9 @@ void TestGUI(interfaces::Node& node)
     // Legacy watch-only wallet test
     // Verify PSBT creation.
     TestGUIWatchOnly(node, test);
+#ifdef ENABLE_EXTERNAL_SIGNER
+    TestPSBTSigningDataStatus(node);
+#endif
 }
 
 } // namespace

@@ -100,6 +100,72 @@ BOOST_AUTO_TEST_CASE(signer_argument_boundaries)
     BOOST_REQUIRE_EQUAL(display["args"].size(), 7U);
     BOOST_CHECK_EQUAL(display["args"][6].get_str(), descriptor);
 }
+BOOST_AUTO_TEST_CASE(signer_legacy_previous_transaction)
+{
+    const CKey key = GenerateRandomKey(pq::SchemeId::FALCON_512);
+    FlatSigningProvider provider;
+    provider.keys.emplace(key.GetPubKey().GetID(), key);
+    provider.pubkeys.emplace(key.GetPubKey().GetID(), key.GetPubKey());
+    const auto bytes = [](const auto& value) { DataStream stream; stream << value; return HexStr(stream); };
+    for (bool wrapped : {false, true}) {
+        const CScript script = CScript{} << ToByteVector(key.GetPubKey()) << OP_CHECKSIG;
+        CMutableTransaction previous;
+        previous.vout.emplace_back(COIN, wrapped ? GetScriptForDestination(ScriptHash(script)) : script);
+        CMutableTransaction tx;
+        tx.vin.emplace_back(previous.GetHash(), 0);
+        tx.vout.emplace_back(COIN - 1000, CScript{} << OP_TRUE);
+        PartiallySignedTransaction original{tx};
+        original.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+        original.inputs[0].witness_utxo = previous.vout[0];
+        if (wrapped) original.inputs[0].redeem_script = script;
+        const auto data = PrecomputePSBTData(original);
+        std::string error;
+        if (wrapped) {
+            // Final verification executes the scriptSig, not redeem_script
+            // metadata. A correct final must not excuse a mismatching witness
+            // program that would misclassify this summary-only legacy request.
+            auto response = original;
+            BOOST_REQUIRE(SignPSBTInput(provider, response, 0, &data, SIGHASH_ALL, nullptr, true) == common::PSBTError::OK);
+            response.inputs[0].non_witness_utxo.reset();
+            BOOST_REQUIRE(PSBTInputSignedAndVerified(response, 0, &data));
+            auto request = original;
+            request.inputs[0].non_witness_utxo.reset();
+            request.inputs[0].redeem_script = GetScriptForDestination(WitnessV0KeyHash(key.GetPubKey()));
+            const auto before = bytes(request);
+            BOOST_CHECK(!ExternalSigner::MergeSignatures(request, response, error, STANDARD_SCRIPT_VERIFY_FLAGS));
+            BOOST_CHECK_EQUAL(error, "Missing previous transaction for signer final script");
+            BOOST_CHECK_EQUAL(bytes(request), before);
+        }
+        for (bool final : {false, true}) {
+            auto response = original;
+            BOOST_REQUIRE(SignPSBTInput(provider, response, 0, &data, SIGHASH_ALL, nullptr, final) == common::PSBTError::OK);
+            auto request = original;
+            BOOST_REQUIRE(ExternalSigner::MergeSignatures(request, response, error, STANDARD_SCRIPT_VERIFY_FLAGS));
+            auto summary = original;
+            summary.inputs[0].non_witness_utxo.reset();
+            response.inputs[0].non_witness_utxo.reset();
+            const auto before = bytes(summary);
+            BOOST_CHECK(!ExternalSigner::MergeSignatures(summary, response, error, STANDARD_SCRIPT_VERIFY_FLAGS));
+            BOOST_CHECK_EQUAL(error, final ? "Missing previous transaction for signer final script" : "Signer returned an invalid partial signature");
+            BOOST_CHECK_EQUAL(bytes(summary), before);
+            if (final) {
+                // Verification of an existing final has no new-signing requirement.
+                BOOST_REQUIRE(PSBTInputSignedAndVerified(response, 0, &data));
+                auto unchanged = response;
+                const std::vector<bool> targets{false};
+                BOOST_REQUIRE(ExternalSigner::MergeSignatures(unchanged, response, error, STANDARD_SCRIPT_VERIFY_FLAGS, &targets));
+                BOOST_CHECK_EQUAL(bytes(unchanged), bytes(response));
+            } else {
+                // Unchanged partials from another participant are not new results.
+                auto unchanged = response;
+                const std::vector<bool> targets{false};
+                BOOST_REQUIRE(ExternalSigner::MergeSignatures(unchanged, response, error, STANDARD_SCRIPT_VERIFY_FLAGS, &targets));
+                BOOST_CHECK_EQUAL(bytes(unchanged), bytes(response));
+            }
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(signer_response_preserves_request)
 {
     const CKey key = GenerateRandomKey(pq::SchemeId::FALCON_512);
@@ -214,6 +280,8 @@ BOOST_AUTO_TEST_CASE(signer_response_preserves_request)
             }
         }
         two.inputs[1].final_script_sig = CScript{} << existing;
+        two.inputs[1].witness_utxo = previous.vout[0];
+        two.inputs[1].non_witness_utxo.reset();
         BOOST_REQUIRE(PSBTInputSignedAndVerified(two, 1, &two_data));
         auto returned = two;
         BOOST_REQUIRE(SignPSBTInput(provider, returned, 0, &two_data, SIGHASH_ALL, nullptr, true) == common::PSBTError::OK);
