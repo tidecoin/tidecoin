@@ -2180,7 +2180,7 @@ BOOST_AUTO_TEST_CASE(witness_v1_hash_types_are_script_errors)
                     if (!negated) BOOST_REQUIRE(key.Sign512(hash, sig, false));
                     sig.push_back(mode); // A one-byte signature is invalid for negated controls.
                     CScriptWitness witness;
-                    if (multi) witness.stack.push_back({});
+                    if (multi) witness.stack.emplace_back();
                     witness.stack.push_back(sig);
                     witness.stack.push_back(ToByteVector(script));
                     for (unsigned flags : {block_flags, block_flags | STANDARD_SCRIPT_VERIFY_FLAGS}) {
@@ -2210,8 +2210,8 @@ BOOST_AUTO_TEST_CASE(witness_v1_hash_types_are_script_errors)
                     }
                 }
                 CScriptWitness empty;
-                if (multi) empty.stack.push_back({});
-                empty.stack.push_back({});
+                if (multi) empty.stack.emplace_back();
+                empty.stack.emplace_back();
                 empty.stack.push_back(ToByteVector(script));
                 for (unsigned flags : {block_flags, block_flags | STANDARD_SCRIPT_VERIFY_FLAGS}) {
                     ScriptError error{SCRIPT_ERR_OK};
@@ -2284,7 +2284,7 @@ BOOST_AUTO_TEST_CASE(legacy_v0_hash_type_controls)
                         if (multi) script_sig << OP_0;
                         script_sig << sig;
                     } else {
-                        if (multi) witness.stack.push_back({});
+                        if (multi) witness.stack.emplace_back();
                         witness.stack.push_back(sig);
                         witness.stack.push_back(ToByteVector(script));
                     }

@@ -66,14 +66,14 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
                 foreign, owned = (1, 0) if reverse else (0, 1)
                 for explicit in (False, True):
                     mode = {'sighashtype': 'ALL'} if explicit else {}
-                    for signed in (wallet.walletprocesspsbt(request.to_base64(), finalize=False, **mode)['psbt'],
-                                   offline.descriptorprocesspsbt(request.to_base64(), [descriptors[1]], finalize=False, **mode)['psbt']):
+                    for signed in (wallet.walletprocesspsbt(psbt=request.to_base64(), finalize=False, **mode)['psbt'],
+                                   offline.descriptorprocesspsbt(psbt=request.to_base64(), descriptors=[descriptors[1]], finalize=False, **mode)['psbt']):
                         decoded = node.decodepsbt(signed)['inputs']
                         assert 'partial_signatures' not in decoded[foreign]
                         assert_equal(decoded[foreign]['sighash'], 'SINGLE|ANYONECANPAY')
                         assert all(bytes.fromhex(sig)[-1] == 1 for sig in decoded[owned]['partial_signatures'].values())
             # Omitted public mode preserves absent declarations; explicit ALL records them.
-            updated = wallet.walletprocesspsbt(filled, False, finalize=False)['psbt']
+            updated = wallet.walletprocesspsbt(psbt=filled, sign=False, finalize=False)['psbt']
             assert all(PSBT_IN_SIGHASH_TYPE not in item.map for item in PSBT.from_base64(updated).i)
             declared = wallet.walletprocesspsbt(filled, False, 'ALL', False)['psbt']
             assert all(item.map[PSBT_IN_SIGHASH_TYPE] == (1).to_bytes(4, 'little') for item in PSBT.from_base64(declared).i)
@@ -83,7 +83,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
                 partials = [offline.descriptorprocesspsbt(filled, [desc], mode, False)['psbt'] for desc in descriptors]
                 # Omitted public updates preserve declarations and signatures.
                 for partial in partials:
-                    updated = wallet.walletprocesspsbt(partial, False, finalize=False)['psbt']
+                    updated = wallet.walletprocesspsbt(psbt=partial, sign=False, finalize=False)['psbt']
                     before_inputs = node.decodepsbt(partial)['inputs']
                     after_inputs = node.decodepsbt(updated)['inputs']
                     for before, after in zip(before_inputs, after_inputs):
@@ -105,7 +105,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
                     missing_scripts.i[1].map.pop(5, None)  # witness script
                     missing_scripts.i[1].map.pop(1, None)  # witness UTXO
                     missing_scripts.i[1].map[PSBT_IN_NON_WITNESS_UTXO] = previous[1]
-                    updated = PSBT.from_base64(wallet.walletprocesspsbt(missing_scripts.to_base64(), False, finalize=False)['psbt'])
+                    updated = PSBT.from_base64(wallet.walletprocesspsbt(psbt=missing_scripts.to_base64(), sign=False, finalize=False)['psbt'])
                     assert 5 in updated.i[1].map and 1 in updated.i[1].map
                     assert 7 not in updated.i[1].map and 8 not in updated.i[1].map
                 assert not offline.finalizepsbt(conflict.to_base64())['complete']
@@ -133,7 +133,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
                 # A visited foreign cached signature cannot authorize finalization.
                 foreign = PSBT.from_base64(partials[0])
                 foreign.i[0].map.pop(PSBT_IN_SIGHASH_TYPE)
-                visited = wallet.walletprocesspsbt(foreign.to_base64(), finalize=False)['psbt']
+                visited = wallet.walletprocesspsbt(psbt=foreign.to_base64(), finalize=False)['psbt']
                 decoded = node.decodepsbt(visited)['inputs']
                 assert 'final_scriptSig' not in decoded[0] and 'final_scriptwitness' not in decoded[0]
                 assert 'sighash' not in decoded[0]
@@ -162,11 +162,11 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
                     digest = SegwitV0SignatureHash(key_to_p2pkh_script(keys[1][1]), existing.tx, 1, mode, 100_000_000)
                 else:
                     digest = b'\x01' + bytes(31)
-                signature = bytes.fromhex(subprocess.check_output([_get_testkeys_path(), '--sign-key=' + keys[1][0], '--sign-hash=' + digest.hex()], text=True).strip()) + bytes([mode])
+                signature = bytes.fromhex(subprocess.check_output([_get_testkeys_path(), '--sign-key=' + keys[1][0], '--sign-hash=' + digest.hex()], text=True, encoding="utf8").strip()) + bytes([mode])
                 existing.i[1].map[b'\x02' + keys[1][1]] = signature
                 existing.i[1].map[PSBT_IN_SIGHASH_TYPE] = mode.to_bytes(4, 'little')
                 assert_equal(offline.analyzepsbt(existing.to_base64())['inputs'][1]['issue'], 'single_without_output')
-                for processed in (offline.finalizepsbt(existing.to_base64(), False), wallet.walletprocesspsbt(existing.to_base64(), False), offline.descriptorprocesspsbt(existing.to_base64(), [], finalize=True)):
+                for processed in (offline.finalizepsbt(existing.to_base64(), False), wallet.walletprocesspsbt(existing.to_base64(), False), offline.descriptorprocesspsbt(psbt=existing.to_base64(), descriptors=[], finalize=True)):
                     input_map = PSBT.from_base64(processed['psbt']).i[1].map
                     assert 7 not in input_map and 8 not in input_map
                     assert_equal(input_map[b'\x02' + keys[1][1]], signature)
@@ -212,11 +212,11 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
             rules = '-rules=pre-auxpow' if self.options.preactivation else '-rules=post-auxpow'
             for verify in ([], ['-verify']):
                 command = self.get_binaries().tx_argv() + ['-regtest', rules] + verify + [raw, 'set=privatekeys:' + json.dumps([keys[1][0]]), 'set=prevtxs:' + json.dumps(prevouts), 'sign=SINGLE']
-                result = subprocess.run(command, capture_output=True, text=True)
+                result = subprocess.run(command, capture_output=True, text=True, encoding="utf8")
                 assert result.returncode != 0 and not result.stdout.strip()
                 assert 'requires an output' in result.stderr, result.stderr
             foreign_command = self.get_binaries().tx_argv() + ['-regtest', rules, raw, 'set=privatekeys:' + json.dumps([keys[0][0]]), 'set=prevtxs:' + json.dumps(missing_own), 'sign=SINGLE|ANYONECANPAY']
-            result = subprocess.run(foreign_command, capture_output=True, text=True)
+            result = subprocess.run(foreign_command, capture_output=True, text=True, encoding="utf8")
             assert_equal(result.returncode, 0)
             assert_equal(input_bytes(tx_from_hex(result.stdout.strip()), 1), input_bytes(no_output.tx, 1))
             for byte in (0, 0xffffffff, 0x101, 4, 0x22, 0x41, 0x43):
@@ -260,20 +260,20 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
                 wrong = [dict(prevouts[0], amount=2), prevouts[1]]
                 assert_raises_rpc_error(-22, 'amount mismatch', node.signrawtransactionwithkey, raw, [keys[0][0]], wrong)
                 utility = self.get_binaries().tx_argv() + ['-regtest', rules]
-                refused = subprocess.run(utility + [raw, 'set=privatekeys:' + json.dumps([keys[0][0]]), 'set=prevtxs:' + json.dumps(missing), 'sign=ALL'], capture_output=True, text=True)
+                refused = subprocess.run(utility + [raw, 'set=privatekeys:' + json.dumps([keys[0][0]]), 'set=prevtxs:' + json.dumps(missing), 'sign=ALL'], capture_output=True, text=True, encoding="utf8")
                 assert refused.returncode != 0 and not refused.stdout.strip()
                 assert 'Missing amount' in refused.stderr
-                permitted = subprocess.run(utility + [raw, 'set=privatekeys:' + json.dumps([keys[0][0]]), 'set=prevtxs:' + json.dumps(missing), 'sign=ALL|ANYONECANPAY'], capture_output=True, text=True)
+                permitted = subprocess.run(utility + [raw, 'set=privatekeys:' + json.dumps([keys[0][0]]), 'set=prevtxs:' + json.dumps(missing), 'sign=ALL|ANYONECANPAY'], capture_output=True, text=True, encoding="utf8")
                 assert_equal(permitted.returncode, 0)
                 assert tx_from_hex(permitted.stdout.strip()).wit.vtxinwit[0].scriptWitness.stack
                 for partial_hex in (anyone['hex'], permitted.stdout.strip()):
                     finished = node.signrawtransactionwithkey(partial_hex, [keys[1][0]], prevouts)
                     assert finished['complete']
                     assert node.testmempoolaccept([finished['hex']])[0]['allowed']
-                complete = subprocess.run(utility + [raw, 'set=privatekeys:' + json.dumps([key[0] for key in keys]), 'set=prevtxs:' + json.dumps(prevouts), 'sign=ALL'], capture_output=True, text=True)
+                complete = subprocess.run(utility + [raw, 'set=privatekeys:' + json.dumps([key[0] for key in keys]), 'set=prevtxs:' + json.dumps(prevouts), 'sign=ALL'], capture_output=True, text=True, encoding="utf8")
                 assert_equal(complete.returncode, 0)
                 assert node.testmempoolaccept([complete.stdout.strip()])[0]['allowed']
-                checked = subprocess.run(utility + ['-verify', complete.stdout.strip(), 'set=prevtxs:' + json.dumps(prevouts)], capture_output=True, text=True)
+                checked = subprocess.run(utility + ['-verify', complete.stdout.strip(), 'set=prevtxs:' + json.dumps(prevouts)], capture_output=True, text=True, encoding="utf8")
                 assert_equal(checked.returncode, 0)
         # Synthetic maximum amounts are ordinary supplied values, not absence.
         secret, pubkey = generate_keypair(wif=True, scheme='7')
@@ -287,11 +287,11 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
             result = offline.signrawtransactionwithkey(raw, [secret], [supplied])
             assert result['complete']
             rules = '-rules=pre-auxpow' if self.options.preactivation else '-rules=post-auxpow'
-            checked = subprocess.run(self.get_binaries().tx_argv() + ['-regtest', rules, '-verify', result['hex'], 'set=prevtxs:' + json.dumps([supplied], default=str)], capture_output=True, text=True)
+            checked = subprocess.run(self.get_binaries().tx_argv() + ['-regtest', rules, '-verify', result['hex'], 'set=prevtxs:' + json.dumps([supplied], default=str)], capture_output=True, text=True, encoding="utf8")
             assert_equal(checked.returncode, 0)
-            utility_signed = subprocess.run(self.get_binaries().tx_argv() + ['-regtest', rules, raw, 'set=prevtxs:' + json.dumps([supplied], default=str), 'set=privatekeys:' + json.dumps([secret]), 'sign=ALL'], capture_output=True, text=True)
+            utility_signed = subprocess.run(self.get_binaries().tx_argv() + ['-regtest', rules, raw, 'set=prevtxs:' + json.dumps([supplied], default=str), 'set=privatekeys:' + json.dumps([secret]), 'sign=ALL'], capture_output=True, text=True, encoding="utf8")
             assert_equal(utility_signed.returncode, 0)
-            checked = subprocess.run(self.get_binaries().tx_argv() + ['-regtest', rules, '-verify', utility_signed.stdout.strip(), 'set=prevtxs:' + json.dumps([supplied], default=str)], capture_output=True, text=True)
+            checked = subprocess.run(self.get_binaries().tx_argv() + ['-regtest', rules, '-verify', utility_signed.stdout.strip(), 'set=prevtxs:' + json.dumps([supplied], default=str)], capture_output=True, text=True, encoding="utf8")
             assert_equal(checked.returncode, 0)
         try:
             offline.signrawtransactionwithkey(raw, [secret], [previous])
@@ -302,7 +302,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
             raise AssertionError('Missing amount was accepted')
         for amount in (-1, 21000001):
             assert_raises_rpc_error(-3, 'Amount out of range', offline.signrawtransactionwithkey, raw, [secret], [dict(previous, amount=amount)])
-            refused = subprocess.run(self.get_binaries().tx_argv() + ['-regtest', rules, raw, 'set=prevtxs:' + json.dumps([dict(previous, amount=amount)]), 'set=privatekeys:' + json.dumps([secret]), 'sign=ALL'], capture_output=True, text=True)
+            refused = subprocess.run(self.get_binaries().tx_argv() + ['-regtest', rules, raw, 'set=prevtxs:' + json.dumps([dict(previous, amount=amount)]), 'set=privatekeys:' + json.dumps([secret]), 'sign=ALL'], capture_output=True, text=True, encoding="utf8")
             assert refused.returncode != 0 and not refused.stdout.strip()
             assert 'out of range' in refused.stderr.lower()
         self.check_utility_boundary_amounts(destination)
@@ -311,7 +311,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
         node.createwallet('coordinator', disable_private_keys=True, blank=True)
         coordinator = node.get_wallet_rpc('coordinator')
         bare = node.createpsbt(list(outpoints), {destination: Decimal('1.99')})
-        public = coordinator.walletprocesspsbt(bare, False, finalize=False)['psbt']
+        public = coordinator.walletprocesspsbt(psbt=bare, sign=False, finalize=False)['psbt']
         assert all(PSBT_IN_SIGHASH_TYPE not in item.map for item in PSBT.from_base64(public).i)
         for mode, byte in [('ALL', 1), ('NONE', 2), ('SINGLE|ANYONECANPAY', 0x83)]:
             declared = coordinator.walletprocesspsbt(bare, False, mode, False)['psbt']
@@ -357,9 +357,9 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
                 for amount in (0, Decimal('0.00000001'), Decimal('20999999.99999999'), 21000000):
                     metadata = 'set=prevtxs:' + json.dumps([dict(previous, amount=amount)], default=str)
                     for mode in ('ALL', 'NONE', 'SINGLE', 'ALL|ANYONECANPAY', 'NONE|ANYONECANPAY', 'SINGLE|ANYONECANPAY'):
-                        signed = subprocess.run(utility + [raw, metadata, 'set=privatekeys:' + json.dumps([secret]), 'sign=' + mode], capture_output=True, text=True)
+                        signed = subprocess.run(utility + [raw, metadata, 'set=privatekeys:' + json.dumps([secret]), 'sign=' + mode], capture_output=True, text=True, encoding="utf8")
                         assert_equal(signed.returncode, 0)
-                        checked = subprocess.run(utility + ['-verify', signed.stdout.strip(), metadata], capture_output=True, text=True)
+                        checked = subprocess.run(utility + ['-verify', signed.stdout.strip(), metadata], capture_output=True, text=True, encoding="utf8")
                         assert_equal(checked.returncode, 0)
                         count += 1
         self.log.info(f'Utility boundary amounts: {count} independently verified signatures')
@@ -399,7 +399,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
         base = PSBT.from_base64(node.createpsbt(list(points), {destination: Decimal('1.99')}))
         for i, transaction in enumerate(previous):
             base.i[i].map[PSBT_IN_NON_WITNESS_UTXO] = transaction
-        base = PSBT.from_base64(offline.descriptorprocesspsbt(base.to_base64(), public, finalize=False)['psbt'])
+        base = PSBT.from_base64(offline.descriptorprocesspsbt(psbt=base.to_base64(), descriptors=public, finalize=False)['psbt'])
         base.i[0].map[PSBT_IN_SIGHASH_TYPE] = (0x83).to_bytes(4, 'little')
         for fallback in (False, True):
             name = 'multisig_fallback' if fallback else 'multisig_managers'
@@ -419,7 +419,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
                 foreign, target = (1, 0) if reverse else (0, 1)
                 for explicit in (False, True):
                     options = {'sighashtype': 'ALL'} if explicit else {}
-                    result = wallet.walletprocesspsbt(request.to_base64(), finalize=False, **options)
+                    result = wallet.walletprocesspsbt(psbt=request.to_base64(), finalize=False, **options)
                     assert not result['complete']
                     inputs = node.decodepsbt(result['psbt'])['inputs']
                     assert_equal(inputs[foreign]['sighash'], 'SINGLE|ANYONECANPAY')
@@ -437,7 +437,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
             base = PSBT.from_base64(node.createpsbt(list(points), {destination: Decimal('1.99')}))
             for i, transaction in enumerate(previous):
                 base.i[i].map[PSBT_IN_NON_WITNESS_UTXO] = transaction
-            filled = offline.descriptorprocesspsbt(base.to_base64(), [node.getdescriptorinfo(d)['descriptor'] for d in descriptors], finalize=False)['psbt']
+            filled = offline.descriptorprocesspsbt(psbt=base.to_base64(), descriptors=[node.getdescriptorinfo(d)['descriptor'] for d in descriptors], finalize=False)['psbt']
             inputs = node.decodepsbt(filled)['inputs']
             supplied = []
             for i in range(2):
@@ -453,14 +453,14 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
             assert not witness or not witness[0].scriptWitness.stack
             assert any('Missing amount for another input' in e['error'] for e in refused['errors'])
             utility = self.get_binaries().tx_argv() + ['-regtest', '-rules=post-auxpow']
-            result = subprocess.run(utility + [raw, 'set=privatekeys:' + json.dumps([keys[0][0]]), 'set=prevtxs:' + json.dumps(missing), 'sign=ALL'], capture_output=True, text=True)
+            result = subprocess.run(utility + [raw, 'set=privatekeys:' + json.dumps([keys[0][0]]), 'set=prevtxs:' + json.dumps(missing), 'sign=ALL'], capture_output=True, text=True, encoding="utf8")
             assert result.returncode != 0 and not result.stdout.strip()
             assert f"Missing amount for input 1 ({points[1]['txid']}:{points[1]['vout']})" in result.stderr
             for rpc in (node, offline):
                 signed = rpc.signrawtransactionwithkey(raw, [key[0] for key in keys], missing if rpc is node else supplied)
                 assert signed['complete']
                 assert node.testmempoolaccept([signed['hex']])[0]['allowed']
-                checked = subprocess.run(utility + ['-verify', signed['hex'], 'set=prevtxs:' + json.dumps(supplied)], capture_output=True, text=True)
+                checked = subprocess.run(utility + ['-verify', signed['hex'], 'set=prevtxs:' + json.dumps(supplied)], capture_output=True, text=True, encoding="utf8")
                 assert_equal(checked.returncode, 0)
 
     def check_wrapped_wallet_fees(self):

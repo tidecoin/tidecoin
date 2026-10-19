@@ -14,6 +14,7 @@
 #include <script/signingprovider.h>
 #include <span.h>
 #include <streams.h>
+#include <util/string.h>
 
 #include <optional>
 #include <set>
@@ -845,7 +846,7 @@ struct PartiallySignedTransaction
                 }
             }
             if (!input.IsUTXOConsistent(tx->vin[i].prevout)) {
-                throw std::ios_base::failure("PSBT previous output information is inconsistent at input " + std::to_string(i));
+                throw std::ios_base::failure("PSBT previous output information is inconsistent at input " + util::ToString(i));
             }
             ++i;
         }

@@ -120,11 +120,11 @@ void PSBTOperationsDialog::signTransaction()
     if (err) {
         QString message = tr("Failed to sign transaction: %1").arg(QString::fromStdString(PSBTErrorString(*err).translated));
         for (const auto& issue : input_errors) {
-            message += tr(" Input %1: requested mode %2, declared mode %3.")
+            message += " " + tr("Input %1: requested mode %2, declared mode %3.")
                 .arg(issue.input).arg(issue.requested_mode)
                 .arg(issue.declared_mode ? QString::number(*issue.declared_mode) : tr("absent"));
         }
-        if (*err == common::PSBTError::SIGHASH_MISMATCH) message += tr(" Select the matching mode explicitly through a signing interface that supports it.");
+        if (*err == common::PSBTError::SIGHASH_MISMATCH) message += " " + tr("Select the matching mode explicitly through a signing interface that supports it.");
         showStatus(message, StatusLevel::ERR);
         return;
     }

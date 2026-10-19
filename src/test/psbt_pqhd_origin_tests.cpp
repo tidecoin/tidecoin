@@ -997,7 +997,7 @@ BOOST_FIXTURE_TEST_CASE(psbt_cleanup_metadata_and_wrappers, BasicTestingSetup)
         base.inputs[i].non_witness_utxo = MakeTransactionRef(previous);
         base.inputs[i].witness_utxo = previous.vout[i];
         base.inputs[i].witness_script = script;
-        base.inputs[i].unknown[{0xaa}] = {1, 2, 3};
+        base.inputs[i].unknown.emplace(std::vector<unsigned char>{0xaa}, std::vector<unsigned char>{1, 2, 3});
     }
     base.inputs[1].redeem_script = program;
     base.inputs[0].sighash_type = SIGHASH_NONE;

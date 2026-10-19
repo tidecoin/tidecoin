@@ -273,7 +273,7 @@ BOOST_AUTO_TEST_CASE(public_fallback_and_multikey_origins)
 BOOST_AUTO_TEST_SUITE_END()
 
 // This small regression suite runs without opting into the expensive wallet suites.
-BOOST_FIXTURE_TEST_SUITE(psbt_wallet_policy_tests, WalletTestingSetup)
+BOOST_FIXTURE_TEST_SUITE(psbt_wallet_tests_policy, WalletTestingSetup)
 
 BOOST_AUTO_TEST_CASE(psbt_collects_all_refusals_atomically)
 {

@@ -182,7 +182,7 @@ class WalletSignerTest(BitcoinTestFramework):
                 extra_tx = private.gettransaction(extra_txid, verbose=True)['decoded']
                 extra_vout = next(i for i, out in enumerate(extra_tx['vout']) if out['scriptPubKey'].get('address') == change)
                 two = holder.createpsbt([{'txid': txid, 'vout': vout}, {'txid': extra_txid, 'vout': extra_vout}], {receive: Decimal('1.999')})
-                two = PSBT.from_base64(private.walletprocesspsbt(two, False, finalize=False)['psbt'])
+                two = PSBT.from_base64(private.walletprocesspsbt(psbt=two, sign=False, finalize=False)['psbt'])
                 for reverse in (False, True):
                     test = PSBT.from_base64(two.to_base64())
                     test.i[1].map[3] = (2).to_bytes(4, 'little')
@@ -205,11 +205,11 @@ class WalletSignerTest(BitcoinTestFramework):
                         mixed.tx.vin.reverse()
                         mixed.i.reverse()
                     mixed.g.map[PSBT_GLOBAL_UNSIGNED_TX] = mixed.tx.serialize()
-                    expected = private.walletprocesspsbt(mixed.to_base64(), finalize=False)['psbt']
+                    expected = private.walletprocesspsbt(psbt=mixed.to_base64(), finalize=False)['psbt']
                     response(expected)
                     foreign_index, owned_index = (0, 1) if reverse else (1, 0)
                     for explicit in (False, True):
-                        result = wallet.walletprocesspsbt(mixed.to_base64(), finalize=False, **({'sighashtype': 'ALL'} if explicit else {}))
+                        result = wallet.walletprocesspsbt(psbt=mixed.to_base64(), finalize=False, **({'sighashtype': 'ALL'} if explicit else {}))
                         inputs = node.decodepsbt(result['psbt'])['inputs']
                         assert_equal(inputs[foreign_index]['sighash'], 'SINGLE|ANYONECANPAY')
                         assert 'partial_signatures' not in inputs[foreign_index]

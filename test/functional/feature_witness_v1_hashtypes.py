@@ -80,7 +80,7 @@ class WitnessV1HashTypesTest(BitcoinTestFramework):
             rules = '-rules=post-auxpow' if active else '-rules=pre-auxpow'
             command = self.get_binaries().tx_argv() + ['-regtest', rules, '-verify', raw,
                                                       'set=prevtxs:' + json.dumps([prevout], default=str)]
-            result = subprocess.run(command, capture_output=True, text=True)
+            result = subprocess.run(command, capture_output=True, text=True, encoding="utf8")
             assert_equal(result.returncode, 0)
             assert_equal(result.stdout.strip(), 'OK')
 
@@ -167,7 +167,7 @@ class WitnessV1HashTypesTest(BitcoinTestFramework):
                             digest = SegwitV0SignatureHash(script if kind == 'v0_multi' else key_to_p2pkh_script(pubkey), tx, 0, mode, value)
                         else:
                             digest = witness_v1_hash(tx, script, value, output, mode)
-                        sig = bytes.fromhex(subprocess.check_output([_get_testkeys_path(), '--sign-key=' + secret, '--sign-hash=' + digest.hex()], text=True).strip()) + bytes([mode])
+                        sig = bytes.fromhex(subprocess.check_output([_get_testkeys_path(), '--sign-key=' + secret, '--sign-hash=' + digest.hex()], text=True, encoding="utf8").strip()) + bytes([mode])
                     if kind == 'legacy':
                         tx.vin[0].scriptSig = CScript([sig, pubkey])
                     elif kind == 'legacy_multi':
