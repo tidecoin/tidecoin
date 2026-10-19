@@ -9,9 +9,10 @@ welcome to contribute towards development in the form of peer review, testing
 and patches. This document explains the practical process and guidelines for
 contributing.
 
-Tidecoin is a post-quantum cryptocurrency built on Bitcoin Core. Many of the
-development practices below originate from Bitcoin Core's contributor model,
-adapted for Tidecoin's post-quantum focus and smaller team.
+Tidecoin is an independently maintained post-quantum cryptocurrency derived from
+Bitcoin Core. Many of the development practices below originate from Bitcoin
+Core's contributor model, adapted for Tidecoin's post-quantum focus and smaller
+team.
 
 In terms of structure, there is no particular concept of "Tidecoin
 developers" in the sense of privileged people. Open source often naturally

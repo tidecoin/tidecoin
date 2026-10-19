@@ -6,7 +6,7 @@ The latest release on the `master` branch is supported with security updates.
 
 | Version | Supported |
 |---------|-----------|
-| v30.0   | Yes       |
+| v1.0.0  | Yes       |
 
 ## Reporting a Vulnerability
 

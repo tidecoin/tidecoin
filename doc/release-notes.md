@@ -391,8 +391,8 @@ requiring manual cleanup. See [snapshot export documentation](assumeutxo.md).
 Credits
 ========
 
-Tidecoin is built on Bitcoin Core. We thank the Bitcoin Core developers for
-their foundational work.
+Tidecoin is derived from Bitcoin Core and maintained independently. We thank
+the Bitcoin Core developers for their foundational work.
 
 The post-quantum cryptographic integration, PQHD wallet, ML-KEM transport,
 YespowerTIDE mining, AuxPoW infrastructure, and script extensions were

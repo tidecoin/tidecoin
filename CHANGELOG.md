@@ -1,8 +1,8 @@
 # Changelog
 
-All notable Tidecoin-specific changes are documented in this file.
-Tidecoin is built on Bitcoin Core v30. This changelog covers the
-post-quantum integration and Tidecoin-specific development only.
+Tidecoin is independently maintained software derived from Bitcoin Core.
+This changelog documents notable changes to Tidecoin, including post-quantum
+integration, Tidecoin-specific development, and selected upstream updates.
 
 ## v1.0.0 (2026-03-02)
 

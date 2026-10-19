@@ -1,6 +1,6 @@
 # Tidecoin (TDC)
 
-Tidecoin is a post-quantum cryptocurrency built on Bitcoin Core v30. It replaces ECDSA with Falcon-512 signatures from genesis, provides an upgrade path to Falcon-1024 and ML-DSA, has a 21 million TDC supply, and is CPU-mineable via YespowerTIDE in its pre-AuxPoW phase.
+Tidecoin is an independently maintained post-quantum cryptocurrency derived from Bitcoin Core. It replaces ECDSA with Falcon-512 signatures from genesis, provides an upgrade path to Falcon-1024 and ML-DSA, has a 21 million TDC supply, and is CPU-mineable via YespowerTIDE in its pre-AuxPoW phase.
 
 ## What is Tidecoin?
 
@@ -61,7 +61,7 @@ See the [whitepaper design positioning](doc/whitepaper.md#13-design-positioning)
 - **Full-stack post-quantum security** — Signatures, P2P transport, script hashing, and wallet derivation are designed for the quantum era, not only the signing layer.
 - **NIST standards, not experiments** — Signature and transport cryptography uses finalized NIST standards where available, plus Falcon as a NIST PQC winner in Draft FIPS 206 standardization.
 - **Multi-scheme cryptographic agility** — Five NIST-track signature parameter sets. If a vulnerability is found in one lattice construction, alternative schemes are available through height-gated consensus upgrade.
-- **Bitcoin Core v30 foundation** — Preserves the UTXO model, scripting system, peer-to-peer network, and 15+ years of peer-reviewed consensus logic, with Tidecoin-specific tests for PQ signatures, PQHD, AuxPoW, and transport code.
+- **Bitcoin-derived architecture** — Retains the UTXO model and adapts Bitcoin Core's script, networking, and validation architecture, with Tidecoin-specific tests for PQ signatures, PQHD, AuxPoW, and transport code.
 - **CPU-friendly mining** — YespowerTIDE is the pre-AuxPoW memory-hard proof-of-work algorithm for fair distribution without specialized hardware.
 - **No premine, no ICO** — All coins earned through proof-of-work mining from block zero.
 - **Merged mining ready** — AuxPoW infrastructure enables the Phase 2 transition to scrypt-based merged mining with Litecoin.
@@ -126,6 +126,8 @@ build/test/functional/test_runner.py
 See [src/test/README.md](src/test/README.md) for unit test details and [test/](test/) for functional and regression tests.
 
 ## Development Process
+
+The Tidecoin 1.x codebase was initially based on Bitcoin Core v30 and has since evolved through Tidecoin-specific development and selected updates from later Bitcoin Core development. Tidecoin maintains its own releases, consensus rules, and compatibility requirements.
 
 The `master` branch is regularly built and tested but is not guaranteed to be completely stable. See the build guides above for compilation instructions.
 

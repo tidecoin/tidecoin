@@ -4,13 +4,19 @@ Instructions for AI coding assistants working with this repository.
 
 ## Project Overview
 
-Tidecoin is a post-quantum cryptocurrency built on Bitcoin Core v30. It replaces
-ECDSA entirely with NIST-standardized post-quantum signature schemes. The network
-has been operational since December 27, 2020.
+Tidecoin is an independently maintained post-quantum cryptocurrency derived from
+Bitcoin Core. It replaces ECDSA entirely with NIST-standardized post-quantum
+signature schemes. The network has been operational since December 27, 2020.
 
-**This is NOT Bitcoin Core.** While the codebase inherits from Bitcoin Core v30,
-all classical cryptographic signing has been replaced. Do not suggest ECDSA,
-Schnorr, Taproot, or secp256k1 solutions — none of these exist in Tidecoin.
+The Tidecoin 1.x codebase was initially based on Bitcoin Core v30 and has since
+evolved through Tidecoin-specific development and selected updates from later
+Bitcoin Core development. Tidecoin maintains its own releases, consensus rules,
+and compatibility requirements. Check behavior against this repository before
+assuming that an upstream implementation or recommendation applies.
+
+**This is NOT Bitcoin Core.** All classical cryptographic signing has been
+replaced. Do not suggest ECDSA, Schnorr, Taproot, or secp256k1 solutions — none of
+these exist in Tidecoin.
 
 ## Build
 

@@ -2,11 +2,17 @@
 
 > Post-quantum cryptocurrency using NIST-standardized FALCON-512 signatures, operational since December 2020.
 
-Tidecoin is a decentralized cryptocurrency built on Bitcoin Core v30 that replaces
-ECDSA entirely with post-quantum signature schemes. Every transaction since genesis
+Tidecoin is an independently maintained post-quantum cryptocurrency derived from
+Bitcoin Core. It replaces ECDSA entirely with post-quantum signature schemes.
+Every transaction since genesis
 (December 27, 2020) has been signed with FALCON-512, a lattice-based scheme selected
 by NIST for standardization as FN-DSA (Draft FIPS 206). The network has produced over
 2.3 million blocks with zero security incidents.
+
+The Tidecoin 1.x codebase was initially based on Bitcoin Core v30 and has since
+evolved through Tidecoin-specific development and selected updates from later
+Bitcoin Core development. Tidecoin maintains its own releases, consensus rules,
+and compatibility requirements.
 
 ## Key Facts
 

@@ -114,8 +114,8 @@ fi
 
 if [ -z "$NO_DEPENDS" ]; then
   python3 depends/test/download_tests.py
-  if [[ $CI_IMAGE_NAME_TAG == *centos* ]] && [ -x /bin/dash ]; then
-    SHELL_OPTS="CONFIG_SHELL=/bin/dash"
+  if [[ $CI_IMAGE_NAME_TAG == *alpine* ]]; then
+    SHELL_OPTS="CONFIG_SHELL=/usr/bin/dash"
   else
     SHELL_OPTS=""
   fi

@@ -315,6 +315,12 @@ if(WIN32)
   endif()
 endif()
 
+# PQ signing needs more than musl's default 128 KiB thread stack. Record a
+# 1 MiB default in the ELF header for musl; glibc keeps its own thread defaults.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  try_append_linker_flag("-Wl,-z,stack-size=1048576" TARGET core_interface)
+endif()
+
 # Use 64-bit off_t on 32-bit Linux.
 if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SIZEOF_VOID_P EQUAL 4)
   # Ensure 64-bit offsets are used for filesystem accesses for 32-bit compilation.
