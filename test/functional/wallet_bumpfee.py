@@ -20,6 +20,7 @@ from test_framework.blocktools import (
     COINBASE_MATURITY,
 )
 from test_framework.messages import (
+    COIN,
     MAX_BIP125_RBF_SEQUENCE,
     MAX_SEQUENCE_NONFINAL,
 )
@@ -428,7 +429,7 @@ def test_notmine_bumpfee(self, rbf_node, peer_node, dest_address):
     assert_raises_rpc_error(-4, "Transaction contains inputs that don't belong to this wallet",
                             rbf_node.bumpfee, rbfid)
 
-    def finish_psbtbumpfee(psbt, allow_reject_reason=None):
+    def finish_psbtbumpfee(psbt, fee_rate=None):
         psbt = rbf_node.walletprocesspsbt(psbt=psbt, finalize=False)
         psbt = peer_node.walletprocesspsbt(psbt=psbt["psbt"], finalize=False)
         finalized = rbf_node.finalizepsbt(psbt["psbt"])
@@ -436,28 +437,18 @@ def test_notmine_bumpfee(self, rbf_node, peer_node, dest_address):
             finalized = peer_node.finalizepsbt(psbt["psbt"])
         assert finalized["complete"]
         res = rbf_node.testmempoolaccept([finalized["hex"]])
-        if not res[0]["allowed"]:
-            if allow_reject_reason and (allow_reject_reason in res[0].get("reject-reason", "") or allow_reject_reason in res[0].get("reject-details", "")):
-                return False
-            self.log.info(f"psbtbumpfee candidate rejected: {res[0]}")
-            assert res[0]["allowed"]
+        assert res[0]["allowed"], res[0]
         assert_greater_than(res[0]["fees"]["base"], old_fee)
-        return True
+        if fee_rate is not None:
+            # The external input is sized for its largest possible signature.
+            assert res[0]["fees"]["base"] * COIN >= fee_rate * res[0]["vsize"], res[0]
 
     self.log.info("Test that psbtbumpfee works for non-owned inputs")
     psbt = rbf_node.psbtbumpfee(txid=rbfid)
-    finish_psbtbumpfee(psbt["psbt"], allow_reject_reason="insufficient fee")
+    finish_psbtbumpfee(psbt["psbt"])
 
-    try:
-        psbt = rbf_node.psbtbumpfee(txid=rbfid, fee_rate=max(old_feerate + 10, old_feerate * 2))
-    except JSONRPCException as e:
-        assert e.error["code"] in (-8, -4)
-        if e.error["code"] == -8:
-            assert "Insufficient total fee" in e.error["message"]
-        else:
-            assert "Insufficient funds" in e.error["message"]
-    else:
-        finish_psbtbumpfee(psbt["psbt"], allow_reject_reason="insufficient fee")
+    psbt = rbf_node.psbtbumpfee(txid=rbfid, fee_rate=old_feerate + 10)
+    finish_psbtbumpfee(psbt["psbt"], fee_rate=old_feerate + 10)
 
     self.clear_mempool()
 

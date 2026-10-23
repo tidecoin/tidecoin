@@ -388,6 +388,10 @@ public:
 
     bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, std::optional<unsigned int> script_verify_flags = std::nullopt, const std::set<COutPoint>* missing_amounts = nullptr) const override;
     SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const override;
+    /** Refuse when a valid cached partial signature by one of this manager's
+     *  private keys was made in another mode. Checked for every manager before
+     *  any signs, since another manager could otherwise finalize it. */
+    std::optional<common::PSBTError> CheckPSBTSigningIntent(const PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata, int mode, unsigned int flags, std::vector<common::PSBTInputError>* input_errors) const override;
     std::optional<common::PSBTError> FillPSBT(PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata, std::optional<int> sighash_type = std::nullopt, bool sign = true, int* n_signed = nullptr, bool finalize = true, bool include_pqhd_origins = false, std::optional<unsigned int> script_verify_flags = std::nullopt, std::vector<common::PSBTInputError>* input_errors = nullptr) const override;
 
     uint256 GetID() const override;

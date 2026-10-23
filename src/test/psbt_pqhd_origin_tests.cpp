@@ -46,8 +46,8 @@ CPubKey MakeDummyTidePubKey(pq::SchemeId scheme_id)
 std::vector<uint32_t> MakePQHDPathForScheme(pq::SchemeId scheme_id)
 {
     return {
-        HARDENED | pqhd::PURPOSE,
-        HARDENED | pqhd::COIN_TYPE,
+        HARDENED | pqhd::PURPOSE_GENERIC,
+        HARDENED | pqhd::COIN_TYPE_MAIN,
         HARDENED | static_cast<uint32_t>(static_cast<uint8_t>(scheme_id)),
         HARDENED | 0U,
         HARDENED | 0U,
@@ -81,7 +81,7 @@ BOOST_AUTO_TEST_CASE(psbt_missing_witness_script_commitment)
                 psbt.inputs[0].witness_script = supplied;
                 const auto analysis = node::AnalyzePSBT(psbt, STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_WITNESS_V1_512);
                 BOOST_REQUIRE_EQUAL(analysis.inputs.size(), 1U);
-                BOOST_CHECK(analysis.inputs[0].missing_witness_script == commitment);
+                BOOST_CHECK(analysis.inputs[0].missing_witness_script == (wrapped && version == 1 ? std::vector<unsigned char>{} : commitment));
                 BOOST_CHECK(analysis.next == PSBTRole::UPDATER);
                 BOOST_CHECK(!analysis.estimated_vsize);
             }
@@ -119,13 +119,13 @@ BOOST_FIXTURE_TEST_CASE(psbt_partial_signature_signing_data, BasicTestingSetup)
                 }
                 sig.push_back(mode);
                 const SigPair partial{pub, sig};
-                // These are valid signatures even for undefined bytes: only
-                // the helper's v1 mode rule should refuse those cases.
-                const bool allowed = version != SigVersion::WITNESS_V1_512 || mode == 1 || mode == 2 || mode == 3 || mode == 0x81 || mode == 0x82 || mode == 0x83;
+                // Native v1 requires defined modes; a P2SH wrapper has no
+                // witness signature interpretation at all.
+                const bool allowed = version != SigVersion::WITNESS_V1_512 || (!wrapped && (mode == 1 || mode == 2 || mode == 3 || mode == 0x81 || mode == 0x82 || mode == 0x83));
                 BOOST_CHECK_EQUAL(VerifyPSBTPartialSignature(psbt, 0, partial, data, flags), allowed);
                 auto summary = psbt;
                 summary.inputs[0].non_witness_utxo.reset();
-                BOOST_CHECK_EQUAL(PSBTInputHasSigningUTXO(summary, 0, flags), version != SigVersion::BASE);
+                BOOST_CHECK_EQUAL(PSBTInputHasSigningUTXO(summary, 0, flags), version != SigVersion::BASE && !(wrapped && version == SigVersion::WITNESS_V1_512));
                 BOOST_CHECK_EQUAL(VerifyPSBTPartialSignature(summary, 0, partial, data, flags), allowed && version != SigVersion::BASE);
                 auto inconsistent = psbt;
                 inconsistent.inputs[0].witness_utxo.nValue++;
@@ -471,8 +471,8 @@ BOOST_AUTO_TEST_CASE(pqhd_origin_decode_rejects_malformed_values)
 
     // Legacy short paths (3 elements) are rejected; PQHD v1 requires 6 elements.
     const std::vector<uint32_t> short_path{
-        HARDENED | pqhd::PURPOSE,
-        HARDENED | pqhd::COIN_TYPE,
+        HARDENED | pqhd::PURPOSE_GENERIC,
+        HARDENED | pqhd::COIN_TYPE_MAIN,
         HARDENED | static_cast<uint32_t>(static_cast<uint8_t>(pq::SchemeId::FALCON_512)),
     };
     entry.value = psbt::tidecoin::MakePQHDOriginValue(uint256::ONE, short_path);
@@ -480,13 +480,13 @@ BOOST_AUTO_TEST_CASE(pqhd_origin_decode_rejects_malformed_values)
 
     // Wrong purpose should be rejected.
     auto bad_purpose_path = MakePQHDPathForScheme(pq::SchemeId::FALCON_512);
-    bad_purpose_path[0] = HARDENED | (pqhd::PURPOSE + 1U);
+    bad_purpose_path[0] = HARDENED | (pqhd::PURPOSE_GENERIC + 1U);
     entry.value = psbt::tidecoin::MakePQHDOriginValue(uint256::ONE, bad_purpose_path);
     BOOST_CHECK(!psbt::tidecoin::DecodePQHDOrigin(entry));
 
     // Wrong coin type should be rejected.
     auto bad_coin_path = MakePQHDPathForScheme(pq::SchemeId::FALCON_512);
-    bad_coin_path[1] = HARDENED | (pqhd::COIN_TYPE + 1U);
+    bad_coin_path[1] = HARDENED | (pqhd::COIN_TYPE_MAIN + 1U);
     entry.value = psbt::tidecoin::MakePQHDOriginValue(uint256::ONE, bad_coin_path);
     BOOST_CHECK(!psbt::tidecoin::DecodePQHDOrigin(entry));
 
@@ -498,8 +498,8 @@ BOOST_AUTO_TEST_CASE(pqhd_origin_decode_rejects_malformed_values)
 
     // Hardened path, but scheme mismatch between path[2] and pubkey prefix.
     const std::vector<uint32_t> mismatch_scheme_path{
-        HARDENED | pqhd::PURPOSE,
-        HARDENED | pqhd::COIN_TYPE,
+        HARDENED | pqhd::PURPOSE_GENERIC,
+        HARDENED | pqhd::COIN_TYPE_MAIN,
         HARDENED | 0x0AU, // ML-DSA-65
         HARDENED | 0U,
         HARDENED | 0U,
@@ -635,6 +635,14 @@ BOOST_FIXTURE_TEST_CASE(psbt_modes_and_cleanup, BasicTestingSetup)
             if (wrapped) original.inputs[0].redeem_script = program;
             auto compact = original;
             RemoveUnnecessaryTransactions(compact, flags);
+            if (wrapped) {
+                BOOST_CHECK(compact.inputs[0].non_witness_utxo);
+                const auto data = PrecomputePSBTData(compact);
+                BOOST_CHECK(SignPSBTInput(provider, compact, 0, &data, SIGHASH_ALL, nullptr, false, flags) == PSBTError::INCOMPLETE);
+                BOOST_CHECK(compact.inputs[0].partial_sigs.empty());
+                BOOST_CHECK(!FinalizePSBT(compact, flags));
+                continue;
+            }
             BOOST_CHECK(!compact.inputs[0].non_witness_utxo);
             BOOST_CHECK(!compact.inputs[0].sighash_type);
             const auto compact_data = PrecomputePSBTData(compact);
@@ -683,20 +691,6 @@ BOOST_FIXTURE_TEST_CASE(psbt_modes_and_cleanup, BasicTestingSetup)
                 conflict.inputs[0].sighash_type = mode == 1 ? 2 : 1;
                 RemoveUnnecessaryTransactions(conflict, flags);
                 BOOST_CHECK(conflict.inputs[0].non_witness_utxo);
-                if (wrapped) {
-                    for (bool extra_push : {false, true}) {
-                        auto malformed = psbt;
-                        auto& script_sig = malformed.inputs[0].final_script_sig;
-                        if (extra_push) script_sig << OP_0;
-                        else script_sig.insert(script_sig.begin(), OP_PUSHDATA1);
-                        RemoveUnnecessaryTransactions(malformed, flags);
-                        BOOST_CHECK(malformed.inputs[0].non_witness_utxo);
-                    }
-                    auto missing_script = original;
-                    missing_script.inputs[0].witness_script.clear();
-                    RemoveUnnecessaryTransactions(missing_script, flags);
-                    BOOST_CHECK(missing_script.inputs[0].non_witness_utxo);
-                }
                 RemoveUnnecessaryTransactions(psbt, flags);
                 BOOST_CHECK(bool(psbt.inputs[0].non_witness_utxo) == bool(mode & SIGHASH_ANYONECANPAY));
                 BOOST_CHECK(psbt.inputs[0].final_script_witness.stack == witness);
@@ -814,12 +808,13 @@ BOOST_FIXTURE_TEST_CASE(raw_signing_amount_presence, BasicTestingSetup)
         key.MakeNewKey(scheme);
         const auto pubkey = key.GetPubKey();
         const CScript script = CScript{} << ToByteVector(pubkey) << OP_CHECKSIG;
+        const CScript v0 = GetScriptForDestination(WitnessV0ScriptHash{script});
         const CScript v1 = GetScriptForDestination(WitnessV1ScriptHash512{script});
         FlatSigningProvider provider;
         provider.keys.emplace(pubkey.GetID(), key);
         provider.pubkeys.emplace(pubkey.GetID(), pubkey);
         provider.scripts.emplace(CScriptID(script), script);
-        provider.scripts.emplace(CScriptID(v1), v1);
+        provider.scripts.emplace(CScriptID(v0), v0);
         provider.scripts.emplace(CScriptID{RIPEMD160(WitnessV1ScriptHash512{script})}, script);
         const CScript foreign_script = CScript{} << OP_FALSE;
         const CScript foreign_v1 = GetScriptForDestination(WitnessV1ScriptHash512{foreign_script});
@@ -827,7 +822,7 @@ BOOST_FIXTURE_TEST_CASE(raw_signing_amount_presence, BasicTestingSetup)
         provider.scripts.emplace(CScriptID(foreign_v1), foreign_v1);
         provider.scripts.emplace(CScriptID{RIPEMD160(WitnessV1ScriptHash512{foreign_script})}, foreign_script);
         for (int kind : {0, 1, 2}) {
-            const CScript own = kind == 0 ? GetScriptForDestination(WitnessV0ScriptHash{script}) : kind == 1 ? v1 : GetScriptForDestination(ScriptHash{v1});
+            const CScript own = kind == 0 ? v0 : kind == 1 ? v1 : GetScriptForDestination(ScriptHash{v0});
             for (const CScript& foreign : {GetScriptForDestination(PKHash{}), foreign_script, GetScriptForDestination(WitnessV0ScriptHash{foreign_script}), foreign_v1, GetScriptForDestination(ScriptHash{foreign_v1})}) {
                 CMutableTransaction base;
                 base.vin.emplace_back(Txid::FromUint256(uint256::ONE), 0);
@@ -841,7 +836,7 @@ BOOST_FIXTURE_TEST_CASE(raw_signing_amount_presence, BasicTestingSetup)
                     std::map<int, bilingual_str> errors;
                     const std::set<COutPoint> missing_foreign{base.vin[1].prevout};
                     SignTransaction(tx, &provider, coins, mode, errors, flags, &missing_foreign);
-                    if (kind != 0 && !(mode & SIGHASH_ANYONECANPAY)) {
+                    if (kind == 1 && !(mode & SIGHASH_ANYONECANPAY)) {
                         BOOST_CHECK(tx.vin[0].scriptWitness.IsNull());
                         BOOST_CHECK_EQUAL(errors.at(0).original, common::PSBTErrorString(PSBTError::MISSING_SPENT_AMOUNTS).original);
                     } else {
@@ -1092,7 +1087,7 @@ BOOST_FIXTURE_TEST_CASE(psbt_cleanup_metadata_and_wrappers, BasicTestingSetup)
     const CScript script = CScript{} << ToByteVector(key.GetPubKey()) << OP_CHECKSIG;
     const CScript program = GetScriptForDestination(WitnessV1ScriptHash512(script));
     CMutableTransaction previous;
-    previous.vout = {CTxOut(1000, program), CTxOut(1000, GetScriptForDestination(ScriptHash(program)))};
+    previous.vout = {CTxOut(1000, program), CTxOut(1000, program)};
     CMutableTransaction tx;
     tx.vin.emplace_back(previous.GetHash(), 0);
     tx.vin.emplace_back(previous.GetHash(), 1);
@@ -1104,11 +1099,11 @@ BOOST_FIXTURE_TEST_CASE(psbt_cleanup_metadata_and_wrappers, BasicTestingSetup)
         base.inputs[i].witness_script = script;
         base.inputs[i].unknown.emplace(std::vector<unsigned char>{0xaa}, std::vector<unsigned char>{1, 2, 3});
     }
-    base.inputs[1].redeem_script = program;
     base.inputs[0].sighash_type = SIGHASH_NONE;
     base.inputs[1].sighash_type = SIGHASH_SINGLE;
     const auto bytes = [](const auto& value) { DataStream stream; stream << value; return std::vector<std::byte>(stream.begin(), stream.end()); };
-    for (const auto& excluded_script : {script, GetScriptForDestination(WitnessV0ScriptHash(script)), CScript{} << OP_2 << std::vector<unsigned char>(32, 1)}) {
+    for (const auto& excluded_script : {script, GetScriptForDestination(WitnessV0ScriptHash(script)), GetScriptForDestination(ScriptHash(program)),
+                                        CScript{} << OP_1 << std::vector<unsigned char>(32, 1), CScript{} << OP_2 << std::vector<unsigned char>(32, 1)}) {
         auto mixed = base;
         CMutableTransaction different = previous;
         different.vout[1].scriptPubKey = excluded_script;
@@ -1149,7 +1144,7 @@ BOOST_FIXTURE_TEST_CASE(psbt_cleanup_metadata_and_wrappers, BasicTestingSetup)
             BOOST_REQUIRE(SignPSBTInput(provider, eligible, 0, &data, SIGHASH_NONE, nullptr, true, flags) == PSBTError::OK);
             BOOST_REQUIRE(SignPSBTInput(provider, eligible, 1, &data, SIGHASH_SINGLE, nullptr, true, flags) == PSBTError::OK);
         }
-        for (int excluded = 0; excluded < 12; ++excluded) {
+        for (int excluded = 0; excluded < 10; ++excluded) {
             auto test = eligible;
             unsigned test_flags = flags;
             if (excluded < 3) test.inputs[1].sighash_type = std::array<int, 3>{0, 4, 0x101}[excluded];
@@ -1159,19 +1154,10 @@ BOOST_FIXTURE_TEST_CASE(psbt_cleanup_metadata_and_wrappers, BasicTestingSetup)
                 if (finalized) test.inputs[1].final_script_witness.stack.back() = {OP_FALSE};
                 else test.inputs[1].witness_script = CScript{} << OP_FALSE;
             }
-            if (excluded == 6) {
-                const auto wrong_program = GetScriptForDestination(WitnessV0ScriptHash(script));
-                if (finalized) test.inputs[1].final_script_sig = CScript{} << ToByteVector(wrong_program);
-                else test.inputs[1].redeem_script = wrong_program;
-            }
-            if (excluded == 7) {
-                test.inputs[1].redeem_script.clear();
-                if (finalized) test.inputs[1].final_script_sig.clear();
-            }
-            if (excluded == 8) test_flags &= ~SCRIPT_VERIFY_WITNESS_V1_512;
-            if (excluded == 9 || excluded == 10) {
+            if (excluded == 6) test_flags &= ~SCRIPT_VERIFY_WITNESS_V1_512;
+            if (excluded == 7 || excluded == 8) {
                 CMutableTransaction wrong = previous;
-                wrong.vout[1].scriptPubKey = excluded == 9 ? GetScriptForDestination(ScriptHash(CScript{} << OP_TRUE)) : GetScriptForDestination(WitnessV0ScriptHash(program));
+                wrong.vout[1].scriptPubKey = excluded == 7 ? GetScriptForDestination(ScriptHash(CScript{} << OP_TRUE)) : GetScriptForDestination(WitnessV0ScriptHash(program));
                 test.inputs[1].non_witness_utxo = MakeTransactionRef(wrong);
                 test.inputs[1].witness_utxo = wrong.vout[1];
                 test.tx->vin[1].prevout.hash = wrong.GetHash();
@@ -1185,10 +1171,10 @@ BOOST_FIXTURE_TEST_CASE(psbt_cleanup_metadata_and_wrappers, BasicTestingSetup)
                     const MutableTransactionSignatureChecker checker{&*test.tx, 1, wrong.vout[1].nValue, data, MissingDataBehavior::FAIL, false};
                     ScriptError error{SCRIPT_ERR_OK};
                     BOOST_REQUIRE(!VerifyScript(test.inputs[1].final_script_sig, wrong.vout[1].scriptPubKey, &test.inputs[1].final_script_witness, flags, checker, &error));
-                    BOOST_CHECK_EQUAL(error, excluded == 9 ? SCRIPT_ERR_EVAL_FALSE : SCRIPT_ERR_WITNESS_MALLEATED);
+                    BOOST_CHECK_EQUAL(error, excluded == 7 ? SCRIPT_ERR_INVALID_STACK_OPERATION : SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH);
                 }
             }
-            if (excluded == 11) {
+            if (excluded == 9) {
                 test.inputs[1].witness_utxo.SetNull();
                 test.inputs[1].non_witness_utxo.reset();
             }

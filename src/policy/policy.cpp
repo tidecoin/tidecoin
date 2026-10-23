@@ -300,8 +300,9 @@ bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
 
         // get the scriptPubKey corresponding to this input:
         CScript prevScript = prev.scriptPubKey;
+        const bool is_p2sh{prevScript.IsPayToScriptHash()};
 
-        if (prevScript.IsPayToScriptHash()) {
+        if (is_p2sh) {
             std::vector <std::vector<unsigned char> > stack;
             // If the scriptPubKey is P2SH, we try to extract the redeemScript casually by converting the scriptSig
             // into a stack. We do not check IsPushOnly nor compare the hash as these will be done later anyway.
@@ -338,7 +339,7 @@ bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
         }
 
         if (witnessversion == 1) {
-            if (witnessprogram.size() != WITNESS_V1_SCRIPTHASH_512_SIZE) {
+            if (is_p2sh || witnessprogram.size() != WITNESS_V1_SCRIPTHASH_512_SIZE) {
                 return false;
             }
             if (tx.vin[i].scriptWitness.stack.empty()) return false;
@@ -360,7 +361,7 @@ bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
     return true;
 }
 
-bool SpendsNonAnchorWitnessProg(const CTransaction& tx, const CCoinsViewCache& prevouts)
+bool SpendsNonAnchorWitnessProg(const CTransaction& tx, const CCoinsViewCache& prevouts, unsigned int script_verify_flags)
 {
     if (tx.IsCoinBase()) {
         return false;
@@ -368,11 +369,16 @@ bool SpendsNonAnchorWitnessProg(const CTransaction& tx, const CCoinsViewCache& p
 
     int version;
     std::vector<uint8_t> program;
+    // Spends of other witness programs do not depend on their witness.
+    const auto enforced = [&] {
+        return version == 0 ||
+               (version == 1 && program.size() == WITNESS_V1_SCRIPTHASH_512_SIZE && (script_verify_flags & SCRIPT_VERIFY_WITNESS_V1_512));
+    };
     for (const auto& txin: tx.vin) {
         const auto& prev_spk{prevouts.AccessCoin(txin.prevout).out.scriptPubKey};
 
         if (prev_spk.IsWitnessProgram(version, program)) {
-            if (version == 0) return true;
+            if (enforced()) return true;
             continue;
         }
 
@@ -387,9 +393,7 @@ bool SpendsNonAnchorWitnessProg(const CTransaction& tx, const CCoinsViewCache& p
                 continue;
             }
             const CScript redeem_script{stack.back().begin(), stack.back().end()};
-            if (redeem_script.IsWitnessProgram(version, program)) {
-                if (version == 0) return true;
-            }
+            if (redeem_script.IsWitnessProgram(version, program) && version == 0) return true;
         }
     }
 

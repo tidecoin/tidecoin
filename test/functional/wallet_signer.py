@@ -150,6 +150,20 @@ class WalletSignerTest(BitcoinTestFramework):
                         assert not node.descriptorprocesspsbt(bad.to_base64(), [])['complete']
                         assert not wallet.walletprocesspsbt(bad.to_base64(), False)['complete']
 
+                self.log.info('Partial signatures that cannot verify neither block nor survive device signing')
+                owned_pubkey = bytes.fromhex(next(iter(node.decodepsbt(private.walletprocesspsbt(request, True, 'ALL', False)['psbt'])['inputs'][0]['partial_signatures'])))
+                _, unrelated_pubkey = generate_keypair_at_index(9998, scheme='7')
+                for pubkey, mode in ((unrelated_pubkey, 2), (owned_pubkey, 1)):
+                    poisoned = PSBT.from_base64(request)
+                    poisoned.i[0].map[b'\x02' + pubkey] = bytes([0x55] * 666) + bytes([mode])
+                    # The device returns its signature alongside entries it does not own.
+                    response(private.walletprocesspsbt(poisoned.to_base64(), True, 'ALL', False)['psbt'])
+                    result = wallet.walletprocesspsbt(poisoned.to_base64(), True, 'ALL', False)
+                    partials = node.decodepsbt(result['psbt'])['inputs'][0]['partial_signatures']
+                    assert_equal(partials.get(pubkey.hex()) == poisoned.i[0].map[b'\x02' + pubkey].hex(), pubkey == unrelated_pubkey)
+                    assert bytes.fromhex(partials[owned_pubkey.hex()])[-1] == 1
+                    assert node.finalizepsbt(result['psbt'])['complete']
+
                 # Correct signatures with the wrong requested sighash are also rejected.
                 undeclared = PSBT.from_base64(request)
                 for item in undeclared.i:
@@ -318,7 +332,7 @@ class WalletSignerTest(BitcoinTestFramework):
 
     def test_signing_utxos(self, holder, node, state, save, count_signs):
         self.log.info('External signing requires full legacy transactions before any device request')
-        templates = ['pkh({})', 'sh(pk({}))', 'wpkh({})', 'sh(wpkh({}))', 'wsh512(pk({}))', 'sh(wsh512(pk({})))']
+        templates = ['pkh({})', 'sh(pk({}))', 'wpkh({})', 'sh(wpkh({}))', 'wsh512(pk({}))']
         for number, template in enumerate(templates):
             keys = [generate_keypair_at_index(9100 + 2 * number + i, scheme='7') for i in range(2)]
             secrets = [descsum_create(template.format(secret)) for secret, _ in keys]

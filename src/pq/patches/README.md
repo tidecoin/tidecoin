@@ -24,7 +24,7 @@ From repository root, after updating vendored sources and `VERSIONS.toml`:
 # Ensure /tmp/pqclean points to the pinned upstream commit.
 
 { for f in api.h inner.h pqclean.c; do
-  diff -u --label "a/crypto_sign/falcon-512/clean/$f" \
+  diff -u --suppress-blank-empty --label "a/crypto_sign/falcon-512/clean/$f" \
           --label "b/src/pq/falcon-512/$f" \
           "/tmp/pqclean/crypto_sign/falcon-512/clean/$f" \
           "src/pq/falcon-512/$f" || true

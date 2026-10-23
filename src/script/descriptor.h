@@ -124,6 +124,11 @@ struct Descriptor {
     /** @return The OutputType of the scriptPubKey(s) produced by this descriptor. Or nullopt if indeterminate (multiple or none) */
     virtual std::optional<OutputType> GetOutputType() const = 0;
 
+    /** Whether this descriptor produces native 64-byte witness v1 programs,
+     *  including literal addr()/raw() descriptors without an OutputType.
+     *  A literal addr()/raw() P2SH output is opaque and reports false. */
+    virtual bool HasWitnessV1() const = 0;
+
     /** Get the size of the scriptPubKey for this descriptor. */
     virtual std::optional<int64_t> ScriptSize() const = 0;
 

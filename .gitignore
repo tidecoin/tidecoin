@@ -32,3 +32,6 @@ target/
 
 /ci/scratch/
 /.cache
+
+# Keep local research outside the node repository.
+/research/

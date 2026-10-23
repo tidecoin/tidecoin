@@ -737,7 +737,8 @@ util::Result<CTxDestination> DescriptorScriptPubKeyMan::GetNewDestination(const 
         }
 
         const int target_height = m_storage.GetTargetHeightForOutputs();
-        if (type == OutputType::BECH32PQ && target_height < Params().GetConsensus().nAuxpowStartHeight) {
+        // Include literal addr()/raw() descriptors as well as wsh512().
+        if (m_wallet_descriptor.descriptor->HasWitnessV1() && target_height < Params().GetConsensus().nAuxpowStartHeight) {
             return util::Error{strprintf(_("PQ v1 outputs not allowed at height %i"), target_height)};
         }
 
@@ -1368,6 +1369,30 @@ bool DescriptorScriptPubKeyMan::UpdatePQHDOrigins(const FlatSigningProvider& pro
     }
     records = std::move(updated);
     return true;
+}
+
+std::optional<PSBTError> DescriptorScriptPubKeyMan::CheckPSBTSigningIntent(const PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata, int mode, unsigned int flags, std::vector<common::PSBTInputError>* input_errors) const
+{
+    // Match the signing path: PQHD keys are derived from a seed, not stored.
+    const auto owns = [&](const CPubKey& pubkey) {
+        return WITH_LOCK(cs_desc_man, return HasPrivKey(pubkey.GetID())) || GetSigningProvider(pubkey, /*include_private=*/true);
+    };
+    std::optional<PSBTError> result;
+    for (size_t i = 0; i < psbt.inputs.size(); ++i) {
+        const PSBTInput& input = psbt.inputs[i];
+        CTxOut utxo;
+        if (input.partial_sigs.empty() || PSBTInputSigned(input) || !psbt.GetInputUTXO(utxo, i)) continue;
+        std::unique_ptr<FlatSigningProvider> scripts{GetSigningProvider(utxo.scriptPubKey, /*include_private=*/false)};
+        if (!scripts) scripts = std::make_unique<FlatSigningProvider>();
+        const std::set<CKeyID> invalid{InvalidPSBTPartialSignatures(psbt, i, *scripts, txdata, flags)};
+        for (const auto& [keyid, sig] : input.partial_sigs) {
+            if (invalid.contains(keyid) || sig.second.empty() || sig.second.back() == mode || !owns(sig.first)) continue;
+            if (!result) result = PSBTError::SIGHASH_MISMATCH;
+            if (input_errors) input_errors->push_back({i, mode, input.sighash_type, PSBTError::SIGHASH_MISMATCH});
+            break;
+        }
+    }
+    return result;
 }
 
 std::optional<PSBTError> DescriptorScriptPubKeyMan::FillPSBT(PartiallySignedTransaction& psbtx, const PrecomputedTransactionData& txdata, std::optional<int> sighash_type, bool sign, int* n_signed, bool finalize, bool include_pqhd_origins, std::optional<unsigned int> script_verify_flags, std::vector<common::PSBTInputError>* input_errors) const

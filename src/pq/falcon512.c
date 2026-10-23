@@ -14,7 +14,6 @@ enum {
     TIDECOIN_FALCON512_LEGACY_CRYPTO_BYTES = 690,
     TIDECOIN_FALCON512_LEGACY_VLEN_MAX =
         TIDECOIN_FALCON512_LEGACY_CRYPTO_BYTES - TIDECOIN_FALCON512_NONCELEN - 3,
-    TIDECOIN_FALCON512_LEGACY_SIGN_MAX_ATTEMPTS = 10000,
 };
 
 static int tidecoin_falcon512_is_short_legacy(const int16_t* s1,
@@ -171,31 +170,30 @@ static int tidecoin_falcon512_do_sign_legacy(uint8_t* nonce, uint8_t* sigbuf,
 
     PQCLEAN_FALCON512_CLEAN_sign_dyn(r.sig, &sc, f, g, F, G, r.hm, 9, tmp.b);
     v = PQCLEAN_FALCON512_CLEAN_comp_encode(sigbuf, *sigbuflen, r.sig, 9);
+    inner_shake256_ctx_release(&sc);
     if (v != 0) {
-        inner_shake256_ctx_release(&sc);
         *sigbuflen = v;
         return 0;
     }
     return -1;
 }
 
-int tidecoin_falcon512_sign_legacy(uint8_t* sig, size_t* siglen,
-                                   const uint8_t* m, size_t mlen,
-                                   const uint8_t* sk, size_t sklen)
+/* One signing attempt; pq::SignFalcon handles retries and the local size bound. */
+int tidecoin_falcon512_sign_legacy_attempt(uint8_t* sig, size_t* siglen,
+                                         const uint8_t* m, size_t mlen,
+                                         const uint8_t* sk, size_t sklen)
 {
     if (sklen != PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES) {
         return -1;
     }
 
-    for (unsigned int attempt = 0; attempt < TIDECOIN_FALCON512_LEGACY_SIGN_MAX_ATTEMPTS; ++attempt) {
-        size_t vlen = TIDECOIN_FALCON512_LEGACY_VLEN_MAX;
-        if (tidecoin_falcon512_do_sign_legacy(sig + 1,
-                                              sig + 1 + TIDECOIN_FALCON512_NONCELEN,
-                                              &vlen, m, mlen, sk) == 0) {
-            sig[0] = 0x30 + 9;
-            *siglen = 1 + TIDECOIN_FALCON512_NONCELEN + vlen;
-            return 0;
-        }
+    size_t vlen = TIDECOIN_FALCON512_LEGACY_VLEN_MAX;
+    if (tidecoin_falcon512_do_sign_legacy(sig + 1,
+                                        sig + 1 + TIDECOIN_FALCON512_NONCELEN,
+                                        &vlen, m, mlen, sk) == 0) {
+        sig[0] = 0x30 + 9;
+        *siglen = 1 + TIDECOIN_FALCON512_NONCELEN + vlen;
+        return 0;
     }
 
     return -1;

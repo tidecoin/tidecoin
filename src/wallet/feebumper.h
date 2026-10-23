@@ -6,8 +6,12 @@
 #define BITCOIN_WALLET_FEEBUMPER_H
 
 #include <consensus/consensus.h>
+#include <pq/pq_scheme.h>
 #include <script/interpreter.h>
 #include <primitives/transaction.h>
+#include <serialize.h>
+
+#include <algorithm>
 
 class uint256;
 enum class FeeEstimateMode;
@@ -75,30 +79,38 @@ Result CommitTransaction(CWallet& wallet,
 struct SignatureWeights
 {
 private:
-    int m_sigs_count{0};
-    int64_t m_sigs_weight{0};
+    int64_t m_weight_diff{0};
+
+    //! Size of a minimal script push of len bytes.
+    static size_t PushSize(size_t len)
+    {
+        if (len < OP_PUSHDATA1) return 1 + len;
+        if (len <= 0xff) return 2 + len;
+        if (len <= 0xffff) return 3 + len;
+        return 5 + len;
+    }
+
+    //! Size of a witness stack element of len bytes.
+    static size_t WitnessElementSize(size_t len) { return GetSizeOfCompactSize(len) + len; }
 
 public:
-    void AddSigWeight(const size_t weight, const SigVersion sigversion)
+    //! Record a signature of sig_size bytes that could be up to max_sig_size bytes.
+    void AddSigWeight(size_t sig_size, size_t max_sig_size, SigVersion sigversion)
     {
+        max_sig_size = std::max(max_sig_size, sig_size);
         switch (sigversion) {
         case SigVersion::BASE:
-            m_sigs_weight += weight * WITNESS_SCALE_FACTOR;
-            m_sigs_count += 1 * WITNESS_SCALE_FACTOR;
+            m_weight_diff += (int64_t(PushSize(max_sig_size)) - int64_t(PushSize(sig_size))) * WITNESS_SCALE_FACTOR;
             break;
         case SigVersion::WITNESS_V0:
         case SigVersion::WITNESS_V1_512:
-            m_sigs_weight += weight;
-            m_sigs_count++;
+            m_weight_diff += int64_t(WitnessElementSize(max_sig_size)) - int64_t(WitnessElementSize(sig_size));
             break;
         }
     }
 
-    int64_t GetWeightDiffToMax() const
-    {
-        // Note: the witness scaling factor is already accounted for because the count is multiplied by it.
-        return (/* max signature size=*/ 72 * m_sigs_count) - m_sigs_weight;
-    }
+    //! Weight to add for every recorded signature to be its maximum size.
+    int64_t GetWeightDiffToMax() const { return m_weight_diff; }
 };
 
 class SignatureWeightChecker : public DeferringSignatureChecker
@@ -112,7 +124,10 @@ public:
     bool CheckPostQuantumSignature(const std::vector<unsigned char>& sig, const std::vector<unsigned char>& pubkey, const CScript& script, SigVersion sigversion) const override
     {
         if (m_checker.CheckPostQuantumSignature(sig, pubkey, script, sigversion)) {
-            m_weights.AddSigWeight(sig.size(), sigversion);
+            // Falcon signatures vary in size; the maximum includes the sighash byte.
+            const pq::SchemeInfo* scheme{pubkey.empty() ? nullptr : pq::SchemeFromPrefix(pubkey[0])};
+            const size_t max_sig_size{scheme ? scheme->sig_bytes_max + 1 : pq::MaxKnownSigBytesInScript(/*use_max_sig=*/true)};
+            m_weights.AddSigWeight(sig.size(), max_sig_size, sigversion);
             return true;
         }
         return false;

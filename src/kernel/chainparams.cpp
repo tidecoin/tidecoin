@@ -12,6 +12,7 @@
 #include <hash.h>
 #include <kernel/messagestartchars.h>
 #include <logging.h>
+#include <pq/pqhd_params.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
@@ -149,6 +150,7 @@ public:
 
         bech32_hrp = "tbc";
         bech32_pq_hrp = "q";
+        m_pqhd_coin_type = pqhd::COIN_TYPE_MAIN;
 
         vFixedSeeds = std::vector<uint8_t>(std::begin(chainparams_seed_main), std::end(chainparams_seed_main));
 
@@ -230,6 +232,7 @@ public:
 
         bech32_hrp = "ttbc";
         bech32_pq_hrp = "tq";
+        m_pqhd_coin_type = pqhd::COIN_TYPE_TEST;
 
         vFixedSeeds = std::vector<uint8_t>(std::begin(chainparams_seed_test), std::end(chainparams_seed_test));
 
@@ -359,6 +362,7 @@ public:
 
         bech32_hrp = "rtbc";
         bech32_pq_hrp = "rq";
+        m_pqhd_coin_type = pqhd::COIN_TYPE_TEST;
     }
 };
 

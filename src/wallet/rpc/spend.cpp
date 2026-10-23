@@ -1545,6 +1545,35 @@ RPCHelpMan sendall()
             CMutableTransaction rawTx{ConstructTransaction(options["inputs"], recipient_key_value_pairs, options["locktime"], rbf, coin_control.m_version)};
             LOCK(pwallet->cs_wallet);
 
+            // sendall builds its transaction without CreateTransaction, so apply
+            // the same witness v1 checks here. Automatic inputs come from
+            // AvailableCoins, which already excludes ineligible coins.
+            {
+                const bool v1_allowed{WitnessV1SpendsAllowed(*pwallet)};
+                const int activation_height{Params().GetConsensus().nAuxpowStartHeight};
+                for (const CTxOut& out : rawTx.vout) {
+                    if (IsWitnessV1Script(out.scriptPubKey, pwallet->GetSolvingProvider(out.scriptPubKey).get())) {
+                        if (out.scriptPubKey.IsPayToScriptHash()) {
+                            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "P2SH-wrapped witness v1 is not supported.");
+                        }
+                        if (!v1_allowed) {
+                            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Cannot send to a witness v1 address before auxpow activation (height %d).", activation_height));
+                        }
+                    }
+                }
+                for (const CTxIn& input : rawTx.vin) {
+                    const auto txo{pwallet->GetTXO(input.prevout)};
+                    if (txo && IsWitnessV1Script(txo->GetTxOut().scriptPubKey, pwallet->GetSolvingProvider(txo->GetTxOut().scriptPubKey).get())) {
+                        if (txo->GetTxOut().scriptPubKey.IsPayToScriptHash()) {
+                            throw JSONRPCError(RPC_INVALID_PARAMETER, "P2SH-wrapped witness v1 is not supported.");
+                        }
+                        if (!v1_allowed) {
+                            throw JSONRPCError(RPC_INVALID_PARAMETER, strprintf("Input %s is a witness v1 output, which cannot be spent before auxpow activation (height %d).", input.prevout.ToString(), activation_height));
+                        }
+                    }
+                }
+            }
+
             CAmount total_input_value(0);
             bool send_max{options.exists("send_max") ? options["send_max"].get_bool() : false};
             if (options.exists("inputs") && options.exists("send_max")) {

@@ -37,6 +37,7 @@ public:
 
     std::string ToString(bool compat_format) const override { return desc; }
     std::optional<OutputType> GetOutputType() const override { return OutputType::UNKNOWN; }
+    bool HasWitnessV1() const override { return false; }
 
     bool IsRange() const override { return false; }
     bool IsSolvable() const override { return false; }

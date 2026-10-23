@@ -326,6 +326,20 @@ static bool IsCurrentForFeeEstimation(Chainstate& active_chainstate) EXCLUSIVE_L
     return true;
 }
 
+/** Whether tx creates a witness v1 output while the next block is below auxpow
+ *  activation. Such an output is not enforced there: anyone can spend it
+ *  without a signature. */
+static bool HasPrematureWitnessV1Output(const CTransaction& tx, int next_height, const Consensus::Params& params)
+{
+    if (next_height >= params.nAuxpowStartHeight) return false;
+    for (const auto& txout : tx.vout) {
+        int witnessversion;
+        std::vector<unsigned char> witnessprogram;
+        if (txout.scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram) && witnessversion == 1) return true;
+    }
+    return false;
+}
+
 void Chainstate::MaybeUpdateMempoolForReorg(
     DisconnectedBlockTransactions& disconnectpool,
     bool fAddToMempool,
@@ -382,6 +396,13 @@ void Chainstate::MaybeUpdateMempoolForReorg(
 
         // The transaction must be final.
         if (!CheckFinalTxAtTip(*Assert(m_chain.Tip()), tx)) return true;
+
+        // Admission refuses witness v1 outputs below activation; a rollback
+        // across activation must not keep those admitted after it.
+        if (m_mempool->m_opts.require_standard &&
+            HasPrematureWitnessV1Output(tx, m_chain.Tip()->nHeight + 1, m_chainman.GetConsensus())) {
+            return true;
+        }
 
         const LockPoints& lp = it->GetLockPoints();
         // CheckSequenceLocksAtTip checks if the transaction will be final in the next block to be
@@ -861,15 +882,8 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     if (m_pool.m_opts.require_standard) {
         const CBlockIndex* const tip = m_active_chainstate.m_chain.Tip();
         const int next_height = tip ? tip->nHeight + 1 : 0;
-        const Consensus::Params& consensus_params = m_active_chainstate.m_chainman.GetConsensus();
-        if (next_height < consensus_params.nAuxpowStartHeight) {
-            for (const auto& txout : tx.vout) {
-                int witnessversion;
-                std::vector<unsigned char> witnessprogram;
-                if (txout.scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram) && witnessversion == 1) {
-                    return state.Invalid(TxValidationResult::TX_NOT_STANDARD, "witness-v1-pre-auxpow");
-                }
-            }
+        if (HasPrematureWitnessV1Output(tx, next_height, m_active_chainstate.m_chainman.GetConsensus())) {
+            return state.Invalid(TxValidationResult::TX_NOT_STANDARD, "witness-v1-pre-auxpow");
         }
     }
 
@@ -1239,7 +1253,7 @@ bool MemPoolAccept::PolicyScriptChecks(const ATMPArgs& args, Workspace& ws)
     // This is done last to help prevent CPU exhaustion denial-of-service attacks.
     if (!CheckInputScripts(tx, state, m_view, scriptVerifyFlags, true, false, ws.m_precomputed_txdata, GetValidationCache())) {
         // Detect a failure due to a missing witness so that p2p code can handle rejection caching appropriately.
-        if (!tx.HasWitness() && SpendsNonAnchorWitnessProg(tx, m_view)) {
+        if (!tx.HasWitness() && SpendsNonAnchorWitnessProg(tx, m_view, scriptVerifyFlags)) {
             state.Invalid(TxValidationResult::TX_WITNESS_STRIPPED,
                     state.GetRejectReason(), state.GetDebugMessage());
         }

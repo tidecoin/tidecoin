@@ -5,6 +5,7 @@
 #include <addresstype.h>
 #include <core_io.h>
 #include <interfaces/chain.h>
+#include <interfaces/mining.h>
 #include <key.h>
 #include <key_io.h>
 #include <node/context.h>
@@ -21,6 +22,7 @@
 #include <univalue.h>
 #include <util/strencodings.h>
 #include <util/time.h>
+#include <validation.h>
 
 #include <array>
 #include <any>
@@ -965,5 +967,73 @@ BOOST_FIXTURE_TEST_CASE(snapshot_output_failures, TestChain100Setup)
     }
 }
 #endif
+
+namespace {
+//! Delegates to the node's miner, running a callback before each template.
+class HookedMining : public interfaces::Mining
+{
+public:
+    HookedMining(std::unique_ptr<interfaces::Mining> inner, std::function<void()> before_template)
+        : m_inner{std::move(inner)}, m_before_template{std::move(before_template)} {}
+    bool isTestChain() override { return m_inner->isTestChain(); }
+    bool isInitialBlockDownload() override { return m_inner->isInitialBlockDownload(); }
+    std::optional<interfaces::BlockRef> getTip() override { return m_inner->getTip(); }
+    std::optional<interfaces::BlockRef> waitTipChanged(uint256 current_tip, MillisecondsDouble timeout) override { return m_inner->waitTipChanged(current_tip, timeout); }
+    std::unique_ptr<interfaces::BlockTemplate> createNewBlock(const node::BlockCreateOptions& options) override
+    {
+        m_before_template();
+        return m_inner->createNewBlock(options);
+    }
+    bool checkBlock(const CBlock& block, const node::BlockCheckOptions& options, std::string& reason, std::string& debug) override { return m_inner->checkBlock(block, options, reason, debug); }
+    node::NodeContext* context() override { return m_inner->context(); }
+
+private:
+    std::unique_ptr<interfaces::Mining> m_inner;
+    std::function<void()> m_before_template;
+};
+
+struct WitnessV1MiningSetup : public TestingSetup {
+    WitnessV1MiningSetup() : TestingSetup{ChainType::REGTEST, {.extra_args = {"-auxpowactivationheight=3"}}} {}
+
+    UniValue GenerateToAddress(int num_blocks, const CTxDestination& dest)
+    {
+        JSONRPCRequest request;
+        request.context = &m_node;
+        request.strMethod = "generatetoaddress";
+        request.params = UniValue{UniValue::VARR};
+        request.params.push_back(num_blocks);
+        request.params.push_back(EncodeDestination(dest));
+        if (RPCIsInWarmup(nullptr)) SetRPCWarmupFinished();
+        return tableRPC.execute(request);
+    }
+};
+} // namespace
+
+BOOST_FIXTURE_TEST_CASE(generatetoaddress_rechecks_witness_v1_coinbase_after_rollback, WitnessV1MiningSetup)
+{
+    m_node.mining = interfaces::MakeMining(m_node, /*wait_loaded=*/false);
+    // Block 2 makes the next block the activation block.
+    GenerateToAddress(2, WitnessV0ScriptHash{CScript{} << OP_TRUE});
+    CBlockIndex* last_before{WITH_LOCK(cs_main, return m_node.chainman->ActiveTip())};
+    BOOST_REQUIRE_EQUAL(last_before->nHeight, 2);
+
+    // Roll back below activation after the first block is mined.
+    int templates{0};
+    m_node.mining = std::make_unique<HookedMining>(std::move(m_node.mining), [&] {
+        if (++templates != 2) return;
+        BlockValidationState state;
+        BOOST_REQUIRE(m_node.chainman->ActiveChainstate().InvalidateBlock(state, last_before));
+    });
+
+    try {
+        GenerateToAddress(3, WitnessV1ScriptHash512{CScript{} << OP_TRUE});
+        BOOST_FAIL("generatetoaddress mined through a rollback below activation");
+    } catch (const UniValue& error) {
+        BOOST_CHECK_EQUAL(error.find_value("code").getInt<int>(), RPC_INVALID_ADDRESS_OR_KEY);
+        BOOST_CHECK(error.find_value("message").get_str().starts_with("Witness v1 coinbase outputs are not allowed"));
+    }
+    BOOST_CHECK_EQUAL(templates, 2);
+    BOOST_CHECK_EQUAL(WITH_LOCK(cs_main, return m_node.chainman->ActiveHeight()), 1);
+}
 
 BOOST_AUTO_TEST_SUITE_END()

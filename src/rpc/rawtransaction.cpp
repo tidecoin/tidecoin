@@ -562,11 +562,11 @@ static RPCHelpMan decodescript()
         case TxoutType::PUBKEYHASH:
         case TxoutType::WITNESS_V0_KEYHASH:
         case TxoutType::WITNESS_V0_SCRIPTHASH:
-        case TxoutType::WITNESS_V1_SCRIPTHASH_512:
             // Can be wrapped if the checks below pass
             break;
         case TxoutType::NULL_DATA:
         case TxoutType::SCRIPTHASH:
+        case TxoutType::WITNESS_V1_SCRIPTHASH_512:
             // Should not be wrapped
             return false;
         } // no default case, so the compiler can warn about missing cases

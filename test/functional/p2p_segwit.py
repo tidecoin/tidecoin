@@ -1344,7 +1344,9 @@ class SegWitTest(BitcoinTestFramework):
 
     @subtest
     def test_segwit_versions(self):
-        """Segwit v1+ witness programs are disabled; only v0 is supported."""
+        """Short v1 witness programs are reserved for upgrades.
+
+        They are non-standard to create and spend, but valid in blocks."""
 
         witness_script = CScript([OP_TRUE])
         witness_hash = sha256(witness_script)
@@ -1372,19 +1374,25 @@ class SegWitTest(BitcoinTestFramework):
         self.utxo.pop(0)
         self.utxo.append(UTXO(tx.txid_int, 1, tx.vout[1].nValue))
 
-        # Spending a v1 witness output is invalid at consensus.
+        # Spending a short v1 witness output is not allowed by policy, even
+        # with the node that accepts non-standard txs.
         spend_tx = CTransaction()
         spend_tx.vin = [CTxIn(COutPoint(tx.txid_int, 0), b"")]
-        spend_tx.vout = [CTxOut(tx.vout[0].nValue - 1000, CScript([OP_TRUE]))]
+        spend_tx.vout = [CTxOut(tx.vout[0].nValue - 1000, script_to_p2wsh_script(witness_script))]
         spend_tx.wit.vtxinwit.append(CTxInWitness())
         spend_tx.wit.vtxinwit[0].scriptWitness.stack = [witness_script]
 
+        rejected = self.nodes[0].testmempoolaccept([spend_tx.serialize().hex()])[0]
+        assert_equal(rejected["allowed"], False)
+        assert "reserved for soft-fork upgrades" in rejected["reject-reason"], rejected
         test_transaction_acceptance(self.nodes[0], self.test_node, spend_tx, with_witness=True, accepted=False)
         test_transaction_acceptance(self.nodes[1], self.std_node, spend_tx, with_witness=True, accepted=False)
 
+        # Activation does not freeze short v1 programs: the spend is valid in a block.
         block = self.build_next_block()
         self.update_witness_block_with_transactions(block, [spend_tx])
-        test_witness_block(self.nodes[0], self.test_node, block, accepted=False)
+        test_witness_block(self.nodes[0], self.test_node, block, accepted=True)
+        self.sync_blocks()
 
     @subtest
     def test_premature_coinbase_witness_spend(self):

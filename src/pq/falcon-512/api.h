@@ -10,7 +10,7 @@
 
 #define PQCLEAN_FALCON512_CLEAN_CRYPTO_ALGNAME          "Falcon-512"
 
-#define PQCLEAN_FALCONPADDED512_CLEAN_CRYPTO_BYTES      666 // used in signature verification
+#define PQCLEAN_FALCONPADDED512_CLEAN_CRYPTO_BYTES      666 // reference padded size; used for wallet size estimates
 
 #ifdef __cplusplus
 extern "C" {

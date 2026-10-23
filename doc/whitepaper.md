@@ -215,7 +215,7 @@ Odd categories (1, 3, 5) measure resistance to block cipher key search. Even cat
 | **PK + Sig** | **~1,563 bytes** | **~3,073 bytes** | **3,732 bytes** | **5,261 bytes** |
 | Verification speed | ~28,000 ver/s | ~13,700 ver/s | Fast | Fast |
 
-These are scheme-level comparison figures using Falcon's padded encoding. Tidecoin's current Falcon-1024 implementation signs with the compressed PQClean API rather than the padded format.
+These are scheme-level comparison figures using Falcon's padded encoding. Tidecoin signs with the compressed encoding for both Falcon variants.
 
 Falcon's combined public key + signature size is the **smallest of any NIST PQC lattice signature**, which is decisive for bandwidth-constrained blockchain transactions.
 
@@ -227,7 +227,7 @@ The Falcon specification defines multiple signature encoding formats:
 - **Padded (format code 2):** Fixed-length signatures (666 bytes for Falcon-512, 1,280 bytes for Falcon-1024). If a compressed signature exceeds the target size, signing restarts. Fixed size simplifies protocol design and prevents information leakage through signature length variation.
 - **Constant-time (CT, format code 3):** Fixed-length with constant-time encoding/decoding (809 bytes for Falcon-512). Each coefficient is encoded over a fixed number of bits, eliminating timing side-channels during encoding. Rarely needed but available for high-sensitivity scenarios.
 
-Tidecoin's current Falcon-1024 implementation uses the compressed PQClean signing API. The padded size remains relevant for scheme comparisons and compatibility with Falcon's padded verification path, but it is not Tidecoin's default Falcon-1024 signing output.
+Tidecoin uses variable-length compressed signatures for both Falcon variants. Verification requires the decoder to consume the entire signature: extra trailing bytes, including zero padding to 666 or 1,280 bytes, are rejected. Legacy Falcon-512 already applies this rule; the strict Falcon-512 and Falcon-1024 verifiers apply it under the AuxPoW rules. This prevents changing transaction identifiers through alternate padded encodings of the same signature. Local signing retries compressed signatures longer than 666 bytes for Falcon-512 or 1,280 bytes for Falcon-1024, including legacy Falcon-512, so those sizes bound locally generated signatures and their wallet estimates. No padding is added, and the transaction sighash byte is counted separately. External-signing estimates use the larger PQClean bounds. The local signing bounds are not consensus length limits.
 
 FIPS 206 will include both padded and compressed formats with domain separation to maintain strong unforgeability when multiple encodings coexist.
 
@@ -396,7 +396,7 @@ EvalScript() -> EvalChecksig() -> CheckPostQuantumSignature()
 Three consensus script verification flags control PQ behavior:
 
 - `SCRIPT_VERIFY_PQ_STRICT` (bit 13): Reject legacy signature formats
-- `SCRIPT_VERIFY_WITNESS_V1_512` (bit 14): Enable 64-byte witness v1 scripthash
+- `SCRIPT_VERIFY_WITNESS_V1_512` (bit 14): Enable native 64-byte witness v1 scripthash
 - `SCRIPT_VERIFY_SHA512` (bit 15): Enable OP_SHA512 opcode
 
 ---
@@ -419,11 +419,13 @@ Tidecoin implements a custom Post-Quantum Hierarchical Deterministic wallet (PQH
 m / purpose' / coin_type' / scheme' / account' / change' / index'
 ```
 
-All path elements are hardened (high bit set), with fixed values:
-- `purpose'` = 10007' (Tidecoin PQHD purpose)
-- `coin_type'` = 6868' (Tidecoin coin type)
+All path elements are hardened (high bit set):
+- `purpose'` = script family: 10044' (`pkh`), 10049' (`sh(wpkh)`), 10084' (`wpkh`), 10087' (`wsh512`), or 10007' for custom and multisig descriptors
+- `coin_type'` = 6868' on mainnet, 1' on test networks
 - `scheme'` = PQ scheme identifier
 - `account'`, `change'`, `index'` = User-controlled derivation
+
+Giving each script family its own purpose means one seed and index never produce the same key for two address types. Without it, a `pkh` and a `wpkh` address at the same index would carry the same `HASH160(pubkey)` and be linkable on-chain. The separate test-network coin type keeps test keys distinct from mainnet keys.
 
 ### 5.3 Key Derivation
 
@@ -443,7 +445,7 @@ The derivation chain from master seed to leaf key is:
 
 PQHD is fully integrated with Bitcoin Core's descriptor wallet framework:
 
-- **Descriptor format:** `wpkh(pqhd(SEEDID)/purpose'/cointype'/scheme'/account'/change'/index')`
+- **Descriptor format:** `wpkh(pqhd(SEEDID)/purpose'/cointype'/scheme'/account'/change'/index')`, e.g. `wpkh(pqhd(SEEDID)/10084'/6868'/7'/0'/0'/*')` for the default mainnet receive descriptor
 - **PSBT support:** Proprietary fields (identifier: "tidecoin", subtype 0x01) carry PQHD origin metadata for offline signers
 - **Encrypted storage:** Seeds are encrypted with the wallet master key; decryption occurs only when spending
 - **Policy management:** The `setpqhdpolicy` RPC command allows setting default receive and change signature schemes
@@ -650,7 +652,23 @@ WITNESS_V0_KEYHASH_SIZE = 20      // Bitcoin-compatible (HASH160)
 WITNESS_V1_SCRIPTHASH_512_SIZE = 64  // Tidecoin PQ (SHA-512)
 ```
 
-The v1 witness is activated by the `SCRIPT_VERIFY_WITNESS_V1_512` consensus flag, height-gated for safe deployment.
+The `SCRIPT_VERIFY_WITNESS_V1_512` consensus flag activates native 64-byte v1
+programs at the AuxPoW height. It changes no other v1 form:
+
+| Form | Before activation | After activation |
+| --- | --- | --- |
+| Native v1, 64 bytes | Ordinary script | SHA-512 witness script enforced |
+| P2SH containing v1, 64 bytes | Ordinary script | Ordinary script |
+| Native or P2SH v1, 2–40 bytes | Unknown witness version | Unknown witness version |
+| `OP_1 <41–63 bytes>` | Ordinary script | Ordinary script |
+
+The ordinary form requires no signature when its final pushed value evaluates
+to true. Inside P2SH the redeem script must be provided; nonempty witness data
+is rejected. Existing `CLEANSTACK` relay policy refuses these ordinary spends.
+Short v1 programs retain their existing scriptSig constraints and unknown
+witness behavior; standard relay policy refuses their spends. These forms are
+not supported receiving formats. Only native 64-byte v1 uses the new witness
+signature calculation and witness sigop accounting.
 
 ### 7.3 Post-Quantum Address Formats
 
@@ -662,6 +680,22 @@ Tidecoin uses two bech32 address families:
 | Post-Quantum | `q` | v1 | PQ-native SHA-512 witness addresses |
 
 Testnet uses `ttbc` and `tq`; regtest uses `rtbc` and `rq`.
+
+A native v1 output commits directly to the SHA-512 hash of its witness script.
+Tidecoin does not support P2SH-wrapped v1 descriptors or signing: a P2SH output
+would instead commit through the 20-byte HASH160 of a redeem script. Use native
+v1 addresses for the SHA-512 witness format. Existing P2SH-wrapped v0 formats
+remain available.
+
+Because the program is 64 bytes, a native v1 address is 112 or 113 characters
+long, beyond the 90 characters that Bitcoin's decoder allows; Tidecoin decodes
+`q` addresses up to 120 characters. The Bech32m checksum guarantees detecting
+any change of up to four characters only within 89 characters, so for these
+addresses it guarantees detecting up to three. Two valid v1 addresses can differ
+in just four characters, so a four-character typo can produce another valid
+address. Larger random errors still go undetected only about once in a billion
+attempts. Copy or scan v1 addresses rather than retyping them. A stronger
+guarantee would need a new checksum or address encoding.
 
 ---
 

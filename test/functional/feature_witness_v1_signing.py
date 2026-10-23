@@ -5,12 +5,12 @@
 """Signed witness-v1 payments across all PQ schemes at and after activation."""
 
 from decimal import Decimal
-from hashlib import sha256, sha512
+from hashlib import sha512
 
 from test_framework.address import ADDRESS_BCRT1_P2WSH_OP_TRUE
 from test_framework.messages import COIN, COutPoint, CTransaction, CTxIn, CTxOut, tx_from_hex
-from test_framework.script import CScript, OP_0, OP_1, OP_TRUE
-from test_framework.script_util import key_to_p2pk_script, key_to_p2wpkh_script, script_to_p2sh_script
+from test_framework.script import CScript, OP_1, OP_TRUE
+from test_framework.script_util import key_to_p2pk_script, key_to_p2wpkh_script
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error
 from test_framework.wallet import MiniWallet
@@ -28,9 +28,6 @@ class WitnessV1SigningTest(BitcoinTestFramework):
 
     def sync_all(self, nodes=None):
         pass
-
-    def add_options(self, parser):
-        parser.add_argument("--direct-only", action="store_true", help="Run only direct witness-v1 payments")
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
@@ -53,8 +50,6 @@ class WitnessV1SigningTest(BitcoinTestFramework):
             "witnessScript": row["script"].hex(),
             "amount": Decimal(self.value + amount_delta) / COIN,
         }
-        if row["wrapped"]:
-            previous["redeemScript"] = row["program"].hex()
         return previous
 
     def reject(self, raw, label):
@@ -69,47 +64,19 @@ class WitnessV1SigningTest(BitcoinTestFramework):
 
     def signed_payment(self, row):
         node = self.nodes[0]
-        label = f'{row["scheme"]}/{"p2sh" if row["wrapped"] else "direct"}'
+        label = row["scheme"]
         self.log.info("Sign and validate %s at candidate height %d", label, node.getblockcount() + 1)
         unsigned = self.unsigned_spend(row).serialize().hex()
         signed = node.signrawtransactionwithkey(unsigned, [row["secret"]], [self.prevout(row)], "ALL")
         assert_equal(signed["complete"], True)
         raw = signed["hex"]
         tx = tx_from_hex(raw)
-        assert_equal(tx.vin[0].scriptSig, bytes(CScript([row["program"]])) if row["wrapped"] else b"")
+        assert_equal(tx.vin[0].scriptSig, b"")
         assert_equal(len(tx.wit.vtxinwit[0].scriptWitness.stack), 2)
         assert_equal(tx.wit.vtxinwit[0].scriptWitness.stack[-1], row["script"])
         assert_equal(tx.wit.vtxinwit[0].scriptWitness.stack[0][-1], 1)  # SIGHASH_ALL
         assert_equal(node.testmempoolaccept([raw])[0]["allowed"], True)
         assert "hex" in self.candidate(raw)
-
-        if row["wrapped"]:
-            # The explicit wrapper, witnessScript-only, and historical
-            # redeemScript-only forms must all describe the same output.
-            for fields in ({"witnessScript": row["script"].hex()},
-                           {"redeemScript": row["script"].hex()},
-                           {"witnessScript": row["script"].hex(), "redeemScript": row["script"].hex()}):
-                previous = self.prevout(row)
-                previous.pop("redeemScript")
-                previous.pop("witnessScript")
-                previous.update(fields)
-                alternate = node.signrawtransactionwithkey(unsigned, [row["secret"]], [previous], "ALL")
-                assert_equal(alternate["complete"], True)
-                assert_equal(node.testmempoolaccept([alternate["hex"]])[0]["allowed"], True)
-
-            previous = self.prevout(row)
-            previous["redeemScript"] = CScript([OP_1, bytes(64)]).hex()
-            assert_raises_rpc_error(-8, "redeemScript does not correspond to witnessScript",
-                                    node.signrawtransactionwithkey, unsigned, [row["secret"]], [previous], "ALL")
-            # A valid v0 wrapper for the same script still does not match this
-            # output's P2SH commitment to a v1 wrapper.
-            previous["redeemScript"] = CScript([OP_0, sha256(row["script"]).digest()]).hex()
-            assert_raises_rpc_error(-8, "redeemScript/witnessScript does not match scriptPubKey",
-                                    node.signrawtransactionwithkey, unsigned, [row["secret"]], [previous], "ALL")
-            previous["witnessScript"] = bytes(CScript([OP_TRUE])).hex()
-            previous["redeemScript"] = CScript([OP_1, sha512(bytes(CScript([OP_TRUE]))).digest()]).hex()
-            assert_raises_rpc_error(-8, "redeemScript/witnessScript does not match scriptPubKey",
-                                    node.signrawtransactionwithkey, unsigned, [row["secret"]], [previous], "ALL")
 
         # A different key must not produce a complete spend for this script.
         wrong_key = node.signrawtransactionwithkey(unsigned, [row["other_secret"]], [self.prevout(row)], "ALL")
@@ -176,11 +143,9 @@ class WitnessV1SigningTest(BitcoinTestFramework):
             for scheme, secret, pubkey, other_secret in keys:
                 script = key_to_p2pk_script(pubkey)
                 program = CScript([OP_1, sha512(script).digest()])
-                for wrapped in ((False,) if self.options.direct_only else (False, True)):
-                    output = script_to_p2sh_script(program) if wrapped else program
-                    rows.append({"scheme": scheme, "secret": secret, "pubkey": pubkey, "other_secret": other_secret,
-                                 "script": script, "program": program, "output": output, "wrapped": wrapped, "vout": len(outputs)})
-                    outputs.extend([CTxOut(self.value, output), CTxOut(self.value, output)])
+                rows.append({"scheme": scheme, "secret": secret, "pubkey": pubkey, "other_secret": other_secret,
+                             "script": script, "program": program, "output": program, "vout": len(outputs)})
+                outputs.extend([CTxOut(self.value, program), CTxOut(self.value, program)])
         funding["tx"].vout = outputs + [CTxOut(total - len(outputs) * self.value, self.mini.get_output_script())]
         self.funding_id = funding["tx"].txid_hex
         # These future-format outputs are consensus-valid to create, but their
@@ -212,7 +177,7 @@ class WitnessV1SigningTest(BitcoinTestFramework):
             self.restart_node(0)
             assert_equal(node.getbestblockhash(), block_hash)
 
-        expected_payments = 10 if self.options.direct_only else 20
+        expected_payments = 10
         assert_equal(len(payments), expected_payments)
         assert_equal(self.rejections, 9 * expected_payments)
         for txid in payments:

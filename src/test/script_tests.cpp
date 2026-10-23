@@ -1150,10 +1150,9 @@ BOOST_AUTO_TEST_CASE(script_build)
                                    .PushWitRedeem()
                                    .ScriptError(SCRIPT_ERR_WITNESS_UNEXPECTED));
     tests.push_back(TestBuilder(CScript() << ToByteVector(pubkey0),
-                                "PQ WIT-V1512-WRONG-LEN v1_512", witness_v1_512_flags, false, WitnessMode::PKH, 1, 1)
+                                "PQ WIT-V1512-RESERVED-LEN v1_512", witness_v1_512_flags, false, WitnessMode::PKH, 1, 1)
                                    .PushWitSig(key0, 1, SIGHASH_ALL, 32, 32, SigVersion::WITNESS_V1_512)
-                                   .Push(pubkey0).AsWit()
-                                   .ScriptError(SCRIPT_ERR_WITNESS_PROGRAM_WRONG_LENGTH));
+                                   .Push(pubkey0).AsWit());
     tests.push_back(TestBuilder(CScript() << ToByteVector(pubkey0) << OP_CHECKSIG,
                                 "PQ WIT-V1512-ZERO-SIGHASH-REJECT v1_512", witness_v1_512_flags, false, WitnessMode::SH, 1, 1)
                                    .PushWitSig(key0, 1, 0, 32, 32, SigVersion::WITNESS_V1_512)
@@ -1182,7 +1181,8 @@ BOOST_AUTO_TEST_CASE(script_build)
                                 "PQ P2SH(v1_512 P2WSH)", witness_v1_512_flags, true, WitnessMode::SH, 1, 1)
                                    .PushWitSig(key0, 1, SIGHASH_ALL, 32, 32, SigVersion::WITNESS_V1_512)
                                    .PushWitRedeem()
-                                   .PushRedeem());
+                                   .PushRedeem()
+                                   .ScriptError(SCRIPT_ERR_WITNESS_UNEXPECTED));
 
     std::set<std::string> tests_set;
 
@@ -2077,14 +2077,22 @@ BOOST_AUTO_TEST_CASE(script_witness_v1_512_activation)
         check(canonical_sig, witness, before | SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM, SCRIPT_ERR_WITNESS_UNEXPECTED);
         check(canonical_sig, witness, STANDARD_SCRIPT_VERIFY_FLAGS, SCRIPT_ERR_CLEANSTACK);
 
-        // The exact same output enforces the SHA-512 witness script at activation.
-        check(canonical_sig, witness, after, SCRIPT_ERR_OK);
-        check(canonical_sig, witness, STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_WITNESS_V1_512, SCRIPT_ERR_OK);
-        check(canonical_sig, empty_witness, after, SCRIPT_ERR_WITNESS_PROGRAM_WITNESS_EMPTY);
-        check(extra_sig, witness, after, wrapped ? SCRIPT_ERR_WITNESS_MALLEATED_P2SH : SCRIPT_ERR_WITNESS_MALLEATED);
-        CScriptWitness wrong_witness;
-        wrong_witness.stack.emplace_back(1, OP_FALSE);
-        check(canonical_sig, wrong_witness, after, SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH);
+        if (wrapped) {
+            // P2SH does not acquire witness semantics at activation.
+            check(canonical_sig, empty_witness, after, SCRIPT_ERR_OK);
+            check(extra_sig, empty_witness, after, SCRIPT_ERR_OK);
+            check(canonical_sig, witness, after, SCRIPT_ERR_WITNESS_UNEXPECTED);
+            check(extra_sig, witness, after, SCRIPT_ERR_WITNESS_UNEXPECTED);
+            check(canonical_sig, empty_witness, after | SCRIPT_VERIFY_CLEANSTACK, SCRIPT_ERR_CLEANSTACK);
+        } else {
+            check(canonical_sig, witness, after, SCRIPT_ERR_OK);
+            check(canonical_sig, witness, STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_WITNESS_V1_512, SCRIPT_ERR_OK);
+            check(canonical_sig, empty_witness, after, SCRIPT_ERR_WITNESS_PROGRAM_WITNESS_EMPTY);
+            check(extra_sig, witness, after, SCRIPT_ERR_WITNESS_MALLEATED);
+            CScriptWitness wrong_witness;
+            wrong_witness.stack.emplace_back(1, OP_FALSE);
+            check(canonical_sig, wrong_witness, after, SCRIPT_ERR_WITNESS_PROGRAM_MISMATCH);
+        }
 
         // Selecting older rules again restores ordinary script interpretation.
         check(extra_sig, empty_witness, before, SCRIPT_ERR_OK);
@@ -2107,13 +2115,16 @@ BOOST_AUTO_TEST_CASE(script_witness_v1_512_activation)
     for (const int version_number : {1, 2, 16}) {
         for (const size_t length : {2, 20, 32, 40}) {
             const CScript script = CScript() << CScript::EncodeOP_N(version_number) << std::vector<unsigned char>(length, 1);
-            ScriptError err{SCRIPT_ERR_UNKNOWN_ERROR};
-            BOOST_CHECK(VerifyScript(CScript(), script, &witness, before, BaseSignatureChecker(), &err));
-            BOOST_CHECK(!VerifyScript(CScript(), script, &witness, before | SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM, BaseSignatureChecker(), &err));
-            BOOST_CHECK_EQUAL(err, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM);
-            const bool valid_after{version_number != 1};
-            BOOST_CHECK_EQUAL(VerifyScript(CScript(), script, &witness, after, BaseSignatureChecker(), &err), valid_after);
-            BOOST_CHECK_EQUAL(err, valid_after ? SCRIPT_ERR_OK : SCRIPT_ERR_WITNESS_PROGRAM_WRONG_LENGTH);
+            for (const bool wrapped : {false, true}) {
+                const CScript output = wrapped ? GetScriptForDestination(ScriptHash(script)) : script;
+                const CScript sig = wrapped ? CScript{} << ToByteVector(script) : CScript{};
+                for (const unsigned int flags : {before, after}) {
+                    ScriptError err{SCRIPT_ERR_UNKNOWN_ERROR};
+                    BOOST_CHECK(VerifyScript(sig, output, &witness, flags, BaseSignatureChecker(), &err));
+                    BOOST_CHECK(!VerifyScript(sig, output, &witness, flags | SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM, BaseSignatureChecker(), &err));
+                    BOOST_CHECK_EQUAL(err, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM);
+                }
+            }
         }
     }
 }
@@ -2134,7 +2145,7 @@ BOOST_AUTO_TEST_CASE(script_witness_v1_512_sigop_activation)
         const auto& output = p2sh ? wrapped : direct;
         const CScript sig = p2sh ? script_sig : CScript();
         BOOST_CHECK_EQUAL(CountWitnessSigOps(sig, output, &witness, before), 0U);
-        BOOST_CHECK_EQUAL(CountWitnessSigOps(sig, output, &witness, after), 3U);
+        BOOST_CHECK_EQUAL(CountWitnessSigOps(sig, output, &witness, after), p2sh ? 0U : 3U);
         BOOST_CHECK_EQUAL(CountWitnessSigOps(sig, output, nullptr, after), 0U);
         BOOST_CHECK_EQUAL(CountWitnessSigOps(sig, output, &witness, after & ~SCRIPT_VERIFY_WITNESS), 0U);
         BOOST_CHECK_EQUAL(CountWitnessSigOps(sig, output, &witness, before), 0U);
@@ -2154,71 +2165,69 @@ BOOST_AUTO_TEST_CASE(witness_v1_hash_types_are_script_errors)
         CKey key;
         key.MakeNewKey(scheme);
         const auto pubkey = ToByteVector(key.GetPubKey());
-        for (bool wrapped : {false, true}) {
-            for (int form = 0; form < 6; ++form) {
-                const bool multi = form >= 3;
-                const bool negated = form % 3 == 2;
-                const bool verify = form % 3 == 1;
-                CScript script;
-                if (multi) script << OP_1 << pubkey << OP_1 << (verify ? OP_CHECKMULTISIGVERIFY : OP_CHECKMULTISIG);
-                else script << pubkey << (verify ? OP_CHECKSIGVERIFY : OP_CHECKSIG);
-                if (verify) script << OP_TRUE;
-                if (negated) script << OP_NOT;
-                const CScript program = GetScriptForDestination(WitnessV1ScriptHash512(script));
-                const CScript output = wrapped ? GetScriptForDestination(ScriptHash(program)) : program;
-                CMutableTransaction tx;
-                tx.vin.resize(1);
-                tx.vout.emplace_back(1, CScript{} << OP_TRUE);
-                const CScript script_sig = wrapped ? CScript{} << ToByteVector(program) : CScript{};
-                PrecomputedTransactionData data;
-                data.Init(tx, {CTxOut(1000, output)}, true);
-                const MutableTransactionSignatureChecker checker(&tx, 0, 1000, data, MissingDataBehavior::FAIL, false);
-                for (int mode : {1, 2, 3, 0x81, 0x82, 0x83, 0, 4, 0x22, 0x41, 0x43, 0x80, 0x84, 0xff}) {
-                    uint512 hash;
-                    BOOST_REQUIRE(SignatureHash512(hash, script, tx, 0, mode, 1000, &data));
-                    std::vector<unsigned char> sig;
-                    if (!negated) BOOST_REQUIRE(key.Sign512(hash, sig, false));
-                    sig.push_back(mode); // A one-byte signature is invalid for negated controls.
-                    CScriptWitness witness;
-                    if (multi) witness.stack.emplace_back();
-                    witness.stack.push_back(sig);
-                    witness.stack.push_back(ToByteVector(script));
-                    for (unsigned flags : {block_flags, block_flags | STANDARD_SCRIPT_VERIFY_FLAGS}) {
-                        const unsigned inactive_flags = flags & ~SCRIPT_VERIFY_WITNESS_V1_512;
-                        ScriptError inactive_error{SCRIPT_ERR_OK};
-                        const bool inactive = VerifyScript(script_sig, output, &witness, inactive_flags, checker, &inactive_error);
-                        // The 64-byte format is an ordinary script before
-                        // activation, so witness data is unexpected. Standard
-                        // flags reject its ordinary stack even earlier.
-                        BOOST_CHECK(!inactive);
-                        BOOST_CHECK_EQUAL(inactive_error, (inactive_flags & SCRIPT_VERIFY_CLEANSTACK) ? SCRIPT_ERR_CLEANSTACK : SCRIPT_ERR_WITNESS_UNEXPECTED);
-                        if (!(inactive_flags & SCRIPT_VERIFY_CLEANSTACK)) {
-                            const CScriptWitness no_witness;
-                            BOOST_CHECK(VerifyScript(script_sig, output, &no_witness, inactive_flags, checker, &inactive_error));
-                        }
-                        ScriptError error{SCRIPT_ERR_OK};
-                        const bool result = VerifyScript(script_sig, output, &witness, flags, checker, &error);
-                        if (mode != 0x01 && mode != 0x02 && mode != 0x03 && mode != 0x81 && mode != 0x82 && mode != 0x83) {
-                            BOOST_CHECK(!result);
-                            BOOST_CHECK_EQUAL(error, SCRIPT_ERR_SIG_HASHTYPE);
-                        } else if (negated && (flags & SCRIPT_VERIFY_NULLFAIL)) {
-                            BOOST_CHECK(!result);
-                            BOOST_CHECK_EQUAL(error, SCRIPT_ERR_SIG_NULLFAIL);
-                        } else {
-                            BOOST_CHECK(result);
-                        }
+        for (int form = 0; form < 6; ++form) {
+            const bool multi = form >= 3;
+            const bool negated = form % 3 == 2;
+            const bool verify = form % 3 == 1;
+            CScript script;
+            if (multi) script << OP_1 << pubkey << OP_1 << (verify ? OP_CHECKMULTISIGVERIFY : OP_CHECKMULTISIG);
+            else script << pubkey << (verify ? OP_CHECKSIGVERIFY : OP_CHECKSIG);
+            if (verify) script << OP_TRUE;
+            if (negated) script << OP_NOT;
+            const CScript program = GetScriptForDestination(WitnessV1ScriptHash512(script));
+            const CScript output = program;
+            CMutableTransaction tx;
+            tx.vin.resize(1);
+            tx.vout.emplace_back(1, CScript{} << OP_TRUE);
+            const CScript script_sig = CScript{};
+            PrecomputedTransactionData data;
+            data.Init(tx, {CTxOut(1000, output)}, true);
+            const MutableTransactionSignatureChecker checker(&tx, 0, 1000, data, MissingDataBehavior::FAIL, false);
+            for (int mode : {1, 2, 3, 0x81, 0x82, 0x83, 0, 4, 0x22, 0x41, 0x43, 0x80, 0x84, 0xff}) {
+                uint512 hash;
+                BOOST_REQUIRE(SignatureHash512(hash, script, tx, 0, mode, 1000, &data));
+                std::vector<unsigned char> sig;
+                if (!negated) BOOST_REQUIRE(key.Sign512(hash, sig, false));
+                sig.push_back(mode); // A one-byte signature is invalid for negated controls.
+                CScriptWitness witness;
+                if (multi) witness.stack.emplace_back();
+                witness.stack.push_back(sig);
+                witness.stack.push_back(ToByteVector(script));
+                for (unsigned flags : {block_flags, block_flags | STANDARD_SCRIPT_VERIFY_FLAGS}) {
+                    const unsigned inactive_flags = flags & ~SCRIPT_VERIFY_WITNESS_V1_512;
+                    ScriptError inactive_error{SCRIPT_ERR_OK};
+                    const bool inactive = VerifyScript(script_sig, output, &witness, inactive_flags, checker, &inactive_error);
+                    // The 64-byte format is an ordinary script before
+                    // activation, so witness data is unexpected. Standard
+                    // flags reject its ordinary stack even earlier.
+                    BOOST_CHECK(!inactive);
+                    BOOST_CHECK_EQUAL(inactive_error, (inactive_flags & SCRIPT_VERIFY_CLEANSTACK) ? SCRIPT_ERR_CLEANSTACK : SCRIPT_ERR_WITNESS_UNEXPECTED);
+                    if (!(inactive_flags & SCRIPT_VERIFY_CLEANSTACK)) {
+                        const CScriptWitness no_witness;
+                        BOOST_CHECK(VerifyScript(script_sig, output, &no_witness, inactive_flags, checker, &inactive_error));
+                    }
+                    ScriptError error{SCRIPT_ERR_OK};
+                    const bool result = VerifyScript(script_sig, output, &witness, flags, checker, &error);
+                    if (mode != 0x01 && mode != 0x02 && mode != 0x03 && mode != 0x81 && mode != 0x82 && mode != 0x83) {
+                        BOOST_CHECK(!result);
+                        BOOST_CHECK_EQUAL(error, SCRIPT_ERR_SIG_HASHTYPE);
+                    } else if (negated && (flags & SCRIPT_VERIFY_NULLFAIL)) {
+                        BOOST_CHECK(!result);
+                        BOOST_CHECK_EQUAL(error, SCRIPT_ERR_SIG_NULLFAIL);
+                    } else {
+                        BOOST_CHECK(result);
                     }
                 }
-                CScriptWitness empty;
-                if (multi) empty.stack.emplace_back();
-                empty.stack.emplace_back();
-                empty.stack.push_back(ToByteVector(script));
-                for (unsigned flags : {block_flags, block_flags | STANDARD_SCRIPT_VERIFY_FLAGS}) {
-                    ScriptError error{SCRIPT_ERR_OK};
-                    const bool result = VerifyScript(script_sig, output, &empty, flags, checker, &error);
-                    BOOST_CHECK_EQUAL(result, negated);
-                    BOOST_CHECK_EQUAL(error, verify ? (multi ? SCRIPT_ERR_CHECKMULTISIGVERIFY : SCRIPT_ERR_CHECKSIGVERIFY) : (negated ? SCRIPT_ERR_OK : SCRIPT_ERR_EVAL_FALSE));
-                }
+            }
+            CScriptWitness empty;
+            if (multi) empty.stack.emplace_back();
+            empty.stack.emplace_back();
+            empty.stack.push_back(ToByteVector(script));
+            for (unsigned flags : {block_flags, block_flags | STANDARD_SCRIPT_VERIFY_FLAGS}) {
+                ScriptError error{SCRIPT_ERR_OK};
+                const bool result = VerifyScript(script_sig, output, &empty, flags, checker, &error);
+                BOOST_CHECK_EQUAL(result, negated);
+                BOOST_CHECK_EQUAL(error, verify ? (multi ? SCRIPT_ERR_CHECKMULTISIGVERIFY : SCRIPT_ERR_CHECKSIGVERIFY) : (negated ? SCRIPT_ERR_OK : SCRIPT_ERR_EVAL_FALSE));
             }
         }
     }

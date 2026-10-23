@@ -434,6 +434,10 @@ bool ProduceSignature(const SigningProvider& provider, const BaseSignatureCreato
         // and then the serialized subscript:
         subscript = CScript(result[0].begin(), result[0].end());
         sigdata.redeem_script = subscript;
+        // The 64-byte v1 form inside P2SH is an ordinary, unsupported script.
+        // Do not look up a witness script or produce signatures for it.
+        std::vector<valtype> solutions;
+        if (Solver(subscript, solutions) == TxoutType::WITNESS_V1_SCRIPTHASH_512) return false;
         solved = solved && SignStep(provider, creator, subscript, result, whichType, SigVersion::BASE, sigdata) && whichType != TxoutType::SCRIPTHASH;
         P2SH = true;
     }
@@ -564,6 +568,7 @@ SignatureData DataFromTransaction(const CMutableTransaction& tx, unsigned int nI
     // Get scripts
     std::vector<std::vector<unsigned char>> solutions;
     TxoutType script_type = Solver(txout.scriptPubKey, solutions);
+    const bool is_native_v1{script_type == TxoutType::WITNESS_V1_SCRIPTHASH_512};
     SigVersion sigversion = SigVersion::BASE;
     CScript next_script = txout.scriptPubKey;
 
@@ -590,7 +595,7 @@ SignatureData DataFromTransaction(const CMutableTransaction& tx, unsigned int nI
         stack.witness.clear();
         sigversion = SigVersion::WITNESS_V0;
     }
-    if (script_type == TxoutType::WITNESS_V1_SCRIPTHASH_512 && !stack.witness.empty() && !stack.witness.back().empty()) {
+    if (is_native_v1 && !stack.witness.empty() && !stack.witness.back().empty()) {
         // Get the witnessScript for v1-512 spends.
         CScript witness_script(stack.witness.back().begin(), stack.witness.back().end());
         data.witness_script = witness_script;
@@ -691,7 +696,7 @@ public:
         if (provider.GetPubKey(keyid, pubkey) && pubkey.IsValid()) {
             const auto* scheme = pq::SchemeFromPrefix(pubkey[0]);
             if (scheme) {
-                sig_len = m_use_max ? pq::SigLenMaxInScript(*scheme) : pq::SigLenFixedInScript(*scheme);
+                sig_len = m_use_max ? pq::SigLenMaxInScript(*scheme) : pq::SigLenSignMaxInScript(*scheme);
             }
         }
         if (sig_len == 0) {
@@ -720,7 +725,9 @@ bool IsSegWitOutput(const SigningProvider& provider, const CScript& script)
             auto h160 = uint160(solutions[0]);
             CScript subscript;
             if (provider.GetCScript(CScriptID{h160}, subscript)) {
-                if (subscript.IsWitnessProgram(version, program)) return true;
+                if (subscript.IsWitnessProgram(version, program)) {
+                    return version != 1 || program.size() != WITNESS_V1_SCRIPTHASH_512_SIZE;
+                }
             }
         }
     }

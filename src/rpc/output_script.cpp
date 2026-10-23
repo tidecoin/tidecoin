@@ -266,6 +266,8 @@ static RPCHelpMan deriveaddresses()
         "Does not allocate receiving addresses or extend wallet monitoring.\n"
         "For a registered wallet-local PQHD descriptor, select its wallet with -rpcwallet.\n"
         "Cached indices work while locked; fresh derivation requires an unlocked wallet with its seed.\n"
+        "Native witness v1 addresses (wsh512) are derived regardless of activation. Before auxpow\n"
+        "activation their outputs can be spent without a signature, so do not receive to them until then.\n"
          "Examples of output descriptors are:\n"
          "    pkh(<pubkey>)                                     P2PKH outputs for the given pubkey\n"
          "    wpkh(<pubkey>)                                    Native segwit P2PKH outputs for the given pubkey\n"

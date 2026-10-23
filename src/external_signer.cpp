@@ -9,11 +9,13 @@
 #include <core_io.h>
 #include <psbt.h>
 #include <script/interpreter.h>
+#include <script/signingprovider.h>
 #include <util/strencodings.h>
 #include <util/vector.h>
 
 #include <algorithm>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -82,13 +84,17 @@ bool ExternalSigner::SignTransaction(PartiallySignedTransaction& psbtx, std::str
     auto staged = psbtx;
     if (targets) {
         if (targets->size() != staged.inputs.size()) { error = "Invalid signing targets"; return false; }
+        const auto request_txdata = PrecomputePSBTData(psbtx);
         for (size_t i = 0; i < targets->size(); ++i) {
             if (!(*targets)[i]) continue;
             const int mode = requested.value_or(SIGHASH_ALL);
             if (SingleWithoutOutput(mode, i, staged.tx->vout.size()) || !IsSupportedSighash(mode)) { error = "Invalid signing mode or missing SINGLE output"; return false; }
             auto& input = staged.inputs[i];
             if (input.sighash_type && *input.sighash_type != mode) { error = "Conflicting signing mode"; return false; }
-            for (const auto& [_, sig] : input.partial_sigs) {
+            // Partials that cannot verify do not constrain the mode.
+            const std::set<CKeyID> invalid{InvalidPSBTPartialSignatures(psbtx, i, FlatSigningProvider{}, request_txdata, script_verify_flags)};
+            for (const auto& [keyid, sig] : input.partial_sigs) {
+                if (invalid.contains(keyid)) continue;
                 if (sig.second.empty() || sig.second.back() != mode || sig.second.back() != input.sighash_type.value_or(SIGHASH_ALL)) { error = "Conflicting existing signature mode"; return false; }
             }
             if (mode != SIGHASH_ALL) input.sighash_type = mode;

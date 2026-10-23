@@ -33,46 +33,6 @@ struct TxPackageTest : TestChain100Setup {
 
     TxPackageTest() : coinbase_value(m_coinbase_txns[0]->vout[0].nValue) {}
 
-    // TxPackage tests do fee math on vsize and can become flaky with variable-length Falcon
-    // signatures. Normalize Falcon witness signatures in the transactions created by this
-    // fixture only (test harness remains unchanged for other test suites).
-    std::pair<CMutableTransaction, CAmount> CreateValidTransaction(const std::vector<CTransactionRef>& input_transactions,
-                                                                   const std::vector<COutPoint>& inputs,
-                                                                   int input_height,
-                                                                   const std::vector<CKey>& input_signing_keys,
-                                                                   const std::vector<CTxOut>& outputs,
-                                                                   const std::optional<CFeeRate>& feerate,
-                                                                   const std::optional<uint32_t>& fee_output)
-    {
-        return TestChain100Setup::CreateValidTransaction(input_transactions, inputs, input_height, input_signing_keys,
-                                                         outputs, feerate, fee_output,
-                                                         /*normalize_falcon_sigs=*/true);
-    }
-
-    CMutableTransaction CreateValidMempoolTransaction(const std::vector<CTransactionRef>& input_transactions,
-                                                      const std::vector<COutPoint>& inputs,
-                                                      int input_height,
-                                                      const std::vector<CKey>& input_signing_keys,
-                                                      const std::vector<CTxOut>& outputs,
-                                                      bool submit = true)
-    {
-        return TestChain100Setup::CreateValidMempoolTransaction(input_transactions, inputs, input_height, input_signing_keys,
-                                                                outputs, submit,
-                                                                /*normalize_falcon_sigs=*/true);
-    }
-
-    CMutableTransaction CreateValidMempoolTransaction(CTransactionRef input_transaction,
-                                                      uint32_t input_vout,
-                                                      int input_height,
-                                                      CKey input_signing_key,
-                                                      CScript output_destination,
-                                                      CAmount output_amount = CAmount(1 * COIN),
-                                                      bool submit = true)
-    {
-        return TestChain100Setup::CreateValidMempoolTransaction(input_transaction, input_vout, input_height, input_signing_key,
-                                                                output_destination, output_amount, submit,
-                                                                /*normalize_falcon_sigs=*/true);
-    }
 // Create placeholder transactions that have no meaning.
 inline CTransactionRef create_placeholder_tx(size_t num_inputs, size_t num_outputs)
 {
@@ -1010,66 +970,21 @@ BOOST_AUTO_TEST_CASE(package_cpfp_tests)
         BOOST_CHECK_EQUAL(m_node.mempool->size(), expected_pool_size);
     }
 
-    // Just because we allow low-fee parents doesn't mean we allow low-feerate packages.
-    // The mempool minimum feerate is 5sat/vB, but this package just pays 800 satoshis total.
-    // The child fees would be able to pay for itself, but isn't enough for the entire package.
+    // The child pays for itself, but does not cover the parent's fee shortfall.
+    // Keep the parent well below the mempool minimum and calculate the child's
+    // fee from its final signed size; neither fee depends on a probe signature.
     Package package_still_too_low;
-    // Calibrate fees so: parent is below min feerate, child meets min feerate,
-    // but the combined package is still below the min feerate. PQ signatures can vary in size,
-    // so build transactions until the size/fee relationship is satisfied.
-    CTransactionRef tx_parent_cheap;
-    CTransactionRef tx_child_cheap;
-    CAmount parent_fee{0};
-    CAmount child_fee{0};
-    bool cheap_package_ready{false};
-    for (int attempt = 0; attempt < 10 && !cheap_package_ready; ++attempt) {
-        auto mtx_parent_probe = CreateValidMempoolTransaction(/*input_transaction=*/m_coinbase_txns[1], /*input_vout=*/0,
-                                                              /*input_height=*/0, /*input_signing_key=*/coinbaseKey,
-                                                              /*output_destination=*/parent_spk,
-                                                              /*output_amount=*/coinbase_value, /*submit=*/false);
-        CTransactionRef tx_parent_probe = MakeTransactionRef(mtx_parent_probe);
-        auto mtx_child_probe = CreateValidMempoolTransaction(/*input_transaction=*/tx_parent_probe, /*input_vout=*/0,
-                                                             /*input_height=*/101, /*input_signing_key=*/child_key,
-                                                             /*output_destination=*/child_spk,
-                                                             /*output_amount=*/coinbase_value, /*submit=*/false);
-        CTransactionRef tx_child_probe = MakeTransactionRef(mtx_child_probe);
-
-        const int32_t vsize_parent = GetVirtualTransactionSize(*tx_parent_probe);
-        const int32_t vsize_child = GetVirtualTransactionSize(*tx_child_probe);
-        const CAmount min_fee_parent = m_node.mempool->GetMinFee().GetFee(vsize_parent);
-        const CAmount min_fee_child = m_node.mempool->GetMinFee().GetFee(vsize_child);
-        const CAmount min_fee_package = m_node.mempool->GetMinFee().GetFee(vsize_parent + vsize_child);
-        const CAmount rounding_diff = min_fee_parent + min_fee_child - min_fee_package;
-        parent_fee = std::max<CAmount>(0, min_fee_parent - (rounding_diff + 1));
-        child_fee = min_fee_child;
-        const CAmount min_relay_parent = m_node.mempool->m_opts.min_relay_feerate.GetFee(vsize_parent);
-        if (parent_fee < min_relay_parent) parent_fee = min_relay_parent;
-
-        auto mtx_parent_cheap = CreateValidMempoolTransaction(/*input_transaction=*/m_coinbase_txns[1], /*input_vout=*/0,
-                                                              /*input_height=*/0, /*input_signing_key=*/coinbaseKey,
-                                                              /*output_destination=*/parent_spk,
-                                                              /*output_amount=*/coinbase_value - parent_fee, /*submit=*/false);
-        tx_parent_cheap = MakeTransactionRef(mtx_parent_cheap);
-
-        auto mtx_child_cheap = CreateValidMempoolTransaction(/*input_transaction=*/tx_parent_cheap, /*input_vout=*/0,
-                                                             /*input_height=*/101, /*input_signing_key=*/child_key,
-                                                             /*output_destination=*/child_spk,
-                                                             /*output_amount=*/coinbase_value - parent_fee - child_fee, /*submit=*/false);
-        tx_child_cheap = MakeTransactionRef(mtx_child_cheap);
-
-        const int32_t vsize_parent_actual = GetVirtualTransactionSize(*tx_parent_cheap);
-        const int32_t vsize_child_actual = GetVirtualTransactionSize(*tx_child_cheap);
-        const CAmount min_fee_parent_actual = m_node.mempool->GetMinFee().GetFee(vsize_parent_actual);
-        const CAmount min_fee_child_actual = m_node.mempool->GetMinFee().GetFee(vsize_child_actual);
-        const CAmount min_fee_package_actual = m_node.mempool->GetMinFee().GetFee(vsize_parent_actual + vsize_child_actual);
-
-        cheap_package_ready =
-            (min_fee_parent_actual > parent_fee) &&
-            (m_node.mempool->m_opts.min_relay_feerate.GetFee(vsize_parent_actual) <= parent_fee) &&
-            (min_fee_child_actual <= child_fee) &&
-            (min_fee_package_actual > parent_fee + child_fee);
-    }
-    BOOST_REQUIRE_MESSAGE(cheap_package_ready, "unable to construct low-fee package under PQ sizes");
+    const CAmount parent_fee{low_fee_amt};
+    const CTransactionRef tx_parent_cheap = MakeTransactionRef(CreateValidMempoolTransaction(
+        /*input_transaction=*/m_coinbase_txns[1], /*input_vout=*/0, /*input_height=*/0,
+        /*input_signing_key=*/coinbaseKey, /*output_destination=*/parent_spk,
+        /*output_amount=*/coinbase_value - parent_fee, /*submit=*/false));
+    const auto [mtx_child_cheap, child_fee] = CreateValidTransaction(
+        /*input_transactions=*/{tx_parent_cheap}, /*inputs=*/{{tx_parent_cheap->GetHash(), 0}},
+        /*input_height=*/101, /*input_signing_keys=*/{child_key},
+        /*outputs=*/{{coinbase_value - parent_fee, child_spk}},
+        /*feerate=*/m_node.mempool->GetMinFee(), /*fee_output=*/0);
+    const CTransactionRef tx_child_cheap = MakeTransactionRef(mtx_child_cheap);
 
     package_still_too_low.push_back(tx_parent_cheap);
     BOOST_CHECK(m_node.mempool->GetMinFee().GetFee(GetVirtualTransactionSize(*tx_parent_cheap)) > parent_fee);

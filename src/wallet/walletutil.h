@@ -105,6 +105,9 @@ public:
     WalletDescriptor(std::shared_ptr<Descriptor> descriptor, uint64_t creation_time, int32_t range_start, int32_t range_end, int32_t next_index) : descriptor(descriptor), id(DescriptorID(*descriptor)), creation_time(creation_time), range_start(range_start), range_end(range_end), next_index(next_index) { }
 };
 
+//! PQHD purpose (path element 0) of the default descriptor for an output type.
+uint32_t PQHDPurposeForOutputType(OutputType output_type);
+
 //! Generate a ranged wallet descriptor backed by PQHD (pqhd(SEEDID32)/.../*h).
 //! This does not rely on BIP32/xpub and instead uses the pqhd() key expression.
 WalletDescriptor GeneratePQHDWalletDescriptor(const uint256& seed_id,

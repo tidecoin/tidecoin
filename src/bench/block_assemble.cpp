@@ -40,8 +40,7 @@ static void AssembleBlock(benchmark::Bench& bench)
             /*input_signing_key=*/test_setup->coinbaseKey,
             /*output_destination=*/P2WSH_OP_TRUE,
             /*output_amount=*/CAmount{1 * COIN},
-            /*submit=*/true,
-            /*normalize_falcon_sigs=*/true);
+            /*submit=*/true);
     }
 
     bench.run([&] {

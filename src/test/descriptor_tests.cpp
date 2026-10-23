@@ -8,9 +8,11 @@
 #include <addresstype.h>
 #include <consensus/consensus.h>
 #include <pq/pq_scheme.h>
+#include <pq/pqhd_params.h>
 #include <key.h>
 #include <key_io.h>
 #include <test/util/setup_common.h>
+#include <tinyformat.h>
 #include <util/strencodings.h>
 #include <util/string.h>
 
@@ -131,8 +133,46 @@ BOOST_AUTO_TEST_CASE(descriptor_pqhd_key_expression_parsing)
     must_fail("wpkh(pqhd(" + seedid + ")/10007/6868h/7h/0h/0h/*h)", "hardened-only");
     must_fail("wpkh(pqhd(" + seedid + ")/10007h/6868h/7h/0h/0h/*)", "*h");
     must_fail("wpkh(pqhd(" + seedid + ")/10008h/6868h/7h/0h/0h/*h)", "purpose");
+    must_fail("wpkh(pqhd(" + seedid + ")/44h/6868h/7h/0h/0h/*h)", "purpose");
+    must_fail("wpkh(pqhd(" + seedid + ")/10084h/6869h/7h/0h/0h/*h)", "coin_type");
     must_fail("wpkh(pqhd(" + seedid + ")/10007h/6868h/6h/0h/0h/*h)", "not recognized");
     must_fail("wpkh(pqhd(" + seedid.substr(0, 10) + ")/10007h/6868h/7h/0h/0h/*h)", "pqhd() seed id");
+
+    // Every family purpose and both coin types parse.
+    for (const uint32_t purpose : {pqhd::PURPOSE_GENERIC, pqhd::PURPOSE_PKH, pqhd::PURPOSE_SH_WPKH,
+                                   pqhd::PURPOSE_WPKH, pqhd::PURPOSE_WSH512}) {
+        for (const uint32_t coin_type : {pqhd::COIN_TYPE_MAIN, pqhd::COIN_TYPE_TEST}) {
+            const std::string desc{strprintf("wpkh(pqhd(%s)/%uh/%uh/7h/0h/0h/*h)", seedid, purpose, coin_type)};
+            out = FlatSigningProvider{};
+            BOOST_CHECK_MESSAGE(!Parse(desc, out, error).empty(), desc + ": " + error);
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(descriptor_has_witness_v1)
+{
+    const std::string seedid{"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"};
+    const std::string key{"pqhd(" + seedid + ")/10007h/6868h/7h/0h/0h/*h"};
+    const auto has_v1 = [](const std::string& desc) {
+        FlatSigningProvider out;
+        std::string error;
+        auto parsed = Parse(desc, out, error);
+        BOOST_REQUIRE_MESSAGE(!parsed.empty(), desc + ": " + error);
+        return parsed.at(0)->HasWitnessV1();
+    };
+    BOOST_CHECK(has_v1("wsh512(pk(" + key + "))"));
+    BOOST_CHECK(!has_v1("pkh(" + key + ")"));
+    BOOST_CHECK(!has_v1("wpkh(" + key + ")"));
+    BOOST_CHECK(!has_v1("sh(wpkh(" + key + "))"));
+    BOOST_CHECK(!has_v1("wsh(pk(" + key + "))"));
+    BOOST_CHECK(!has_v1("sh(wsh(pk(" + key + ")))"));
+
+    // Literal native v1 outputs are recognized; a literal P2SH is opaque.
+    const CScript v1_script{GetScriptForDestination(WitnessV1ScriptHash512{CScript{} << OP_TRUE})};
+    BOOST_CHECK(has_v1("addr(" + EncodeDestination(WitnessV1ScriptHash512{CScript{} << OP_TRUE}) + ")"));
+    BOOST_CHECK(has_v1("raw(" + HexStr(v1_script) + ")"));
+    BOOST_CHECK(!has_v1("addr(" + EncodeDestination(ScriptHash{v1_script}) + ")"));
+    BOOST_CHECK(!has_v1("raw(" + HexStr(GetScriptForDestination(ScriptHash{v1_script})) + ")"));
 }
 
 BOOST_AUTO_TEST_CASE(descriptor_wsh512_parsing)
@@ -216,34 +256,29 @@ BOOST_AUTO_TEST_CASE(descriptor_explicit_pq_pubkey_matrix)
         parse_ok("combo(" + hex + ")");
         parse_ok("wsh(pk(" + hex + "))");
         parse_ok("wsh512(pk(" + hex + "))");
-        parse_fail("wsh(wsh512(pk(" + hex + ")))", "Can only have wsh512() at top level or inside sh()");
-        parse_fail("wsh512(wsh512(pk(" + hex + ")))", "Can only have wsh512() at top level or inside sh()");
+        parse_fail("wsh(wsh512(pk(" + hex + ")))", "Can only have wsh512() at top level");
+        parse_fail("wsh512(wsh512(pk(" + hex + ")))", "Can only have wsh512() at top level");
         parse_fail("sh(sh(wsh512(pk(" + hex + "))))", "Can only have sh() at top level");
         for (const auto& inner : {"pk(" + hex + ")", "multi(1," + hex + ")"}) {
-            for (bool wrapped : {false, true}) {
-                const std::string desc = wrapped ? "sh(wsh512(" + inner + "))" : "wsh512(" + inner + ")";
-                auto parsed = parse_ok(desc);
-                BOOST_CHECK(parsed[0]->GetOutputType() == (wrapped ? OutputType::P2SH_SEGWIT : OutputType::BECH32PQ));
-                if (wrapped) {
-                    FlatSigningProvider native_provider;
-                    std::string native_error;
-                    auto native = Parse("wsh512(" + inner + ")", native_provider, native_error);
-                    BOOST_REQUIRE(!native.empty());
-                    BOOST_REQUIRE(parsed[0]->MaxSatisfactionWeight(true));
-                    BOOST_REQUIRE(native[0]->MaxSatisfactionWeight(true));
-                    BOOST_CHECK_EQUAL(*parsed[0]->MaxSatisfactionWeight(true), *native[0]->MaxSatisfactionWeight(true) + 67 * WITNESS_SCALE_FACTOR);
-                }
-                std::vector<CScript> scripts;
-                FlatSigningProvider expanded;
-                BOOST_REQUIRE(parsed[0]->Expand(0, out, scripts, expanded));
-                auto inferred = InferDescriptor(scripts[0], expanded);
-                BOOST_CHECK(EqualDescriptor(desc, inferred->ToString()));
-                auto roundtrip = parse_ok(inferred->ToString());
-                std::vector<CScript> again;
-                FlatSigningProvider again_provider;
-                BOOST_REQUIRE(roundtrip[0]->Expand(0, out, again, again_provider));
-                BOOST_CHECK(again == scripts);
-            }
+            parse_fail("sh(wsh512(" + inner + "))", "Can only have wsh512() at top level");
+            const std::string desc = "wsh512(" + inner + ")";
+            auto parsed = parse_ok(desc);
+            BOOST_CHECK(parsed[0]->GetOutputType() == OutputType::BECH32PQ);
+            std::vector<CScript> scripts;
+            FlatSigningProvider expanded;
+            BOOST_REQUIRE(parsed[0]->Expand(0, out, scripts, expanded));
+            auto inferred = InferDescriptor(scripts[0], expanded);
+            BOOST_CHECK(EqualDescriptor(desc, inferred->ToString()));
+            auto roundtrip = parse_ok(inferred->ToString());
+            std::vector<CScript> again;
+            FlatSigningProvider again_provider;
+            BOOST_REQUIRE(roundtrip[0]->Expand(0, out, again, again_provider));
+            BOOST_CHECK(again == scripts);
+
+            // Knowing the redeem and witness scripts must not infer sh(wsh512).
+            expanded.scripts.emplace(CScriptID(scripts[0]), scripts[0]);
+            auto wrapped = InferDescriptor(GetScriptForDestination(ScriptHash(scripts[0])), expanded);
+            BOOST_CHECK(wrapped->ToString().starts_with("addr("));
         }
         parse_ok("multi(1," + hex + ")");
         parse_ok("sortedmulti(1," + hex + ")");

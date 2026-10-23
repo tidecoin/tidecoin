@@ -51,7 +51,7 @@ Parser context rules:
 
 - `sh(...)`: top-level only.
 - `wsh(...)`: top-level or inside `sh(...)`.
-- `wsh512(...)`: top-level or inside one top-level `sh(...)`.
+- `wsh512(...)`: top-level only; `sh(wsh512(...))` is not supported.
 - `wpkh(...)`: top-level or inside `sh(...)`.
 - `combo(...)`, `addr(...)`, `raw(...)`: top-level only.
 - `multi(...)` / `sortedmulti(...)`: top-level, inside `sh(...)`, inside
@@ -87,13 +87,28 @@ Rules enforced by parser:
 - Hardened-only derivation (`h` or `'` suffix).
 - Wildcard form must be final `*h` (or `*'`) and then exactly 5 fixed hardened
   elements before it.
-- `purpose` must be `10007`.
-- `cointype` must be `6868`.
+- `purpose` must be one of the PQHD purposes listed below.
+- `cointype` must be `6868` (mainnet) or `1` (test networks).
 - `scheme` must fit in `uint8` and be a recognized PQ scheme prefix.
 - `change` must be `0` or `1`.
 - Multipath derivation (`<...;...>`) is not supported in `pqhd(...)`.
 
 Recognized scheme prefixes are currently `7, 8, 9, 10, 11`.
+
+Each standard script family has its own purpose, so one seed and index never
+give the same key to two families:
+
+| Purpose | Family |
+| --- | --- |
+| `10044` | `pkh(KEY)` |
+| `10049` | `sh(wpkh(KEY))` |
+| `10084` | `wpkh(KEY)` |
+| `10087` | `wsh512(pk(KEY))` |
+| `10007` | custom and multisig descriptors |
+
+Wallets generate default descriptors with their family purpose and the coin
+type of their network. The parser accepts any listed purpose with any script, so
+custom descriptors may choose their own paths.
 
 ### Disabled key forms
 
@@ -111,7 +126,6 @@ Single-key examples:
 - `wpkh(<pq_pubkey_hex>)`
 - `sh(wpkh(<pq_pubkey_hex>))`
 - `wsh512(pk(<pq_pubkey_hex>))`
-- `sh(wsh512(pk(<pq_pubkey_hex>)))`
 
 Multisig examples:
 
@@ -121,9 +135,36 @@ Multisig examples:
 
 PQHD examples:
 
-- `wpkh(pqhd(<seedid32>)/10007h/6868h/7h/0h/0h/*h)`
-- `sh(wpkh(pqhd(<seedid32>)/10007h/6868h/7h/0h/1h/*h))`
-- `wsh512(pk(pqhd(<seedid32>)/10007h/6868h/9h/0h/0h/*h))`
+- `wpkh(pqhd(<seedid32>)/10084h/6868h/7h/0h/0h/*h)`
+- `sh(wpkh(pqhd(<seedid32>)/10049h/6868h/7h/0h/1h/*h))`
+- `wsh512(pk(pqhd(<seedid32>)/10087h/6868h/9h/0h/0h/*h))`
+- `wsh(sortedmulti(2,pqhd(<seedid_a>)/10007h/6868h/7h/0h/0h/*h,pqhd(<seedid_b>)/10007h/6868h/7h/0h/0h/*h))`
+
+Native witness v1 descriptors (`wsh512`) parse and derive at any height, but
+signature checks for their outputs begin at AuxPoW activation. Before that
+height, wallets do not issue their addresses, select their coins, or send to
+those addresses. Importing a native v1 descriptor is allowed with a warning.
+
+`wsh512` is native only. The descriptor parser rejects `sh(wsh512(...))`, and
+signing, PSBT processing and descriptor inference do not support it.
+`decodescript` does not suggest a P2SH address for a 64-byte v1 program.
+A P2SH wrapper would replace the output's direct SHA-512 commitment with a
+20-byte HASH160 commitment.
+
+At consensus, a 64-byte v1 program inside P2SH remains an ordinary script,
+just as before activation. With a truthy program and its redeem script, an
+empty-witness spend needs no signature. Nonempty witness data fails with
+`WITNESS_UNEXPECTED`. Existing relay policy rejects the empty-witness spend
+through `CLEANSTACK`; miners can still include it directly. Wallets refuse a
+known wrapped-v1 recipient or change address at any height, including when
+`solving_data` supplies the redeem script. Opaque P2SH addresses and raw
+transaction construction can still express these outputs, so they must not be
+used as a receiving format.
+
+Short v1 programs (2–40 bytes), native or inside P2SH, retain unknown-witness
+behavior before and after activation. They have no witness spending conditions
+at consensus and are not supported receiving formats. Relay policy continues
+to refuse their spends.
 
 ## Checksums
 

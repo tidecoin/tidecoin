@@ -716,8 +716,8 @@ class PSBTTest(BitcoinTestFramework):
             assert origin["path"].startswith("m/")
             path_elems = origin["path"].split("/")
             assert_equal(len(path_elems), 7)  # m / purposeh / coinh / schemeh / accounth / changeh / indexh
-            assert_equal(path_elems[1], "10007h")
-            assert_equal(path_elems[2], "6868h")
+            assert_equal(path_elems[1], "10084h")  # default wpkh family purpose
+            assert_equal(path_elems[2], "1h")  # test-network coin type
             assert path_elems[5] in {"0h", "1h"}
             for elem in path_elems[1:]:
                 assert elem.endswith("h")

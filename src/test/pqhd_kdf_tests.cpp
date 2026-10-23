@@ -7,6 +7,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <array>
+#include <set>
 #include <cstdint>
 #include <span>
 #include <stdexcept>
@@ -109,8 +110,8 @@ BOOST_AUTO_TEST_CASE(vectors_leaf_falcon512_receive_0)
 
     constexpr uint32_t HARDENED = 0x80000000U;
     const std::array<uint32_t, 6> path{
-        HARDENED | pqhd::PURPOSE, // purpose'
-        HARDENED | pqhd::COIN_TYPE,  // coin_type'
+        HARDENED | pqhd::PURPOSE_GENERIC, // purpose'
+        HARDENED | pqhd::COIN_TYPE_MAIN,  // coin_type'
         HARDENED | 7U,     // scheme' (Falcon-512)
         HARDENED | 0U,     // account'
         HARDENED | 0U,     // change' (receive)
@@ -153,8 +154,8 @@ BOOST_AUTO_TEST_CASE(vectors_leaf_mldsa65_change_5)
 
     constexpr uint32_t HARDENED = 0x80000000U;
     const std::array<uint32_t, 6> path{
-        HARDENED | pqhd::PURPOSE, // purpose'
-        HARDENED | pqhd::COIN_TYPE,  // coin_type'
+        HARDENED | pqhd::PURPOSE_GENERIC, // purpose'
+        HARDENED | pqhd::COIN_TYPE_MAIN,  // coin_type'
         HARDENED | 10U,    // scheme' (ML-DSA-65)
         HARDENED | 2U,     // account'
         HARDENED | 1U,     // change' (change)
@@ -190,14 +191,14 @@ BOOST_AUTO_TEST_CASE(rejects_non_hardened_inputs)
     const auto master = pqhd::MakeMasterNode(std::span<const uint8_t, 32>(master_seed));
 
     // A non-hardened element must fail derivation (no silent all-zero nodes).
-    const std::array<uint32_t, 1> path_not_hardened{pqhd::PURPOSE};
+    const std::array<uint32_t, 1> path_not_hardened{pqhd::PURPOSE_GENERIC};
     BOOST_CHECK(!pqhd::DerivePath(master, path_not_hardened));
 
     // Keygen stream key derivation must also reject non-hardened paths.
     constexpr uint32_t HARDENED = 0x80000000U;
     const std::array<uint32_t, 6> path_good_stream{
-        HARDENED | pqhd::PURPOSE,
-        HARDENED | pqhd::COIN_TYPE,
+        HARDENED | pqhd::PURPOSE_GENERIC,
+        HARDENED | pqhd::COIN_TYPE_MAIN,
         HARDENED | 7U,
         HARDENED | 0U,
         HARDENED | 0U,
@@ -215,8 +216,8 @@ BOOST_AUTO_TEST_CASE(validate_v1_leaf_path_rejects_wrong_shape)
 {
     constexpr uint32_t HARDENED = 0x80000000U;
     const std::array<uint32_t, 6> good{
-        HARDENED | pqhd::PURPOSE,
-        HARDENED | pqhd::COIN_TYPE,
+        HARDENED | pqhd::PURPOSE_GENERIC,
+        HARDENED | pqhd::COIN_TYPE_MAIN,
         HARDENED | 7U,
         HARDENED | 0U,
         HARDENED | 0U,
@@ -225,8 +226,8 @@ BOOST_AUTO_TEST_CASE(validate_v1_leaf_path_rejects_wrong_shape)
     BOOST_CHECK(pqhd::ValidateV1LeafPath(good));
 
     const std::array<uint32_t, 5> bad_len{
-        HARDENED | pqhd::PURPOSE,
-        HARDENED | pqhd::COIN_TYPE,
+        HARDENED | pqhd::PURPOSE_GENERIC,
+        HARDENED | pqhd::COIN_TYPE_MAIN,
         HARDENED | 7U,
         HARDENED | 0U,
         HARDENED | 0U,
@@ -234,12 +235,17 @@ BOOST_AUTO_TEST_CASE(validate_v1_leaf_path_rejects_wrong_shape)
     BOOST_CHECK(!pqhd::ValidateV1LeafPath(bad_len));
 
     auto bad_purpose = good;
-    bad_purpose[0] = HARDENED | (pqhd::PURPOSE + 1U);
+    bad_purpose[0] = HARDENED | (pqhd::PURPOSE_GENERIC + 1U);
     BOOST_CHECK(!pqhd::ValidateV1LeafPath(bad_purpose));
 
     auto bad_coin = good;
-    bad_coin[1] = HARDENED | (pqhd::COIN_TYPE + 1U);
+    bad_coin[1] = HARDENED | (pqhd::COIN_TYPE_MAIN + 1U);
     BOOST_CHECK(!pqhd::ValidateV1LeafPath(bad_coin));
+
+    // Bitcoin's purpose numbers are not PQHD purposes.
+    auto bip44_purpose = good;
+    bip44_purpose[0] = HARDENED | 44U;
+    BOOST_CHECK(!pqhd::ValidateV1LeafPath(bip44_purpose));
 
     auto bad_change = good;
     bad_change[4] = HARDENED | 2U;
@@ -254,8 +260,8 @@ BOOST_AUTO_TEST_CASE(rejects_scheme_element_out_of_range)
     constexpr uint32_t HARDENED = 0x80000000U;
     // Scheme id must fit into one byte (SchemeId/prefix space). Reject anything larger.
     const std::array<uint32_t, 6> path{
-        HARDENED | pqhd::PURPOSE, // purpose'
-        HARDENED | pqhd::COIN_TYPE,  // coin_type'
+        HARDENED | pqhd::PURPOSE_GENERIC, // purpose'
+        HARDENED | pqhd::COIN_TYPE_MAIN,  // coin_type'
         HARDENED | 0x1FFU, // scheme' (out of range)
         HARDENED | 0U,
         HARDENED | 0U,
@@ -275,8 +281,8 @@ BOOST_AUTO_TEST_CASE(rejects_unknown_scheme)
     constexpr uint32_t HARDENED = 0x80000000U;
     // Any scheme id that is not recognized by the build must be rejected at the KDF layer.
     const std::array<uint32_t, 6> path{
-        HARDENED | pqhd::PURPOSE, // purpose'
-        HARDENED | pqhd::COIN_TYPE,  // coin_type'
+        HARDENED | pqhd::PURPOSE_GENERIC, // purpose'
+        HARDENED | pqhd::COIN_TYPE_MAIN,  // coin_type'
         HARDENED | 0x01U, // scheme' (unknown but within 1-byte range)
         HARDENED | 0U,
         HARDENED | 0U,
@@ -295,8 +301,8 @@ BOOST_AUTO_TEST_CASE(rejects_change_domain_outside_receive_or_change)
 
     constexpr uint32_t HARDENED = 0x80000000U;
     const std::array<uint32_t, 6> path{
-        HARDENED | pqhd::PURPOSE, // purpose'
-        HARDENED | pqhd::COIN_TYPE,  // coin_type'
+        HARDENED | pqhd::PURPOSE_GENERIC, // purpose'
+        HARDENED | pqhd::COIN_TYPE_MAIN,  // coin_type'
         HARDENED | 7U,     // scheme' (Falcon-512)
         HARDENED | 0U,     // account'
         HARDENED | 2U,     // invalid change'
@@ -306,6 +312,31 @@ BOOST_AUTO_TEST_CASE(rejects_change_domain_outside_receive_or_change)
     BOOST_REQUIRE(leaf);
     BOOST_CHECK(!pqhd::DeriveKeygenStreamKey(std::span<const uint8_t, 32>(leaf->node_secret),
                                              std::span<const uint32_t>(path)));
+}
+
+BOOST_AUTO_TEST_CASE(families_and_networks_derive_distinct_keys)
+{
+    const auto master_seed = ParseHexArray<32>("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+    const auto master = pqhd::MakeMasterNode(std::span<const uint8_t, 32>(master_seed));
+
+    constexpr uint32_t HARDENED = 0x80000000U;
+    std::set<std::vector<uint8_t>> leaves;
+    size_t paths{0};
+    for (const uint32_t purpose : {pqhd::PURPOSE_GENERIC, pqhd::PURPOSE_PKH, pqhd::PURPOSE_SH_WPKH,
+                                   pqhd::PURPOSE_WPKH, pqhd::PURPOSE_WSH512}) {
+        for (const uint32_t coin_type : {pqhd::COIN_TYPE_MAIN, pqhd::COIN_TYPE_TEST}) {
+            const std::array<uint32_t, 6> path{
+                HARDENED | purpose, HARDENED | coin_type, HARDENED | 7U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U,
+            };
+            BOOST_CHECK(pqhd::ValidateV1LeafPath(path));
+            const auto leaf = pqhd::DerivePath(master, path);
+            BOOST_REQUIRE(leaf);
+            leaves.emplace(leaf->node_secret.begin(), leaf->node_secret.end());
+            ++paths;
+        }
+    }
+    // Same seed, scheme and index: each family and network gets its own key.
+    BOOST_CHECK_EQUAL(leaves.size(), paths);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

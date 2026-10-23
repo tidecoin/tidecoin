@@ -161,10 +161,12 @@ bool AreInputsStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs)
 */
 bool IsWitnessStandard(const CTransaction& tx, const CCoinsViewCache& mapInputs);
 /**
- * Check whether this transaction spends any witness program.
+ * Check whether this transaction spends a witness program whose rules are in
+ * effect: witness v0, and the native 64-byte witness v1 program when script_verify_flags
+ * include SCRIPT_VERIFY_WITNESS_V1_512.
  * May return `false` early for consensus-invalid transactions.
  */
-bool SpendsNonAnchorWitnessProg(const CTransaction& tx, const CCoinsViewCache& prevouts);
+bool SpendsNonAnchorWitnessProg(const CTransaction& tx, const CCoinsViewCache& prevouts, unsigned int script_verify_flags);
 
 /** Compute the virtual transaction size (weight reinterpreted as bytes). */
 int64_t GetVirtualTransactionSize(int64_t nWeight, int64_t nSigOpCost, unsigned int bytes_per_sigop);

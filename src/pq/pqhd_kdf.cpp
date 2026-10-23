@@ -121,8 +121,8 @@ bool ValidateV1LeafPath(std::span<const uint32_t> path_hardened)
     for (const uint32_t elem : path_hardened) {
         if ((elem & HARDENED) == 0) return false;
     }
-    if (path_hardened[0] != (HARDENED | pqhd::PURPOSE)) return false;
-    if (path_hardened[1] != (HARDENED | pqhd::COIN_TYPE)) return false;
+    if (!pqhd::IsKnownPurpose(path_hardened[0] & ~HARDENED)) return false;
+    if (!pqhd::IsKnownCoinType(path_hardened[1] & ~HARDENED)) return false;
 
     const uint32_t scheme_u32 = path_hardened[2] & ~HARDENED;
     if (scheme_u32 > 0xFFU) return false;

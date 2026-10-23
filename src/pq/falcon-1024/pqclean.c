@@ -312,19 +312,9 @@ do_verify(
     }
 
     v = PQCLEAN_FALCON1024_CLEAN_comp_decode(sig, 10, sigbuf, sigbuflen);
-    if (v == 0) {
+    /* Tidecoin requires the exact compressed encoding, without trailing bytes. */
+    if (v == 0 || v != sigbuflen) {
         return -1;
-    }
-    if (v != sigbuflen) {
-        if (sigbuflen == PQCLEAN_FALCONPADDED1024_CLEAN_CRYPTO_BYTES - NONCELEN - 1) {
-            while (v < sigbuflen) {
-                if (sigbuf[v++] != 0) {
-                    return -1;
-                }
-            }
-        } else {
-            return -1;
-        }
     }
 
     /*

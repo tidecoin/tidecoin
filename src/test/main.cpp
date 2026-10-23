@@ -100,7 +100,6 @@ struct WalletTestsDisabler final {
             "coinselection_tests",
             "coinselector_tests",
             "db_tests",
-            "feebumper_tests",
             "group_outputs_tests",
             "init_tests",
             "ismine_tests",

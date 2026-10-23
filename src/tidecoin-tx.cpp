@@ -658,8 +658,14 @@ static void AddPrevTxScripts(FlatSigningProvider& keystore, const UniValue& prev
     if (rs.isNull() && ws.isNull()) return;
     const auto script_data{ParseHexUV(ws.isNull() ? rs : ws, ws.isNull() ? "redeemScript" : "witnessScript")};
     const CScript script{script_data.begin(), script_data.end()};
-    if (script.size() > MAX_SCRIPT_ELEMENT_SIZE) {
-        throw std::runtime_error("redeemScript/witnessScript exceeds maximum script element size");
+    // A P2SH redeem script is pushed as one stack element. A witness script is
+    // popped before the element limit applies, so only the script size limits it.
+    const bool is_redeem_script{is_p2sh && script_pub_key == GetScriptForDestination(ScriptHash(script))};
+    if (is_redeem_script && script.size() > MAX_SCRIPT_ELEMENT_SIZE) {
+        throw std::runtime_error("redeemScript exceeds maximum script element size");
+    }
+    if (script.size() > MAX_SCRIPT_SIZE) {
+        throw std::runtime_error("witnessScript exceeds maximum script size");
     }
     const CScript witness_v0{GetScriptForDestination(WitnessV0ScriptHash(script))};
     const WitnessV1ScriptHash512 hash512{script};
@@ -669,7 +675,7 @@ static void AddPrevTxScripts(FlatSigningProvider& keystore, const UniValue& prev
         const auto redeem_data{ParseHexUV(rs, "redeemScript")};
         const CScript redeem{redeem_data.begin(), redeem_data.end()};
         if (redeem != script) {
-            if (redeem != witness_v0 && redeem != witness_v1) {
+            if (redeem != witness_v0) {
                 throw std::runtime_error("redeemScript does not correspond to witnessScript");
             }
             if (is_p2sh && script_pub_key != GetScriptForDestination(ScriptHash(redeem))) {
@@ -678,15 +684,13 @@ static void AddPrevTxScripts(FlatSigningProvider& keystore, const UniValue& prev
         }
     }
     const bool matches{is_p2sh ? (script_pub_key == GetScriptForDestination(ScriptHash(script)) ||
-                                 script_pub_key == GetScriptForDestination(ScriptHash(witness_v0)) ||
-                                 script_pub_key == GetScriptForDestination(ScriptHash(witness_v1))) :
+                                 script_pub_key == GetScriptForDestination(ScriptHash(witness_v0))) :
                                script_pub_key == (is_p2wsh ? witness_v0 : witness_v1)};
     if (!matches) {
         throw std::runtime_error("redeemScript/witnessScript does not match scriptPubKey");
     }
     keystore.scripts.emplace(CScriptID(script), script);
     keystore.scripts.emplace(CScriptID(witness_v0), witness_v0);
-    keystore.scripts.emplace(CScriptID(witness_v1), witness_v1);
     keystore.scripts.emplace(CScriptID{RIPEMD160(hash512)}, script);
 }
 

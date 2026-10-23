@@ -17,9 +17,9 @@
 extern "C" {
 int tidecoin_falcon512_pubkey_from_sk(const uint8_t* sk, size_t sklen,
                                       uint8_t* pk, size_t pklen);
-int tidecoin_falcon512_sign_legacy(uint8_t* sig, size_t* siglen,
-                                   const uint8_t* m, size_t mlen,
-                                   const uint8_t* sk, size_t sklen);
+int tidecoin_falcon512_sign_legacy_attempt(uint8_t* sig, size_t* siglen,
+                                         const uint8_t* m, size_t mlen,
+                                         const uint8_t* sk, size_t sklen);
 int tidecoin_falcon512_verify(const uint8_t* sig, size_t siglen,
                               const uint8_t* m, size_t mlen,
                               const uint8_t* pk, size_t pklen,
@@ -349,6 +349,53 @@ inline bool GenerateKeyPair(const SchemeInfo& info,
     }
 }
 
+/** Produce an unpadded Falcon signature of at most max_sig_len bytes. Local
+ *  signing passes info.sig_bytes_sign_max, the bound used for fee estimates. */
+inline bool SignFalcon(const SchemeInfo& info,
+                       std::span<const unsigned char> msg,
+                       std::span<const unsigned char> sk,
+                       std::vector<unsigned char>& sig_out,
+                       bool legacy_mode,
+                       size_t max_sig_len)
+{
+    // PQClean does not take a buffer capacity. Keep its full output buffer even
+    // though we only return signatures that fit the smaller local signing bound.
+    sig_out.resize(info.sig_bytes_max);
+    for (unsigned int attempt = 0; attempt < kFalconSignMaxAttempts; ++attempt) {
+        if (ConsumeFalconSignTestFail()) {
+            continue;
+        }
+        size_t sig_len = 0;
+        int result;
+        switch (info.id) {
+        case SchemeId::FALCON_512:
+            if (legacy_mode) {
+                result = tidecoin_falcon512_sign_legacy_attempt(
+                    sig_out.data(), &sig_len, msg.data(), msg.size(), sk.data(), sk.size());
+            } else {
+                result = PQCLEAN_FALCON512_CLEAN_crypto_sign_signature(
+                    sig_out.data(), &sig_len, msg.data(), msg.size(), sk.data());
+            }
+            break;
+        case SchemeId::FALCON_1024:
+            result = PQCLEAN_FALCON1024_CLEAN_crypto_sign_signature(
+                sig_out.data(), &sig_len, msg.data(), msg.size(), sk.data());
+            break;
+        default:
+            sig_out.clear();
+            return false;
+        }
+        if (result == 0 && sig_len > 0 && sig_len <= max_sig_len) {
+            sig_out.resize(sig_len);
+            return true;
+        }
+        // A longer compressed signature is valid, but would exceed the wallet's
+        // estimate. Sign again with fresh randomness; never truncate or pad it.
+    }
+    sig_out.clear();
+    return false;
+}
+
 inline bool Sign(const SchemeInfo& info,
                  std::span<const unsigned char> msg32,
                  std::span<const unsigned char> sk,
@@ -359,49 +406,9 @@ inline bool Sign(const SchemeInfo& info,
         return false;
     }
     switch (info.id) {
-    case SchemeId::FALCON_512: {
-        sig_out.resize(info.sig_bytes_max);
-        if (legacy_mode) {
-            size_t sig_len = 0;
-            const int r = tidecoin_falcon512_sign_legacy(sig_out.data(), &sig_len,
-                                                         msg32.data(), msg32.size(),
-                                                         sk.data(), sk.size());
-            if (r != 0) {
-                return false;
-            }
-            sig_out.resize(sig_len);
-            return true;
-        }
-        for (unsigned int attempt = 0; attempt < kFalconSignMaxAttempts; ++attempt) {
-            if (ConsumeFalconSignTestFail()) {
-                continue;
-            }
-            size_t sig_len = 0;
-            const int r = PQCLEAN_FALCON512_CLEAN_crypto_sign_signature(
-                sig_out.data(), &sig_len, msg32.data(), msg32.size(), sk.data());
-            if (r == 0) {
-                sig_out.resize(sig_len);
-                return true;
-            }
-        }
-        return false;
-    }
-    case SchemeId::FALCON_1024: {
-        sig_out.resize(info.sig_bytes_max);
-        for (unsigned int attempt = 0; attempt < kFalconSignMaxAttempts; ++attempt) {
-            if (ConsumeFalconSignTestFail()) {
-                continue;
-            }
-            size_t sig_len = 0;
-            const int r = PQCLEAN_FALCON1024_CLEAN_crypto_sign_signature(
-                sig_out.data(), &sig_len, msg32.data(), msg32.size(), sk.data());
-            if (r == 0) {
-                sig_out.resize(sig_len);
-                return true;
-            }
-        }
-        return false;
-    }
+    case SchemeId::FALCON_512:
+    case SchemeId::FALCON_1024:
+        return SignFalcon(info, msg32, sk, sig_out, legacy_mode, info.sig_bytes_sign_max);
     case SchemeId::MLDSA_44: {
         size_t sig_len = 0;
         sig_out.resize(info.sig_bytes_max);
@@ -450,49 +457,9 @@ inline bool Sign64(const SchemeInfo& info,
         return false;
     }
     switch (info.id) {
-    case SchemeId::FALCON_512: {
-        sig_out.resize(info.sig_bytes_max);
-        if (legacy_mode) {
-            size_t sig_len = 0;
-            const int r = tidecoin_falcon512_sign_legacy(sig_out.data(), &sig_len,
-                                                         msg64.data(), msg64.size(),
-                                                         sk.data(), sk.size());
-            if (r != 0) {
-                return false;
-            }
-            sig_out.resize(sig_len);
-            return true;
-        }
-        for (unsigned int attempt = 0; attempt < kFalconSignMaxAttempts; ++attempt) {
-            if (ConsumeFalconSignTestFail()) {
-                continue;
-            }
-            size_t sig_len = 0;
-            const int r = PQCLEAN_FALCON512_CLEAN_crypto_sign_signature(
-                sig_out.data(), &sig_len, msg64.data(), msg64.size(), sk.data());
-            if (r == 0) {
-                sig_out.resize(sig_len);
-                return true;
-            }
-        }
-        return false;
-    }
-    case SchemeId::FALCON_1024: {
-        sig_out.resize(info.sig_bytes_max);
-        for (unsigned int attempt = 0; attempt < kFalconSignMaxAttempts; ++attempt) {
-            if (ConsumeFalconSignTestFail()) {
-                continue;
-            }
-            size_t sig_len = 0;
-            const int r = PQCLEAN_FALCON1024_CLEAN_crypto_sign_signature(
-                sig_out.data(), &sig_len, msg64.data(), msg64.size(), sk.data());
-            if (r == 0) {
-                sig_out.resize(sig_len);
-                return true;
-            }
-        }
-        return false;
-    }
+    case SchemeId::FALCON_512:
+    case SchemeId::FALCON_1024:
+        return SignFalcon(info, msg64, sk, sig_out, legacy_mode, info.sig_bytes_sign_max);
     case SchemeId::MLDSA_44: {
         size_t sig_len = 0;
         sig_out.resize(info.sig_bytes_max);

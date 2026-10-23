@@ -121,9 +121,9 @@ bool LooksLikePQSignatureWithSighash(const std::vector<unsigned char>& sig_with_
     }
 
     // ML-DSA signatures are fixed-size and do not carry a dedicated header byte.
-    return sig_len == pq::kMLDSA44Info.sig_bytes_fixed ||
-           sig_len == pq::kMLDSA65Info.sig_bytes_fixed ||
-           sig_len == pq::kMLDSA87Info.sig_bytes_fixed;
+    return sig_len == pq::kMLDSA44Info.sig_bytes_max ||
+           sig_len == pq::kMLDSA65Info.sig_bytes_max ||
+           sig_len == pq::kMLDSA87Info.sig_bytes_max;
 }
 
 bool LooksLikeSignatureWithSighash(const std::vector<unsigned char>& sig_with_hashtype)

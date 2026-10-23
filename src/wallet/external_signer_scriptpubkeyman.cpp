@@ -110,14 +110,19 @@ std::optional<PSBTError> ExternalSignerScriptPubKeyMan::CheckPSBTSigningIntent(c
     for (size_t i = 0; i < psbt.inputs.size(); ++i) {
         if (PSBTInputSignedAndVerified(psbt, i, &txdata, flags)) continue;
         CTxOut utxo;
-        if (!psbt.GetInputUTXO(utxo, i) || !GetSolvingProvider(utxo.scriptPubKey)) continue;
+        if (!psbt.GetInputUTXO(utxo, i)) continue;
+        const auto provider{GetSolvingProvider(utxo.scriptPubKey)};
+        if (!provider) continue;
         const auto& input = psbt.inputs[i];
+        // Partials that cannot verify are replaced before signing.
+        const std::set<CKeyID> invalid{InvalidPSBTPartialSignatures(psbt, i, *provider, txdata, flags)};
         std::optional<PSBTError> error;
         if (!PSBTInputHasSigningUTXO(psbt, i, flags)) error = PSBTError::MISSING_NON_WITNESS_UTXO;
         else if (SingleWithoutOutput(mode, i, psbt.tx->vout.size())) error = PSBTError::SINGLE_WITHOUT_OUTPUT;
         else if (!IsSupportedSighash(mode)) error = PSBTError::SIGHASH_UNSUPPORTED;
         else if (input.sighash_type && *input.sighash_type != mode) error = PSBTError::SIGHASH_MISMATCH;
-        else for (const auto& [_, sig] : input.partial_sigs) {
+        else for (const auto& [keyid, sig] : input.partial_sigs) {
+            if (invalid.contains(keyid)) continue;
             if (sig.second.empty() || sig.second.back() != mode || sig.second.back() != input.sighash_type.value_or(SIGHASH_ALL)) error = PSBTError::SIGHASH_MISMATCH;
         }
         if (error) {
@@ -157,7 +162,8 @@ std::optional<PSBTError> ExternalSignerScriptPubKeyMan::FillPSBT(PartiallySigned
         } else if (!input.witness_utxo.IsNull()) {
             script = input.witness_utxo.scriptPubKey;
         }
-        targets[i] = static_cast<bool>(GetSolvingProvider(script));
+        const auto provider{GetSolvingProvider(script)};
+        targets[i] = static_cast<bool>(provider);
         if (targets[i]) {
             const auto refuse = [&](PSBTError error) -> std::optional<PSBTError> {
                 if (input_errors) input_errors->push_back({i, *sighash_type, input.sighash_type, error});
@@ -166,8 +172,16 @@ std::optional<PSBTError> ExternalSignerScriptPubKeyMan::FillPSBT(PartiallySigned
             if (SingleWithoutOutput(*sighash_type, i, psbt.tx->vout.size())) return refuse(PSBTError::SINGLE_WITHOUT_OUTPUT);
             if (!IsSupportedSighash(*sighash_type)) return refuse(PSBTError::SIGHASH_UNSUPPORTED);
             if (input.sighash_type && input.sighash_type != sighash_type) return refuse(PSBTError::SIGHASH_MISMATCH);
-            for (const auto& [_, sig] : input.partial_sigs) {
+            const std::set<CKeyID> invalid{InvalidPSBTPartialSignatures(psbt, i, *provider, txdata, effective_flags)};
+            for (const auto& [keyid, sig] : input.partial_sigs) {
+                if (invalid.contains(keyid)) continue;
                 if (sig.second.empty() || sig.second.back() != *sighash_type || sig.second.back() != input.sighash_type.value_or(SIGHASH_ALL)) return refuse(PSBTError::SIGHASH_MISMATCH);
+            }
+            // The device's signature replaces an enrolled key's invalid one;
+            // other keys' entries stay.
+            for (const CKeyID& keyid : invalid) {
+                CPubKey pubkey;
+                if (provider->GetPubKey(keyid, pubkey)) psbt.inputs[i].partial_sigs.erase(keyid);
             }
         }
         needs_signer |= targets[i];

@@ -1177,14 +1177,14 @@ BOOST_AUTO_TEST_CASE(spends_witness_prog)
     BOOST_CHECK_EQUAL(Solver(tx_create.vout[0].scriptPubKey, sol_dummy), TxoutType::PUBKEY);
     tx_spend.vin[0].prevout.hash = tx_create.GetHash();
     AddCoins(coins, CTransaction{tx_create}, 0, false);
-    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins));
+    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, STANDARD_SCRIPT_VERIFY_FLAGS));
 
     // P2PKH
     tx_create.vout[0].scriptPubKey = GetScriptForDestination(PKHash{pubkey});
     BOOST_CHECK_EQUAL(Solver(tx_create.vout[0].scriptPubKey, sol_dummy), TxoutType::PUBKEYHASH);
     tx_spend.vin[0].prevout.hash = tx_create.GetHash();
     AddCoins(coins, CTransaction{tx_create}, 0, false);
-    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins));
+    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, STANDARD_SCRIPT_VERIFY_FLAGS));
 
     // P2SH
     auto redeem_script{CScript{} << OP_1 << OP_CHECKSIG};
@@ -1193,7 +1193,7 @@ BOOST_AUTO_TEST_CASE(spends_witness_prog)
     tx_spend.vin[0].prevout.hash = tx_create.GetHash();
     tx_spend.vin[0].scriptSig = CScript{} << OP_0 << ToByteVector(redeem_script);
     AddCoins(coins, CTransaction{tx_create}, 0, false);
-    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins));
+    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, STANDARD_SCRIPT_VERIFY_FLAGS));
     tx_spend.vin[0].scriptSig.clear();
 
     // native P2WSH
@@ -1202,7 +1202,7 @@ BOOST_AUTO_TEST_CASE(spends_witness_prog)
     BOOST_CHECK_EQUAL(Solver(tx_create.vout[0].scriptPubKey, sol_dummy), TxoutType::WITNESS_V0_SCRIPTHASH);
     tx_spend.vin[0].prevout.hash = tx_create.GetHash();
     AddCoins(coins, CTransaction{tx_create}, 0, false);
-    BOOST_CHECK(::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins));
+    BOOST_CHECK(::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, STANDARD_SCRIPT_VERIFY_FLAGS));
 
     // P2SH-wrapped P2WSH
     redeem_script = tx_create.vout[0].scriptPubKey;
@@ -1211,16 +1211,16 @@ BOOST_AUTO_TEST_CASE(spends_witness_prog)
     tx_spend.vin[0].prevout.hash = tx_create.GetHash();
     tx_spend.vin[0].scriptSig = CScript{} << ToByteVector(redeem_script);
     AddCoins(coins, CTransaction{tx_create}, 0, false);
-    BOOST_CHECK(::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins));
+    BOOST_CHECK(::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, STANDARD_SCRIPT_VERIFY_FLAGS));
     tx_spend.vin[0].scriptSig.clear();
-    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins));
+    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, STANDARD_SCRIPT_VERIFY_FLAGS));
 
     // native P2WPKH
     tx_create.vout[0].scriptPubKey = GetScriptForDestination(WitnessV0KeyHash{pubkey});
     BOOST_CHECK_EQUAL(Solver(tx_create.vout[0].scriptPubKey, sol_dummy), TxoutType::WITNESS_V0_KEYHASH);
     tx_spend.vin[0].prevout.hash = tx_create.GetHash();
     AddCoins(coins, CTransaction{tx_create}, 0, false);
-    BOOST_CHECK(::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins));
+    BOOST_CHECK(::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, STANDARD_SCRIPT_VERIFY_FLAGS));
 
     // P2SH-wrapped P2WPKH
     redeem_script = tx_create.vout[0].scriptPubKey;
@@ -1229,10 +1229,38 @@ BOOST_AUTO_TEST_CASE(spends_witness_prog)
     tx_spend.vin[0].prevout.hash = tx_create.GetHash();
     tx_spend.vin[0].scriptSig = CScript{} << ToByteVector(redeem_script);
     AddCoins(coins, CTransaction{tx_create}, 0, false);
-    BOOST_CHECK(::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins));
+    BOOST_CHECK(::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, STANDARD_SCRIPT_VERIFY_FLAGS));
     tx_spend.vin[0].scriptSig.clear();
-    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins));
+    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, STANDARD_SCRIPT_VERIFY_FLAGS));
 
+    // Witness v1 counts only once its rules are active.
+    constexpr unsigned int v1_active{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_WITNESS_V1_512};
+
+    // native P2WSH512
+    tx_create.vout[0].scriptPubKey = GetScriptForDestination(WitnessV1ScriptHash512{witness_script});
+    BOOST_CHECK_EQUAL(Solver(tx_create.vout[0].scriptPubKey, sol_dummy), TxoutType::WITNESS_V1_SCRIPTHASH_512);
+    tx_spend.vin[0].prevout.hash = tx_create.GetHash();
+    AddCoins(coins, CTransaction{tx_create}, 0, false);
+    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, STANDARD_SCRIPT_VERIFY_FLAGS));
+    BOOST_CHECK(::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, v1_active));
+
+    // A P2SH-wrapped 64-byte v1 program stays an ordinary script.
+    redeem_script = tx_create.vout[0].scriptPubKey;
+    tx_create.vout[0].scriptPubKey = GetScriptForDestination(ScriptHash(redeem_script));
+    BOOST_CHECK_EQUAL(Solver(tx_create.vout[0].scriptPubKey, sol_dummy), TxoutType::SCRIPTHASH);
+    tx_spend.vin[0].prevout.hash = tx_create.GetHash();
+    tx_spend.vin[0].scriptSig = CScript{} << ToByteVector(redeem_script);
+    AddCoins(coins, CTransaction{tx_create}, 0, false);
+    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, STANDARD_SCRIPT_VERIFY_FLAGS));
+    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, v1_active));
+    tx_spend.vin[0].scriptSig.clear();
+    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, v1_active));
+
+    // Other witness v1 lengths have no rules, so their witness is irrelevant.
+    tx_create.vout[0].scriptPubKey = CScript{} << OP_1 << std::vector<uint8_t>(32, 1);
+    tx_spend.vin[0].prevout.hash = tx_create.GetHash();
+    AddCoins(coins, CTransaction{tx_create}, 0, false);
+    BOOST_CHECK(!::SpendsNonAnchorWitnessProg(CTransaction{tx_spend}, coins, v1_active));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

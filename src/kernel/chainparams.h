@@ -105,6 +105,8 @@ public:
     const std::vector<unsigned char>& Base58Prefix(Base58Type type) const { return base58Prefixes[type]; }
     const std::string& Bech32HRP() const { return bech32_hrp; }
     const std::string& Bech32PQHRP() const { return bech32_pq_hrp; }
+    /** PQHD coin type (path element 1) for keys derived on this chain */
+    uint32_t PQHDCoinType() const { return m_pqhd_coin_type; }
     const std::vector<uint8_t>& FixedSeeds() const { return vFixedSeeds; }
 
     std::optional<AssumeutxoData> AssumeutxoForHeight(int height) const
@@ -155,6 +157,7 @@ protected:
     std::vector<unsigned char> base58Prefixes[MAX_BASE58_TYPES];
     std::string bech32_hrp;
     std::string bech32_pq_hrp;
+    uint32_t m_pqhd_coin_type;
     ChainType m_chain_type;
     CBlock genesis;
     std::vector<uint8_t> vFixedSeeds;

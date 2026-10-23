@@ -623,7 +623,7 @@ static size_t CalculateNestedKeyhashInputSize(bool use_max_sig)
 BOOST_FIXTURE_TEST_CASE(dummy_input_size_test, TestChain100Setup)
 {
     const size_t pubkey_len = pq::PubKeyLenWithPrefix(pq::kFalcon512Info);
-    const size_t sig_len = pq::SigLenFixedInScript(pq::kFalcon512Info);
+    const size_t sig_len = pq::SigLenSignMaxInScript(pq::kFalcon512Info);
     const size_t sig_max_len = pq::SigLenMaxInScript(pq::kFalcon512Info);
     const size_t expected = static_cast<size_t>(pq::VSizeP2SH_P2WPKHInput(sig_len, pubkey_len));
     const size_t expected_max = static_cast<size_t>(pq::VSizeP2SH_P2WPKHInput(sig_max_len, pubkey_len));

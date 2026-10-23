@@ -73,11 +73,11 @@ BOOST_AUTO_TEST_CASE(cpubkey_accepts_all_current_pq_schemes)
     };
 
     const std::array<SchemeVector, 5> vectors{{
-        {pq::SchemeId::FALCON_512,  {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 7U,  HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
-        {pq::SchemeId::FALCON_1024, {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 8U,  HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
-        {pq::SchemeId::MLDSA_44,   {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 9U,  HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
-        {pq::SchemeId::MLDSA_65,   {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 10U, HARDENED | 2U, HARDENED | 1U, HARDENED | 5U}},
-        {pq::SchemeId::MLDSA_87,   {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 11U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
+        {pq::SchemeId::FALCON_512,  {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 7U,  HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
+        {pq::SchemeId::FALCON_1024, {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 8U,  HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
+        {pq::SchemeId::MLDSA_44,   {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 9U,  HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
+        {pq::SchemeId::MLDSA_65,   {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 10U, HARDENED | 2U, HARDENED | 1U, HARDENED | 5U}},
+        {pq::SchemeId::MLDSA_87,   {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 11U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
     }};
 
     for (const auto& vec : vectors) {

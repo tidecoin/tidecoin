@@ -165,7 +165,7 @@ struct TestChain100Setup : public TestingSetup {
 
     /**
     * Create a transaction, optionally setting the fee based on the feerate.
-    * Note: The feerate may not be met exactly depending on whether the signatures can have different sizes.
+    * The fee meets or exceeds the requested rate after signing, including variable-length signatures.
     *
     * @param input_transactions   The transactions to spend
     * @param inputs               Outpoints with which to construct transaction vin.
@@ -182,8 +182,7 @@ struct TestChain100Setup : public TestingSetup {
                                                                    const std::vector<CKey>& input_signing_keys,
                                                                    const std::vector<CTxOut>& outputs,
                                                                    const std::optional<CFeeRate>& feerate,
-                                                                   const std::optional<uint32_t>& fee_output,
-                                                                   bool normalize_falcon_sigs = false);
+                                                                   const std::optional<uint32_t>& fee_output);
     /**
      * Create a transaction and, optionally, submit to the mempool.
      *
@@ -199,8 +198,7 @@ struct TestChain100Setup : public TestingSetup {
                                                       int input_height,
                                                       const std::vector<CKey>& input_signing_keys,
                                                       const std::vector<CTxOut>& outputs,
-                                                      bool submit = true,
-                                                      bool normalize_falcon_sigs = false);
+                                                      bool submit = true);
 
     /**
      * Create a 1-in-1-out transaction and, optionally, submit to the mempool.
@@ -219,8 +217,7 @@ struct TestChain100Setup : public TestingSetup {
                                                       CKey input_signing_key,
                                                       CScript output_destination,
                                                       CAmount output_amount = CAmount(1 * COIN),
-                                                      bool submit = true,
-                                                      bool normalize_falcon_sigs = false);
+                                                      bool submit = true);
 
     /** Create transactions spending from m_coinbase_txns. These transactions will only spend coins
      * that exist in the current chain, but may be premature coinbase spends, have missing

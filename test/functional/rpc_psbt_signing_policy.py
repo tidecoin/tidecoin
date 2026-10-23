@@ -14,7 +14,7 @@ from test_framework.descriptors import descsum_create
 from test_framework.messages import CTxOut, tx_from_hex
 from test_framework.psbt import PSBT, PSBT_GLOBAL_UNSIGNED_TX, PSBT_IN_NON_WITNESS_UTXO, PSBT_IN_SIGHASH_TYPE, PSBT_IN_WITNESS_UTXO
 from test_framework.script import CScript, OP_1, OP_CHECKSIG, SegwitV0SignatureHash
-from test_framework.script_util import key_to_p2pkh_script, key_to_p2wpkh_script, script_to_p2sh_script
+from test_framework.script_util import key_to_p2pkh_script, key_to_p2wpkh_script
 from test_framework.util import assert_equal, assert_raises_rpc_error
 from test_framework.wallet_util import generate_keypair, _get_testkeys_path
 
@@ -58,7 +58,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
 
         templates = ['pkh({})', 'sh(pk({}))', 'wpkh({})']
         if not self.options.preactivation:
-            templates += ['wsh512(pk({}))', 'sh(wsh512(pk({})))', 'wsh512(multi(1,{}))', 'sh(wsh512(multi(1,{})))']
+            templates += ['wsh512(pk({}))', 'wsh512(multi(1,{}))']
         for template in templates:
             keys = [generate_keypair(wif=True, scheme='7') for _ in range(2)]
             descriptors = [descsum_create(template.format(secret)) for secret, _ in keys]
@@ -133,11 +133,14 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
                     assert 7 not in updated.i[1].map and 8 not in updated.i[1].map
                 assert not offline.finalizepsbt(conflict.to_base64())['complete']
                 assert not wallet.walletprocesspsbt(conflict.to_base64(), False)['complete']
-                assert not offline.descriptorprocesspsbt(conflict.to_base64(), descriptors)['complete']
+                assert not offline.descriptorprocesspsbt(conflict.to_base64(), descriptors, mode)['complete']
+                # Reusing the signer's own non-ALL partials needs a matching request.
+                assert_raises_rpc_error(-22, 'sighash', offline.descriptorprocesspsbt, conflict.to_base64(), descriptors)
                 assert_equal(offline.analyzepsbt(conflict.to_base64())['inputs'][1]['issue'], 'sighash_mismatch')
                 conflict.i[1].map.pop(PSBT_IN_SIGHASH_TYPE)
                 assert not offline.finalizepsbt(conflict.to_base64())['complete']
-                assert not wallet.walletprocesspsbt(conflict.to_base64())['complete']
+                assert not wallet.walletprocesspsbt(conflict.to_base64(), True, mode)['complete']
+                assert_raises_rpc_error(-22, 'sighash', wallet.walletprocesspsbt, conflict.to_base64())
                 # Explicit public declaration must check the partial byte too.
                 isolated = PSBT.from_base64(conflict.to_base64())
                 # Remove input 0's declaration and partials: only input 1's
@@ -352,7 +355,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
         if not self.options.preactivation:
             self.check_multisig_targets(destination)
             self.check_foreign_pkh_amount(destination)
-            self.check_wrapped_wallet_fees()
+            self.check_witness_v1_wallet_fees()
         wallet.encryptwallet('test-passphrase')
         assert all(item.map[PSBT_IN_SIGHASH_TYPE] == (2).to_bytes(4, 'little') for item in PSBT.from_base64(wallet.walletprocesspsbt(bare, False, 'NONE', False)['psbt']).i)
         self.log.info('Signing intent, declaration merging, SINGLE refusal, utility errors, and amount provenance verified')
@@ -368,15 +371,13 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
             secret, pubkey = generate_keypair(wif=True, scheme=str(scheme))
             script = CScript([pubkey, OP_CHECKSIG])
             program = CScript([OP_1, sha512(script).digest()])
-            for kind in (('v0',) if self.options.preactivation else ('v0', 'v1', 'wrapped')):
+            for kind in (('v0',) if self.options.preactivation else ('v0', 'v1')):
                 previous = dict(point)
                 if kind == 'v0':
                     previous['scriptPubKey'] = key_to_p2wpkh_script(pubkey).hex()
                 else:
-                    previous['scriptPubKey'] = (script_to_p2sh_script(program) if kind == 'wrapped' else program).hex()
+                    previous['scriptPubKey'] = program.hex()
                     previous['witnessScript'] = script.hex()
-                    if kind == 'wrapped':
-                        previous['redeemScript'] = program.hex()
                 for amount in (0, Decimal('0.00000001'), Decimal('20999999.99999999'), 21000000):
                     metadata = 'set=prevtxs:' + json.dumps([dict(previous, amount=amount)], default=str)
                     for mode in ('ALL', 'NONE', 'SINGLE', 'ALL|ANYONECANPAY', 'NONE|ANYONECANPAY', 'SINGLE|ANYONECANPAY'):
@@ -454,7 +455,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
     def check_foreign_pkh_amount(self, destination):
         node, offline = self.nodes
         keys = [generate_keypair(wif=True, scheme='7') for _ in range(2)]
-        for wrapper in ('wsh512(pk({}))', 'sh(wsh512(pk({})))'):
+        for wrapper in ('wsh512(pk({}))', 'wsh512(multi(1,{}))'):
             descriptors = [descsum_create(wrapper.format(keys[0][0])), descsum_create(f'pkh({keys[1][0]})')]
             points, previous = zip(*(self.fund(node.deriveaddresses(d)[0]) for d in descriptors))
             base = PSBT.from_base64(node.createpsbt(list(points), {destination: Decimal('1.99')}))
@@ -486,11 +487,11 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
                 checked = subprocess.run(utility + ['-verify', signed['hex'], 'set=prevtxs:' + json.dumps(supplied)], capture_output=True, text=True, encoding="utf8")
                 assert_equal(checked.returncode, 0)
 
-    def check_wrapped_wallet_fees(self):
+    def check_witness_v1_wallet_fees(self):
         node = self.nodes[0]
         miner = node.get_wallet_rpc(self.default_wallet_name)
         for scheme in ('7', '9'):
-            for index, template in enumerate(('wsh512(pk({}))', 'sh(wsh512(pk({})))', 'sh(wsh512(multi(1,{})))')):
+            for index, template in enumerate(('wsh512(pk({}))', 'wsh512(multi(1,{}))')):
                 secret, _ = generate_keypair(wif=True, scheme=scheme)
                 descriptor = descsum_create(template.format(secret))
                 name = f'fee_{scheme}_{index}'
@@ -505,7 +506,7 @@ class PSBTSigningPolicyTest(WitnessV1PSBTTest):
                 accepted = node.testmempoolaccept([result['hex']])[0]
                 assert accepted['allowed']
                 # Construct the wallet's fixed signature-size estimate
-                # independently, retaining the actual native/wrapped scriptSig.
+                # independently, retaining the rest of the transaction.
                 estimated_tx = tx_from_hex(result['hex'])
                 signature_index = 1 if 'multi' in template else 0
                 estimated_tx.wit.vtxinwit[0].scriptWitness.stack[signature_index] = bytes(667 if scheme == '7' else 2421)

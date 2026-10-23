@@ -9,6 +9,7 @@
 #include <streams.h>
 #include <node/types.h>
 #include <addresstype.h>
+#include <chainparams.h>
 #include <pq/pq_api.h>
 #include <pq/pqhd_kdf.h>
 #include <pq/pqhd_params.h>
@@ -159,10 +160,11 @@ BOOST_AUTO_TEST_CASE(psbt_fill_emits_pqhd_origin_records)
     BOOST_CHECK_EQUAL(input_origin->path_hardened.size(), 6U);
     BOOST_CHECK(pqhd::ValidateV1LeafPath(input_origin->path_hardened));
     BOOST_CHECK(pqhd::ValidateV1LeafPath(output_origin->path_hardened));
-    BOOST_CHECK_EQUAL(input_origin->path_hardened.at(0), 0x80000000U | pqhd::PURPOSE);
-    BOOST_CHECK_EQUAL(input_origin->path_hardened.at(1), 0x80000000U | pqhd::COIN_TYPE);
-    BOOST_CHECK_EQUAL(output_origin->path_hardened.at(0), 0x80000000U | pqhd::PURPOSE);
-    BOOST_CHECK_EQUAL(output_origin->path_hardened.at(1), 0x80000000U | pqhd::COIN_TYPE);
+    // Both are default wpkh receive addresses.
+    BOOST_CHECK_EQUAL(input_origin->path_hardened.at(0), 0x80000000U | pqhd::PURPOSE_WPKH);
+    BOOST_CHECK_EQUAL(input_origin->path_hardened.at(1), 0x80000000U | Params().PQHDCoinType());
+    BOOST_CHECK_EQUAL(output_origin->path_hardened.at(0), 0x80000000U | pqhd::PURPOSE_WPKH);
+    BOOST_CHECK_EQUAL(output_origin->path_hardened.at(1), 0x80000000U | Params().PQHDCoinType());
 
     // Current wallet default scheme for receive/change is Falcon-512.
     BOOST_CHECK_EQUAL(input_origin->pubkey[0], static_cast<uint8_t>(pq::SchemeId::FALCON_512));

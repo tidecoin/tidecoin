@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chain.h>
+#include <chainparams.h>
 #include <clientversion.h>
 #include <core_io.h>
 #include <hash.h>
@@ -155,6 +156,13 @@ static UniValue ProcessDescriptorImport(CWallet& wallet, const UniValue& data, c
         auto parsed_descs = Parse(descriptor, keys, error, /* require_checksum = */ true);
         if (parsed_descs.empty()) {
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, error);
+        }
+        // Keep the import usable for restore and monitoring; issuance is
+        // refused separately until activation.
+        if (parsed_descs.at(0)->HasWitnessV1() &&
+            wallet.GetTargetHeightForOutputs() < Params().GetConsensus().nAuxpowStartHeight) {
+            warnings.push_back("Descriptor produces witness v1 outputs, which are not enforced before auxpow activation. "
+                               "The wallet will not issue its addresses or spend its coins until activation.");
         }
         std::optional<bool> internal;
         if (data.exists("internal")) {

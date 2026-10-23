@@ -901,14 +901,20 @@ bool PSBTInputSigned(const PSBTInput& input);
  * not establish confirmation, unspentness, or other inputs' amounts. */
 bool PSBTInputHasSigningUTXO(const PartiallySignedTransaction& psbt, size_t index, unsigned int flags);
 
+/** Keys of an unfinished input's partial signatures that provably cannot
+ * verify. Signatures the available data cannot decide are not included.
+ * Scripts the PSBT omits are looked up in provider. */
+std::set<CKeyID> InvalidPSBTPartialSignatures(const PartiallySignedTransaction& psbt, size_t index, const SigningProvider& provider,
+                                              const PrecomputedTransactionData& txdata, unsigned int flags);
+
 /** Verify a newly supplied partial signature using data sufficient for signing. */
 bool VerifyPSBTPartialSignature(const PartiallySignedTransaction& psbt, size_t index, const SigPair& signature,
                                 const PrecomputedTransactionData& txdata, unsigned int flags);
 
 /** Checks whether a PSBTInput is already signed by doing script verification using final fields. */
-bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned int input_index, const PrecomputedTransactionData* txdata, unsigned int script_verify_flags);
+bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned int input_index, const PrecomputedTransactionData* txdata, unsigned int script_verify_flags);
 /** Checks whether a PSBTInput is already signed by doing script verification using final fields. */
-bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned int input_index, const PrecomputedTransactionData* txdata);
+bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned int input_index, const PrecomputedTransactionData* txdata);
 
 /** Signs a PSBTInput, verifying that all provided data matches what is being signed.
  *
@@ -917,7 +923,7 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction psbt, unsigned 
  **/
 [[nodiscard]] PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransaction& psbt, int index, const PrecomputedTransactionData* txdata, std::optional<int> sighash = std::nullopt, SignatureData* out_sigdata = nullptr, bool finalize = true, std::optional<unsigned int> script_verify_flags = std::nullopt, PSBTInputIntent intent = PSBTInputIntent::SIGN);
 
-/** Drop full transactions atomically for eligible active native/wrapped v1
+/** Drop full transactions atomically for eligible active native v1
  * inputs. Final inputs require real verification and observed v1 signatures. */
 void RemoveUnnecessaryTransactions(PartiallySignedTransaction& psbt, unsigned int script_verify_flags);
 

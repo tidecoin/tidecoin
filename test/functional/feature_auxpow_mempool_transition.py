@@ -10,7 +10,7 @@ import time
 
 from test_framework.address import ADDRESS_BCRT1_P2WSH_OP_TRUE, base58_to_byte
 from test_framework.messages import COIN, COutPoint, CTransaction, CTxIn, CTxInWitness, CTxOut, tx_from_hex
-from test_framework.script import CScript, OP_0, OP_EQUAL, OP_NOP4
+from test_framework.script import CScript, OP_0, OP_1, OP_EQUAL, OP_NOP4, OP_TRUE
 from test_framework.script_util import key_to_p2pk_script
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error
@@ -165,21 +165,42 @@ class AuxpowMempoolTransitionTest(BitcoinTestFramework):
             sha_ids.append(self.mini.sendrawtransaction(from_node=node, tx_hex=raw))
         sha_child = self.mini.send_self_transfer(from_node=node, sequence=0xfffffffd, utxo_to_spend=self.mini.get_utxo(txid=sha_ids[1]))
         sha_grandchild = self.mini.send_self_transfer(from_node=node, sequence=0xfffffffd, utxo_to_spend=self.mini.get_utxo(txid=sha_child["txid"]))
-        self.assert_pool(controls | set(sha_ids) | {sha_child["txid"], sha_grandchild["txid"]})
-        mined = self.generateblock(node, ADDRESS_BCRT1_P2WSH_OP_TRUE, [sha_ids[0]], sync_fun=self.no_op)["hash"]
+
+        self.log.info("Payments to a witness v1 output enter the pool before the first activation block")
+        # Ordinary inputs, valid under both rule sets; only the output is new.
+        v1_output = CScript([OP_1, sha512(CScript([OP_TRUE])).digest()])
+        v1_pays = [self.mini.send_to(from_node=node, scriptPubKey=v1_output, amount=self.value) for _ in range(2)]
+        v1_ids = [pay["txid"] for pay in v1_pays]
+        # Children spend each payment's ordinary change.
+        v1_child = self.mini.send_self_transfer(from_node=node, sequence=0xfffffffd, utxo_to_spend=self.mini.get_utxo(txid=v1_ids[1]))
+        v1_grandchild = self.mini.send_self_transfer(from_node=node, sequence=0xfffffffd, utxo_to_spend=self.mini.get_utxo(txid=v1_child["txid"]))
+        confirmed_child = self.mini.send_self_transfer(from_node=node, sequence=0xfffffffd, utxo_to_spend=self.mini.get_utxo(txid=v1_ids[0]))
+        v1_pending = {v1_ids[1], v1_child["txid"], v1_grandchild["txid"], confirmed_child["txid"]}
+        self.assert_pool(controls | set(sha_ids) | {sha_child["txid"], sha_grandchild["txid"]} | set(v1_ids) | v1_pending)
+        mined = self.generateblock(node, ADDRESS_BCRT1_P2WSH_OP_TRUE, [sha_ids[0], v1_ids[0]], sync_fun=self.no_op)["hash"]
         assert_equal(node.getblockcount(), 110)
-        assert sha_ids[0] in node.getblock(mined)["tx"]
-        pending = controls | {sha_ids[1], sha_child["txid"], sha_grandchild["txid"]}
+        assert {sha_ids[0], v1_ids[0]} <= set(node.getblock(mined)["tx"])
+        pending = controls | {sha_ids[1], sha_child["txid"], sha_grandchild["txid"]} | v1_pending
+        self.assert_pool(pending)
+
+        self.log.info("A rollback that keeps the next block at activation keeps witness v1 payments")
+        node.invalidateblock(mined)
+        assert_equal(node.getblockcount(), 109)
+        self.assert_pool(pending | {sha_ids[0], v1_ids[0]})
+        node.reconsiderblock(mined)
+        assert_equal(node.getbestblockhash(), mined)
         self.assert_pool(pending)
         self.restart_node(0)
         self.assert_pool(pending)
 
-        self.log.info("Rollback removes both pending and disconnected SHA512 spends and their descendants")
+        self.log.info("Rollback removes pending and disconnected SHA512 spends and witness v1 payments, and their descendants")
         node.invalidateblock(boundary)
         assert_equal(node.getblockcount(), 108)
         self.assert_pool(controls)
         for raw in sha_raws:
             self.assert_rejected(raw)
+        for pay in v1_pays:
+            assert_equal(node.testmempoolaccept([pay["hex"]])[0]["reject-reason"], "witness-v1-pre-auxpow")
         assert_equal(node.testmempoolaccept([legacy_raw])[0]["allowed"], True)
         self.restart_node(0)
         self.assert_pool(controls)
@@ -188,11 +209,12 @@ class AuxpowMempoolTransitionTest(BitcoinTestFramework):
         assert controls <= set(node.getblock(mined)["tx"])
         assert_equal(node.getblockcount(), 109)
         self.assert_pool(set())
-        for raw in sha_raws:
+        # The next block is the activation block again, so both are accepted.
+        for raw in sha_raws + [pay["hex"] for pay in v1_pays]:
             node.sendrawtransaction(raw)
         mined = self.generate(self.mini, 1, sync_fun=self.no_op)[0]
         assert_equal(node.getblockcount(), 110)
-        assert set(sha_ids) <= set(node.getblock(mined)["tx"])
+        assert set(sha_ids) | set(v1_ids) <= set(node.getblock(mined)["tx"])
         self.assert_pool(set())
 
 

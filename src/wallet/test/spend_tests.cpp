@@ -121,7 +121,7 @@ BOOST_FIXTURE_TEST_CASE(witness_v1_coin_classification, TestChain100Setup)
     for (bool wrapped : {false, true}) {
         std::string error;
         std::string descriptor = "wsh512(pk(" + EncodeSecret(coinbaseKey) + "))";
-        if (wrapped) descriptor = "sh(" + descriptor + ")";
+        if (wrapped) descriptor = "sh(wpkh(" + EncodeSecret(coinbaseKey) + "))";
         auto parsed = Parse(descriptor, provider, error, false);
         BOOST_REQUIRE(!parsed.empty());
         std::vector<CScript> scripts;

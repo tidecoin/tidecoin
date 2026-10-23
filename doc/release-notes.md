@@ -48,8 +48,11 @@ tidecoin-tx -rules=post-auxpow "$TX_HEX" load=prevtxs:prevtxs.json load=privatek
 ```
 
 Creating or editing a transaction without signing or verification does not
-require this option. The utility supports native and P2SH-wrapped witness-v1
-signing with the RPC's `witnessScript` and `redeemScript` forms. `-verify` checks
+require this option. The utility supports native witness-v1
+signing with `witnessScript`; P2SH-wrapped v0 remains supported. A witness script
+may be up to the 65536-byte script size, as consensus allows, so large PQ
+multisig scripts can be signed; a P2SH redeem script remains limited to one
+8192-byte stack element. `-verify` checks
 input scripts against the supplied previous outputs and selected rules; it
 does not establish that the outputs exist or are unspent, or that the whole
 transaction is eligible for mining. Without `-verify`, signing may still return
@@ -100,11 +103,30 @@ Falcon-512 signatures operate in two modes:
 
 - **Legacy mode** (pre-AuxPoW): Relaxed norm bound verification with header
   byte 0x39. All existing mainnet signatures use this mode.
-- **Strict mode** (post-AuxPoW): Standard PQClean verification activated by
-  the `SCRIPT_VERIFY_PQ_STRICT` consensus flag.
+- **Strict mode** (post-AuxPoW): PQClean verification with exact compressed
+  encoding, activated by the `SCRIPT_VERIFY_PQ_STRICT` consensus flag.
 
 Keys are identical in both modes. Only signature creation and verification
 bounds differ.
+
+Strict Falcon-512 and Falcon-1024 verification rejects extra trailing bytes,
+including zero padding to 666 or 1280 bytes. The decoder must consume the
+entire compressed signature, as legacy Falcon-512 verification already
+requires. This consensus rule prevents changing a transaction's txid (for
+scriptSig signatures) or wtxid (for witness signatures) by adding or removing
+Falcon padding. It applies to all strict Falcon transaction signatures, not
+only witness v1. Signing continues to produce variable-length, unpadded
+signatures; this change does not impose the wallet's size estimates as new
+consensus length limits.
+
+Local Falcon signing retries compressed signatures longer than 666 bytes for
+Falcon-512 or 1280 bytes for Falcon-1024, so the wallet's smaller signature
+size estimates are now upper bounds. This applies to both 32-byte and 64-byte
+messages, including legacy Falcon-512 signing. Signatures remain unpadded;
+the transaction sighash byte is accounted for separately. Signing returns a
+failure if the retry limit is exhausted. External-signing estimates retain
+the larger PQClean bounds, and verification still accepts valid compressed
+signatures above the local signing bounds.
 
 PQHD Wallet
 ============
@@ -117,6 +139,41 @@ the BIP-32 HD wallet for post-quantum key derivation:
 - **Multi-seed support** with independent seeds and per-seed scheme policies
 - **Configurable default schemes** for receive and change addresses
 - **Encrypted seed storage** when wallet encryption is enabled
+- **Separate keys per address type** — each script family has its own path
+  purpose (`pkh` 10044, `sh(wpkh)` 10049, `wpkh` 10084, `wsh512` 10087;
+  10007 for custom and multisig descriptors), so addresses
+  of different types are not linkable through a shared key
+- **Separate test-network keys** — testnet and regtest use coin type 1; mainnet
+  uses 6868
+
+Default descriptor paths changed after 1.0.0rc2, which derived every address
+type from `10007h/6868h`. Wallets created by rc1 or rc2 keep their existing
+descriptors; their seeds' older keys are recovered only by importing those
+descriptors. Move funds received by an rc wallet to a wallet created by this
+release.
+
+Native witness v1 descriptors (`wsh512`) are not usable before
+AuxPoW activation: their outputs can be spent without a signature until the
+witness v1 rules take effect. Before activation the wallet does not issue their
+addresses, select their coins, or send to witness v1 addresses it recognizes.
+`importdescriptors` still accepts them and returns a warning. A witness v1 coin
+the wallet receives before activation, for example when someone pays an address
+of an imported descriptor, is counted by `getbalances` but cannot be spent until
+the activation height.
+
+A wallet created before activation gains its `bech32pq` (`wsh512`) descriptors
+after activation, when such an address is first requested or when the wallet is
+next loaded; an encrypted wallet must be unlocked for this. Witness v1 is
+native only: `sh(wsh512(...))` descriptors are rejected, including when loading
+wallet records, and have no signing or PSBT support. `decodescript` no longer
+suggests P2SH wrappers for native v1. Known wrapped-v1 recipients and change
+addresses are refused at every height. See [descriptors](descriptors.md).
+
+Native witness v1 addresses are 112 or 113 characters long. At that length the
+Bech32m checksum guarantees detecting changes of up to three characters, not
+four as for addresses of at most 90 characters, so two valid v1 addresses can
+differ in only four characters. Copy or scan these addresses rather than
+retyping them.
 
 The PQHD system is documented in detail in the [whitepaper](whitepaper.md).
 
@@ -146,13 +203,22 @@ OP_SHA512
 Witness v1 with 512-bit script hashing
 ---------------------------------------
 
-- 64-byte witness v1 script hash validation via `SCRIPT_VERIFY_WITNESS_V1_512`
+- Native 64-byte witness v1 script hash validation via `SCRIPT_VERIFY_WITNESS_V1_512`
 - Extended `PrecomputedTransactionData` with SHA-512 variants:
   `hashPrevouts_512`, `hashSequence_512`, `hashOutputs_512`
-- Native and P2SH-wrapped payments supported by signing RPCs and `tidecoin-tx`
+- Native payments supported by signing RPCs and `tidecoin-tx`
 
-The signing RPC now recognizes the witness-v1 wrapper and checks that supplied
-redeem and witness scripts match the previous output before signing.
+Activation only gives new spending rules to native 64-byte v1 programs.
+A 64-byte v1 program inside P2SH remains an ordinary script at every height:
+an empty-witness spend with a truthy redeem program is consensus-valid, while
+nonempty witness data is rejected. Existing `CLEANSTACK` relay policy still
+refuses the ordinary spend. P2SH hides the redeem script when the output is
+created, so its funding cannot be excluded by that relay check.
+
+Short v1 programs (2–40 bytes), native or inside P2SH, remain unknown witness
+versions after activation. They are not frozen by activation and acquire no
+signature requirements. Existing relay restrictions remain in place. These
+unsupported forms must not be used to receive payments.
 
 Mining
 ======
@@ -230,15 +296,30 @@ Activation and pending transactions
 ==================================
 
 Additional signature schemes, strict Falcon verification, `OP_SHA512` and the
-64-byte witness-v1 script rules take effect at the configured AuxPoW height.
-Witness-v1 interpretation and signature-operation counting now consistently
-follow that boundary.
+native 64-byte witness-v1 script rules take effect at the configured AuxPoW
+height. Witness-v1 interpretation and signature-operation counting now
+consistently follow that boundary.
 
 Mempool admission uses the rules for the next block, allowing newly enabled
 transactions to be included in the first activation block. When the next block
 changes rule era, including after a rollback, pending transactions are checked
 again. Transactions that no longer satisfy the rules, and their dependent
-transactions, are removed from the mempool.
+transactions, are removed from the mempool. This includes transactions that
+create witness v1 outputs when a rollback moves the next block below
+activation, because those outputs would not be enforced there. A block built
+outside the mempool can still contain such outputs, as pre-activation consensus
+rules allow.
+
+Before activation, transactions creating witness v1 outputs are not accepted to
+the mempool (`witness-v1-pre-auxpow`), and `generatetoaddress`,
+`generatetodescriptor` and `generateblock` refuse a witness v1 coinbase output.
+The mining RPCs check the height of each generated block, so a rollback during a
+call is also covered.
+
+After activation, a transaction spending a native 64-byte v1 output that is
+received without its witness is treated as witness-stripped, as for witness v0:
+it is not cached as rejected, so the transaction can still be accepted when
+received with its witness.
 
 Network Parameters
 ==================
@@ -295,6 +376,10 @@ Wallet and GUI
 - Legacy BDB wallets require migration to descriptor wallets using `migratewallet`.
   See [wallet migration instructions](managing-wallets.md).
 - The wallet supports TRUC transactions.
+- `bumpfee` and `psbtbumpfee` estimate signatures on inputs from outside the
+  wallet at the maximum size for their signature scheme. They previously assumed
+  72-byte ECDSA signatures, so a replacement spending such inputs could pay
+  less than the requested fee rate.
 
 Logging
 -------
@@ -411,7 +496,7 @@ External signing now requires the full previous transaction before requesting a
 new legacy signature, including legacy P2SH inputs. Requests missing that data
 are refused before contacting the signing device, with an explicit request to
 supply `non_witness_utxo`. GUI per-input errors show mode details only for
-signing-mode refusals. Native and wrapped witness
+signing-mode refusals. Native witness inputs and P2SH-wrapped v0
 inputs retain their existing data requirements, and unchanged verified finals
 remain usable. Newly returned legacy partial signatures and finals enforce the
 same previous-transaction requirement. This does not independently authenticate
@@ -424,9 +509,13 @@ New signatures refuse SINGLE when the input has no corresponding output.
 PSBT inspection uses per-input declarations, while signing requires explicit
 matching consent for nondefault modes on signing targets. Public wallet updates
 can deliberately declare modes, including ALL; combining preserves declarations.
+This also applies when the signer's own partial signature is already in the
+PSBT: reusing one made in another mode is refused with a sighash mismatch, as
+creating a new one would be. Partial signatures that cannot verify are ignored
+when signing, so they no longer block it; the signer replaces its own, and other
+keys' entries are left in the PSBT.
 Raw signing tracks missing amounts separately and preserves known node amounts.
-Qt displays missing/zero fees and excessive totals correctly. Wrapped wsh512
-supports descriptor round trips and verified, transaction-wide PSBT cleanup.
+Qt displays missing/zero fees and excessive totals correctly.
 
 Active witness-v1 nonempty signature arguments are restricted to hash-type
 bytes 01, 02, 03, 81, 82 and 83. Other bytes

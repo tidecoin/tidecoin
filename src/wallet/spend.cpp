@@ -104,9 +104,9 @@ static int FallbackNestedP2WPKHInputSize(const CWallet& wallet, const CCoinContr
  *
  * @param desc The output script descriptor of the coin spent by this input.
  * @param txin Optionally the txin to estimate the size of.
- * @param coin_control Context used to decide fixed-size vs worst-case signature estimation.
+ * @param coin_control Context used to decide local signing bounds vs external signature estimation.
  * @param tx_is_segwit Whether the transaction has at least a single input spending a segwit coin.
- * @param can_grind_r Whether the signer may produce non-maximum-size signatures.
+ * @param can_grind_r Whether the signer enforces the local signature size bounds.
  */
 static std::optional<int64_t> MaxInputWeight(const Descriptor& desc, const std::optional<CTxIn>& txin,
                                              const CCoinControl* coin_control, const bool tx_is_segwit,
@@ -300,13 +300,30 @@ static OutputType GetOutputType(TxoutType type, bool is_from_p2sh)
             if (is_from_p2sh) return OutputType::P2SH_SEGWIT;
             else return OutputType::BECH32;
         case TxoutType::WITNESS_V1_SCRIPTHASH_512:
-            return is_from_p2sh ? OutputType::P2SH_SEGWIT : OutputType::BECH32PQ;
+            return is_from_p2sh ? OutputType::UNKNOWN : OutputType::BECH32PQ;
         case TxoutType::SCRIPTHASH:
         case TxoutType::PUBKEYHASH:
             return OutputType::LEGACY;
         default:
             return OutputType::UNKNOWN;
     }
+}
+
+bool IsWitnessV1Script(const CScript& script_pubkey, const SigningProvider* provider)
+{
+    std::vector<std::vector<uint8_t>> solutions;
+    TxoutType type = Solver(script_pubkey, solutions);
+    if (type == TxoutType::SCRIPTHASH && provider) {
+        CScript redeem_script;
+        if (!provider->GetCScript(CScriptID(uint160(solutions[0])), redeem_script)) return false;
+        type = Solver(redeem_script, solutions);
+    }
+    return type == TxoutType::WITNESS_V1_SCRIPTHASH_512;
+}
+
+bool WitnessV1SpendsAllowed(const CWallet& wallet)
+{
+    return wallet.GetTargetHeightForOutputs() >= Params().GetConsensus().nAuxpowStartHeight;
 }
 
 // Fetch and validate the coin control selected inputs.
@@ -316,6 +333,7 @@ util::Result<PreSelectedInputs> FetchSelectedInputs(const CWallet& wallet, const
 {
     PreSelectedInputs result;
     const bool can_grind_r = wallet.CanGrindR();
+    const bool v1_spends_allowed = WitnessV1SpendsAllowed(wallet);
     std::map<COutPoint, CAmount> map_of_bump_fees = wallet.chain().calculateIndividualBumpFees(coin_control.ListSelected(), coin_selection_params.m_effective_feerate);
     for (const COutPoint& outpoint : coin_control.ListSelected()) {
         int64_t input_bytes = coin_control.GetInputWeight(outpoint).value_or(-1);
@@ -348,6 +366,17 @@ util::Result<PreSelectedInputs> FetchSelectedInputs(const CWallet& wallet, const
             }
 
             txout = *out;
+        }
+
+        if (IsWitnessV1Script(txout.scriptPubKey, wallet.GetSolvingProvider(txout.scriptPubKey).get()) ||
+            IsWitnessV1Script(txout.scriptPubKey, &coin_control.m_external_provider)) {
+            if (txout.scriptPubKey.IsPayToScriptHash()) {
+                return util::Error{_("P2SH-wrapped witness v1 is not supported.")};
+            }
+            if (!v1_spends_allowed) {
+                return util::Error{strprintf(_("Pre-selected input %s is a witness v1 output, which cannot be spent before auxpow activation (height %d)"),
+                                         outpoint.ToString(), Params().GetConsensus().nAuxpowStartHeight)};
+            }
         }
 
         if (input_bytes == -1) {
@@ -389,6 +418,7 @@ CoinsResult AvailableCoins(const CWallet& wallet,
     const int max_depth = {coinControl ? coinControl->m_max_depth : DEFAULT_MAX_DEPTH};
     const bool only_safe = {coinControl ? !coinControl->m_include_unsafe_inputs : true};
     const bool can_grind_r = wallet.CanGrindR();
+    const bool v1_spends_allowed = WitnessV1SpendsAllowed(wallet);
     std::vector<COutPoint> outpoints;
 
     std::set<Txid> trusted_parents;
@@ -524,6 +554,8 @@ CoinsResult AvailableCoins(const CWallet& wallet,
             type = Solver(script, script_solutions);
             is_from_p2sh = true;
         }
+
+        if (type == TxoutType::WITNESS_V1_SCRIPTHASH_512 && (is_from_p2sh || !v1_spends_allowed)) continue;
 
         auto available_output_type = GetOutputType(type, is_from_p2sh);
         auto available_output = COutput(outpoint, output, nDepth, input_bytes, solvable, tx_safe, wtx.GetTxTime(), tx_from_me, feerate);
@@ -1134,6 +1166,35 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
         if (!pq::IsSchemeAllowedAtHeight(scheme->id, params, target_height)) {
             return util::Error{strprintf(_("Scheme %s is not allowed before auxpow activation (height %d)."),
                                          scheme->name, params.nAuxpowStartHeight)};
+        }
+    }
+
+    // Native v1 requires activation. A known P2SH wrapper is unsupported at any
+    // height; include scripts supplied through solving_data in that check.
+    {
+        const auto is_v1_dest = [&](const CTxDestination& dest) {
+            const CScript script{GetScriptForDestination(dest)};
+            return IsWitnessV1Script(script, wallet.GetSolvingProvider(script).get()) ||
+                   IsWitnessV1Script(script, &coin_control.m_external_provider);
+        };
+        const int activation_height{Params().GetConsensus().nAuxpowStartHeight};
+        for (const auto& recipient : vecSend) {
+            if (is_v1_dest(recipient.dest)) {
+                if (std::holds_alternative<ScriptHash>(recipient.dest)) {
+                    return util::Error{_("P2SH-wrapped witness v1 is not supported.")};
+                }
+                if (!WitnessV1SpendsAllowed(wallet)) {
+                    return util::Error{strprintf(_("Cannot send to a witness v1 address before auxpow activation (height %d)."), activation_height)};
+                }
+            }
+        }
+        if (is_v1_dest(coin_control.destChange)) {
+            if (std::holds_alternative<ScriptHash>(coin_control.destChange)) {
+                return util::Error{_("P2SH-wrapped witness v1 is not supported.")};
+            }
+            if (!WitnessV1SpendsAllowed(wallet)) {
+                return util::Error{strprintf(_("Cannot use a witness v1 change address before auxpow activation (height %d)."), activation_height)};
+            }
         }
     }
 

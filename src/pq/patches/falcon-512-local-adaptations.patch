@@ -1,16 +1,18 @@
 --- a/crypto_sign/falcon-512/clean/api.h
 +++ b/src/pq/falcon-512/api.h
-@@ -12,6 +12,10 @@
- 
- #define PQCLEAN_FALCONPADDED512_CLEAN_CRYPTO_BYTES      666 // used in signature verification
- 
+@@ -10,7 +10,11 @@
+
+ #define PQCLEAN_FALCON512_CLEAN_CRYPTO_ALGNAME          "Falcon-512"
+
+-#define PQCLEAN_FALCONPADDED512_CLEAN_CRYPTO_BYTES      666 // used in signature verification
++#define PQCLEAN_FALCONPADDED512_CLEAN_CRYPTO_BYTES      666 // reference padded size; used for wallet size estimates
++
 +#ifdef __cplusplus
 +extern "C" {
 +#endif
-+
+
  /*
   * Generate a new key pair. Public key goes into pk[], private key in sk[].
-  * Key sizes are exact (in bytes):
 @@ -22,6 +26,9 @@
   */
  int PQCLEAN_FALCON512_CLEAN_crypto_sign_keypair(
@@ -18,13 +20,13 @@
 +int PQCLEAN_FALCON512_CLEAN_crypto_sign_keypair_deterministic(
 +    uint8_t *pk, uint8_t *sk,
 +    const uint8_t *seed, size_t seed_len);
- 
+
  /*
   * Compute a signature on a provided message (m, mlen), with a given
 @@ -79,4 +86,8 @@
      uint8_t *m, size_t *mlen,
      const uint8_t *sm, size_t smlen, const uint8_t *pk);
- 
+
 +#ifdef __cplusplus
 +} // extern "C"
 +#endif
@@ -35,69 +37,68 @@
 @@ -106,7 +106,7 @@
   * as part of PQClean.
   */
- 
+
 -#include "fips202.h"
 +#include "../fips202.h"
- 
+
  #define inner_shake256_context                shake256incctx
  #define inner_shake256_init(sc)               shake256_inc_init(sc)
 --- a/crypto_sign/falcon-512/clean/pqclean.c
 +++ b/src/pq/falcon-512/pqclean.c
-@@ -3,6 +3,7 @@
+@@ -1,8 +1,10 @@
++#include "../cleanse.h"
+ /*
+  * Wrapper for implementing the PQClean API.
   */
- 
+
  #include <stddef.h>
 +#include <stdio.h>
  #include <string.h>
- 
+
  #include "api.h"
-@@ -10,7 +11,7 @@
- 
+@@ -10,7 +12,7 @@
+
  #define NONCELEN   40
- 
+
 -#include "randombytes.h"
 +#include "../randombytes.h"
- 
+
  /*
   * Encoding formats (nnnn = log of degree, 9 for Falcon-512, 10 for Falcon-1024)
-@@ -54,9 +55,6 @@
+@@ -54,9 +56,6 @@
      inner_shake256_context rng;
      size_t u, v;
- 
+
 -    /*
 -     * Generate key pair.
 -     */
      randombytes(seed, sizeof seed);
      inner_shake256_init(&rng);
      inner_shake256_inject(&rng, seed, sizeof seed);
-@@ -64,9 +62,6 @@
+@@ -64,9 +63,6 @@
      PQCLEAN_FALCON512_CLEAN_keygen(&rng, f, g, F, NULL, h, 9, tmp.b);
      inner_shake256_ctx_release(&rng);
- 
+
 -    /*
 -     * Encode private key.
 -     */
      sk[0] = 0x50 + 9;
      u = 1;
      v = PQCLEAN_FALCON512_CLEAN_trim_i8_encode(
-@@ -94,9 +89,67 @@
+@@ -94,9 +90,6 @@
          return -1;
      }
- 
+
 -    /*
 -     * Encode public key.
 -     */
-+    pk[0] = 0x00 + 9;
-+    v = PQCLEAN_FALCON512_CLEAN_modq_encode(
-+            pk + 1, PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1,
-+            h, 9);
-+    if (v != PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1) {
-+        return -1;
-+    }
-+
-+    return 0;
-+}
-+
+     pk[0] = 0x00 + 9;
+     v = PQCLEAN_FALCON512_CLEAN_modq_encode(
+             pk + 1, PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1,
+@@ -108,6 +101,79 @@
+     return 0;
+ }
+
 +int
 +PQCLEAN_FALCON512_CLEAN_crypto_sign_keypair_deterministic(
 +    uint8_t *pk, uint8_t *sk,
@@ -114,6 +115,7 @@
 +    uint16_t h[512];
 +    inner_shake256_context rng;
 +    size_t u, v;
++    int result = -1;
 +
 +    inner_shake256_init(&rng);
 +    inner_shake256_inject(&rng, seed, seed_len);
@@ -127,31 +129,53 @@
 +            sk + u, PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES - u,
 +            f, 9, PQCLEAN_FALCON512_CLEAN_max_fg_bits[9]);
 +    if (v == 0) {
-+        return -1;
++        goto cleanup;
 +    }
 +    u += v;
 +    v = PQCLEAN_FALCON512_CLEAN_trim_i8_encode(
 +            sk + u, PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES - u,
 +            g, 9, PQCLEAN_FALCON512_CLEAN_max_fg_bits[9]);
 +    if (v == 0) {
-+        return -1;
++        goto cleanup;
 +    }
 +    u += v;
 +    v = PQCLEAN_FALCON512_CLEAN_trim_i8_encode(
 +            sk + u, PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES - u,
 +            F, 9, PQCLEAN_FALCON512_CLEAN_max_FG_bits[9]);
 +    if (v == 0) {
-+        return -1;
++        goto cleanup;
 +    }
 +    u += v;
 +    if (u != PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES) {
-+        return -1;
++        goto cleanup;
 +    }
 +
-     pk[0] = 0x00 + 9;
-     v = PQCLEAN_FALCON512_CLEAN_modq_encode(
-             pk + 1, PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1,
-@@ -232,9 +285,10 @@
++    pk[0] = 0x00 + 9;
++    v = PQCLEAN_FALCON512_CLEAN_modq_encode(
++            pk + 1, PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1,
++            h, 9);
++    if (v != PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1) {
++        goto cleanup;
++    }
++
++    result = 0;
++cleanup:
++    pq_cleanse(&tmp, sizeof tmp);
++    pq_cleanse(f, sizeof f);
++    pq_cleanse(g, sizeof g);
++    pq_cleanse(F, sizeof F);
++    pq_cleanse(h, sizeof h);
++    if (result != 0) {
++        pq_cleanse(sk, PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES);
++        pq_cleanse(pk, PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES);
++    }
++    return result;
++}
++
+ /*
+  * Compute the signature. nonce[] receives the nonce and must have length
+  * NONCELEN bytes. sigbuf[] receives the signature value (without nonce
+@@ -232,9 +298,10 @@
      if (pk[0] != 0x00 + 9) {
          return -1;
      }
@@ -164,3 +188,26 @@
          return -1;
      }
      PQCLEAN_FALCON512_CLEAN_to_ntt_monty(h, 9);
+@@ -247,20 +314,10 @@
+     }
+
+     v = PQCLEAN_FALCON512_CLEAN_comp_decode(sig, 9, sigbuf, sigbuflen);
+-    if (v == 0) {
++    /* Tidecoin requires the exact compressed encoding, without trailing bytes. */
++    if (v == 0 || v != sigbuflen) {
+         return -1;
+     }
+-    if (v != sigbuflen) {
+-        if (sigbuflen == PQCLEAN_FALCONPADDED512_CLEAN_CRYPTO_BYTES - NONCELEN - 1) {
+-            while (v < sigbuflen) {
+-                if (sigbuf[v++] != 0) {
+-                    return -1;
+-                }
+-            }
+-        } else {
+-            return -1;
+-        }
+-    }
+
+     /*
+      * Hash nonce + message into a vector.

@@ -115,7 +115,7 @@ enum : uint32_t {
     // Without this flag, only Falcon-512 may authorize signature checks.
     SCRIPT_VERIFY_PQ_STRICT = (1U << 13),
 
-    // Enable witness v1 64-byte scripthash validation (post-auxpow).
+    // Enable native witness v1 64-byte scripthash validation (post-auxpow).
     SCRIPT_VERIFY_WITNESS_V1_512 = (1U << 14),
 
     // Enable OP_SHA512 opcode (post-auxpow).
@@ -208,9 +208,11 @@ public:
 template <class T>
 uint256 SignatureHash(const CScript& scriptCode, const T& txTo, unsigned int nIn, int32_t nHashType, const CAmount& amount, SigVersion sigversion, const PrecomputedTransactionData* cache = nullptr, SigHashCache* sighash_cache = nullptr);
 
-/** Returns false when required spent outputs or the SIGHASH_SINGLE output are missing. */
+/** Returns false when required spent outputs or the SIGHASH_SINGLE output are missing.
+ *  single_output_hash caches the selected output's SHA512 on demand. It must only
+ *  be reused for the same transaction and input index, with unchanged outputs. */
 template <class T>
-bool SignatureHash512(uint512& hash_out, const CScript& scriptCode, const T& txTo, unsigned int nIn, int32_t nHashType, const CAmount& amount, const PrecomputedTransactionData* cache = nullptr);
+bool SignatureHash512(uint512& hash_out, const CScript& scriptCode, const T& txTo, unsigned int nIn, int32_t nHashType, const CAmount& amount, const PrecomputedTransactionData* cache = nullptr, std::optional<uint512>* single_output_hash = nullptr);
 
 class BaseSignatureChecker
 {
@@ -255,6 +257,8 @@ private:
     // Chain-connected callers derive this from SCRIPT_VERIFY_PQ_STRICT.
     const bool m_allow_legacy;
     mutable SigHashCache m_sighash_cache;
+    //! Witness v1 SINGLE output hash, scoped to this checker's transaction/input.
+    mutable std::optional<uint512> m_single_output_hash_512;
 
 protected:
     virtual bool VerifyPostQuantumSignature(const std::vector<unsigned char>& vchSig, const CPubKey& vchPubKey, const uint256& sighash) const;

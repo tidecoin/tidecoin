@@ -2,7 +2,7 @@
 # Copyright (c) 2026 The Tidecoin developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Recognize the 64-byte witness-v1 format only at AuxPoW activation."""
+"""Activate native 64-byte v1; preserve wrapped and reserved program behavior."""
 
 from hashlib import sha512
 
@@ -25,12 +25,13 @@ class WitnessV1ActivationTest(BitcoinTestFramework):
         return self.generateblock(self.nodes[0], ADDRESS_BCRT1_P2WSH_OP_TRUE, transactions,
                                   submit=False, sync_fun=self.no_op)
 
-    def spend(self, batch, wrapped, *, witness=True, extra_sig=False, wrong_script=False):
+    def spend(self, batch, wrapped, *, witness=True, extra_sig=False, wrong_script=False, program=None, index=None):
+        program = self.program if program is None else program
         tx = CTransaction()
         script_sig = CScript([OP_TRUE]) if extra_sig else CScript()
         if wrapped:
-            script_sig = CScript(bytes(script_sig) + bytes(CScript([self.program])))
-        tx.vin = [CTxIn(COutPoint(int(self.funding_id, 16), batch * 2 + int(wrapped)), script_sig)]
+            script_sig = CScript(bytes(script_sig) + bytes(CScript([program])))
+        tx.vin = [CTxIn(COutPoint(int(self.funding_id, 16), batch * 2 + int(wrapped) if index is None else index), script_sig)]
         tx.vout = [CTxOut(self.value - 10_000, self.mini.get_output_script())]
         if witness:
             tx.wit.vtxinwit = [CTxInWitness()]
@@ -47,22 +48,50 @@ class WitnessV1ActivationTest(BitcoinTestFramework):
             assert_raises_rpc_error(-25, "Witness provided for non-witness script", self.candidate, [raw])
             # Relay policy also refuses this form before activation.
             assert_equal(node.testmempoolaccept([raw])[0]["allowed"], False)
+        self.check_reserved()
 
     def check_after(self, batch):
         node = self.nodes[0]
-        raws = []
-        for wrapped in (False, True):
-            raw = self.spend(batch, wrapped)
-            assert_equal(node.testmempoolaccept([raw])[0]["allowed"], True)
-            assert "hex" in self.candidate([raw])
-            for invalid in (
-                self.spend(batch, wrapped, witness=False),
-                self.spend(batch, wrapped, extra_sig=True),
-                self.spend(batch, wrapped, wrong_script=True),
-            ):
-                assert_raises_rpc_error(-25, "block-script-verify-flag-failed", self.candidate, [invalid])
-            raws.append(raw)
-        return raws
+        raw = self.spend(batch, False)
+        assert_equal(node.testmempoolaccept([raw])[0]["allowed"], True)
+        assert "hex" in self.candidate([raw])
+        for invalid in (
+            self.spend(batch, False, witness=False),
+            self.spend(batch, False, extra_sig=True),
+            self.spend(batch, False, wrong_script=True),
+        ):
+            assert_raises_rpc_error(-25, "block-script-verify-flag-failed", self.candidate, [invalid])
+
+        # Wrapped 64-byte programs remain ordinary scripts at every height.
+        for extra in (False, True):
+            ordinary = self.spend(batch, True, witness=False, extra_sig=extra)
+            assert "hex" in self.candidate([ordinary])
+            rejected = node.testmempoolaccept([ordinary])[0]
+            assert_equal(rejected["allowed"], False)
+            assert "Stack size must be exactly one" in rejected["reject-reason"]
+            assert_raises_rpc_error(-25, "Witness provided for non-witness script", self.candidate,
+                                    [self.spend(batch, True, extra_sig=extra)])
+        self.check_reserved()
+        return [raw]
+
+    def check_reserved(self):
+        for index, length, wrapped, program in self.reserved:
+            def spend(**kwargs):
+                return self.spend(0, wrapped, index=index, program=program, **kwargs)
+            for witness in (False, True):
+                raw = spend(witness=witness)
+                if length <= 40 or not witness:
+                    assert "hex" in self.candidate([raw])
+                else:
+                    assert_raises_rpc_error(-25, "Witness provided for non-witness script", self.candidate, [raw])
+                assert_equal(self.nodes[0].testmempoolaccept([raw])[0]["allowed"], False)
+            # Short witness programs keep their scriptSig constraints; ordinary
+            # 41-63-byte scripts continue to allow extra pushes.
+            extra = spend(witness=False, extra_sig=True)
+            if length <= 40:
+                assert_raises_rpc_error(-25, "block-script-verify-flag-failed", self.candidate, [extra])
+            else:
+                assert "hex" in self.candidate([extra])
 
     def run_test(self):
         node = self.nodes[0]
@@ -73,10 +102,17 @@ class WitnessV1ActivationTest(BitcoinTestFramework):
         self.value = 1_000_000
         funding = self.mini.create_self_transfer()
         total = funding["tx"].vout[0].nValue
-        funding["tx"].vout = [
+        outputs = [
             CTxOut(self.value, script_to_p2sh_script(self.program) if wrapped else self.program)
             for _ in range(4) for wrapped in (False, True)
-        ] + [CTxOut(total - 8 * self.value, self.mini.get_output_script())]
+        ]
+        self.reserved = []
+        for length in (2, 20, 32, 40, 41, 63):
+            program = CScript([1, bytes([1]) * length])
+            for wrapped in (False, True):
+                self.reserved.append((len(outputs), length, wrapped, program))
+                outputs.append(CTxOut(self.value, script_to_p2sh_script(program) if wrapped else program))
+        funding["tx"].vout = outputs + [CTxOut(total - len(outputs) * self.value, self.mini.get_output_script())]
         # Creating these outputs is permitted in blocks, while existing relay
         # policy intentionally refuses the new format before activation.
         self.funding_id = funding["tx"].txid_hex
@@ -113,8 +149,7 @@ class WitnessV1ActivationTest(BitcoinTestFramework):
         node.invalidateblock(last_before)
         assert_equal(node.getblockcount(), 108)
         removed = pending + [child["txid"]]
-        removed += [node.decoderawtransaction(self.spend(batch, wrapped))["txid"]
-                    for batch in (1, 2) for wrapped in (False, True)]
+        removed += [node.decoderawtransaction(self.spend(batch, False))["txid"] for batch in (1, 2)]
         assert not set(removed) & set(node.getrawmempool())
         self.check_before(3)
         assert_equal(node.getblocktemplate({"rules": ["segwit"]})["height"], 109)

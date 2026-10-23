@@ -44,8 +44,8 @@ struct SchemeInfo {
     uint8_t prefix;
     size_t pubkey_bytes;
     size_t seckey_bytes;
-    size_t sig_bytes_max;
-    size_t sig_bytes_fixed;
+    size_t sig_bytes_max; //!< PQClean output buffer size; also used for external signing estimates.
+    size_t sig_bytes_sign_max; //!< Maximum returned by the local signer, without a sighash byte.
     const char* name;
 };
 
@@ -111,7 +111,7 @@ constexpr size_t MaxKnownSigBytes(bool use_max_sig)
 {
     size_t max_len = 0;
     for (const auto* info : kKnownSchemes) {
-        const size_t sig_len = use_max_sig ? info->sig_bytes_max : info->sig_bytes_fixed;
+        const size_t sig_len = use_max_sig ? info->sig_bytes_max : info->sig_bytes_sign_max;
         if (sig_len > max_len) max_len = sig_len;
     }
     return max_len;

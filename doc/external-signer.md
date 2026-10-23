@@ -113,8 +113,8 @@ selection.
 Before any device signing request, the wallet checks all enrolled signing
 targets. An unfinished legacy input, including a legacy P2SH input, requires
 the full previous transaction (`non_witness_utxo`). Its transaction ID, output
-index and any separate output summary must agree. Native and wrapped witness
-inputs may use an output summary under their applicable rules. Missing legacy
+index and any separate output summary must agree. Native witness inputs and
+P2SH-wrapped v0 inputs may use an output summary under their applicable rules. Missing legacy
 transaction data is reported with a request to supply `non_witness_utxo` before
 any signing device is contacted; unchanged
 verified finals and unrelated inputs do not acquire a new signing requirement.
@@ -129,7 +129,10 @@ scripts, origins, unknown or proprietary metadata are rejected; added protected
 metadata is rejected as well. Prepare required solving data before signing.
 
 Only partial signatures and final scripts/witnesses are merged. Existing
-signature fields cannot be replaced with conflicting values. New signature
+signature fields cannot be replaced with conflicting values. Before the request,
+partial signatures that do not verify are ignored when checking the signing
+mode, and those for enrolled keys are removed so the device can supply new
+ones; invalid entries for other keys stay in the PSBT. New signature
 hash types must match the request (ALL by default). Previously verified finalized
 inputs retain their existing hash types even if finalization removed their
 sighash metadata. Every returned final script

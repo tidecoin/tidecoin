@@ -162,7 +162,30 @@ static bool GenerateBlock(ChainstateManager& chainman, CBlock&& block, uint64_t&
     return true;
 }
 
-static UniValue generateBlocks(ChainstateManager& chainman, Mining& miner, const CScript& coinbase_output_script, int nGenerate, uint64_t nMaxTries)
+/** Height of a block built on block.hashPrevBlock, which the active tip may
+ *  have moved away from since the block was assembled. */
+static int BlockHeight(ChainstateManager& chainman, const CBlock& block)
+{
+    LOCK(chainman.GetMutex());
+    const CBlockIndex* pindex_prev{chainman.m_blockman.LookupBlockIndex(block.hashPrevBlock)};
+    CHECK_NONFATAL(pindex_prev);
+    return pindex_prev->nHeight + 1;
+}
+
+/** Before activation a witness v1 coinbase output is unenforced: once mature,
+ *  anyone could spend it without a signature. */
+static void EnsureCoinbaseOutputAllowed(ChainstateManager& chainman, const CScript& script, bool known_witness_v1, int height)
+{
+    int version;
+    std::vector<unsigned char> program;
+    if (!known_witness_v1 && !(script.IsWitnessProgram(version, program) && version == 1)) return;
+    const int activation_height{chainman.GetConsensus().nAuxpowStartHeight};
+    if (height < activation_height) {
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, strprintf("Witness v1 coinbase outputs are not allowed before auxpow activation (height %d)", activation_height));
+    }
+}
+
+static UniValue generateBlocks(ChainstateManager& chainman, Mining& miner, const CScript& coinbase_output_script, bool known_witness_v1, int nGenerate, uint64_t nMaxTries)
 {
     UniValue blockHashes(UniValue::VARR);
     while (nGenerate > 0 && !chainman.m_interrupt) {
@@ -170,8 +193,11 @@ static UniValue generateBlocks(ChainstateManager& chainman, Mining& miner, const
         CHECK_NONFATAL(block_template);
 
         std::shared_ptr<const CBlock> block_out;
-        const int height{WITH_LOCK(chainman.GetMutex(), return chainman.ActiveChain().Height() + 1)};
-        if (!GenerateBlock(chainman, block_template->getBlock(), nMaxTries, block_out, /*process_new_block=*/true, height)) {
+        CBlock block{block_template->getBlock()};
+        const int height{BlockHeight(chainman, block)};
+        // Checked per block: a rollback can move the tip below activation mid-call.
+        EnsureCoinbaseOutputAllowed(chainman, coinbase_output_script, known_witness_v1, height);
+        if (!GenerateBlock(chainman, std::move(block), nMaxTries, block_out, /*process_new_block=*/true, height)) {
             break;
         }
 
@@ -183,7 +209,7 @@ static UniValue generateBlocks(ChainstateManager& chainman, Mining& miner, const
     return blockHashes;
 }
 
-static bool getScriptFromDescriptor(const JSONRPCRequest& request, const std::string& descriptor, CScript& script, std::string& error)
+static bool getScriptFromDescriptor(const JSONRPCRequest& request, const std::string& descriptor, CScript& script, bool& has_witness_v1, std::string& error)
 {
     FlatSigningProvider key_provider;
     const auto descs = Parse(descriptor, key_provider, error, /* require_checksum = */ false);
@@ -195,6 +221,7 @@ static bool getScriptFromDescriptor(const JSONRPCRequest& request, const std::st
     if (desc->IsRange()) {
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Ranged descriptor not accepted. Maybe pass through deriveaddresses first?");
     }
+    has_witness_v1 = desc->HasWitnessV1();
 
     FlatSigningProvider provider;
     std::vector<CScript> scripts;
@@ -246,8 +273,9 @@ static RPCHelpMan generatetodescriptor()
     const auto max_tries{self.Arg<uint64_t>("maxtries")};
 
     CScript coinbase_output_script;
+    bool has_witness_v1{false};
     std::string error;
-    if (!getScriptFromDescriptor(request, self.Arg<std::string>("descriptor"), coinbase_output_script, error)) {
+    if (!getScriptFromDescriptor(request, self.Arg<std::string>("descriptor"), coinbase_output_script, has_witness_v1, error)) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, error);
     }
 
@@ -255,7 +283,7 @@ static RPCHelpMan generatetodescriptor()
     Mining& miner = EnsureMining(node);
     ChainstateManager& chainman = EnsureChainman(node);
 
-    return generateBlocks(chainman, miner, coinbase_output_script, num_blocks, max_tries);
+    return generateBlocks(chainman, miner, coinbase_output_script, has_witness_v1, num_blocks, max_tries);
 },
     };
 }
@@ -303,7 +331,7 @@ static RPCHelpMan generatetoaddress()
 
     CScript coinbase_output_script = GetScriptForDestination(destination);
 
-    return generateBlocks(chainman, miner, coinbase_output_script, num_blocks, max_tries);
+    return generateBlocks(chainman, miner, coinbase_output_script, /*known_witness_v1=*/false, num_blocks, max_tries);
 },
     };
 }
@@ -338,9 +366,10 @@ static RPCHelpMan generateblock()
 {
     const auto address_or_descriptor = request.params[0].get_str();
     CScript coinbase_output_script;
+    bool has_witness_v1{false};
     std::string error;
 
-    if (!getScriptFromDescriptor(request, address_or_descriptor, coinbase_output_script, error)) {
+    if (!getScriptFromDescriptor(request, address_or_descriptor, coinbase_output_script, has_witness_v1, error)) {
         const auto destination = DecodeDestination(address_or_descriptor);
         if (!IsValidDestination(destination)) {
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Error: Invalid address or descriptor");
@@ -377,6 +406,7 @@ static RPCHelpMan generateblock()
 
     const bool process_new_block{request.params[2].isNull() ? true : request.params[2].get_bool()};
     CBlock block;
+    int height;
 
     ChainstateManager& chainman = EnsureChainman(node);
     {
@@ -387,6 +417,8 @@ static RPCHelpMan generateblock()
 
             block = block_template->getBlock();
         }
+        height = BlockHeight(chainman, block);
+        EnsureCoinbaseOutputAllowed(chainman, coinbase_output_script, has_witness_v1, height);
 
         CHECK_NONFATAL(block.vtx.size() == 1);
 
@@ -402,7 +434,6 @@ static RPCHelpMan generateblock()
     std::shared_ptr<const CBlock> block_out;
     uint64_t max_tries{DEFAULT_MAX_TRIES};
 
-    const int height{WITH_LOCK(chainman.GetMutex(), return chainman.ActiveChain().Height() + 1)};
     if (!GenerateBlock(chainman, std::move(block), max_tries, block_out, process_new_block, height) || !block_out) {
         throw JSONRPCError(RPC_MISC_ERROR, "Failed to make block.");
     }

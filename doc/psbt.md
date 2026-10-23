@@ -96,7 +96,7 @@ hardware implementations will typically implement multiple roles simultaneously.
 - External signing requires a full previous transaction for each unfinished
   legacy signing target, including legacy P2SH. All enrolled targets are checked
   before any device signs. Newly returned legacy partial signatures and finals
-  enforce the same requirement. Native and wrapped witness inputs retain their
+  enforce the same requirement. Native witness inputs and wrapped v0 retain their
   existing data requirements; unrelated inputs and unchanged verified finals are
   preserved. See [external signing](external-signer.md#signing-responses-and-completion).
 - Existing legacy/v0 finals with undefined hash-type bytes remain verifiable
@@ -121,10 +121,10 @@ hardware implementations will typically implement multiple roles simultaneously.
   hash for witness v0 or SHA-512 hash for witness v1, as 64 or 128 hex characters
   respectively.
 - Wallet and descriptor processing can omit full previous transactions when
-  witness-v1 is active and every input qualifies: native or authenticated
-  `sh(wsh512(...))`, with defined `ALL`, `NONE` or `SINGLE` modes and no
-  `ANYONECANPAY`. Unfinished native inputs need no witness script to classify
-  their output; wrapped inputs require the committed redeem and witness scripts.
+  witness-v1 is active and every input qualifies: native 64-byte v1 with
+  defined `ALL`, `NONE` or `SINGLE` modes and no `ANYONECANPAY`. Unfinished
+  native inputs need no witness script to classify their output. P2SH inputs
+  never qualify for this cleanup.
   Final inputs require full script verification and at least one successful v1
   signature check. All executed nonempty checks must use eligible modes, and
   any present declaration must agree. Signatureless finals retain full records.
@@ -150,6 +150,11 @@ hardware implementations will typically implement multiple roles simultaneously.
   signatures. Verified finals are preserved. `descriptorprocesspsbt` has no
   public-only switch; use `utxoupdatepsbt` for public updates and the wallet's
   explicit public-declaration operation for coordinator requests.
+- Signing ignores partial signatures that do not verify against the input, so
+  they neither block signing nor constrain its mode. The signer replaces an
+  invalid partial signature for its own key; invalid entries for other keys
+  stay in the PSBT. A valid partial signature from the signer's own key made in
+  a different mode than requested is refused with a sighash mismatch.
 - Combining PSBTs preserves declarations and rejects conflicting declarations.
   Finalization checks existing signature bytes even for ALL. An absent declaration
   means ALL for standalone finalization; an undeclared NONE partial is unfinished.

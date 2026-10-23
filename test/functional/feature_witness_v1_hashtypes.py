@@ -96,7 +96,7 @@ class WitnessV1HashTypesTest(BitcoinTestFramework):
         total = funding['tx'].vout[0].nValue
         for scheme in range(7, 12):
             secret, pubkey = generate_keypair(scheme=str(scheme))
-            kinds = ['legacy', 'v0', 'legacy_multi', 'v0_multi'] + [prefix + form for prefix in ('', 'wrapped_') for form in ('v1', 'verify', 'not', 'multi', 'multi_verify', 'multi_not', 'multi_unreached', 'multi_unreached_not')]
+            kinds = ['legacy', 'v0', 'legacy_multi', 'v0_multi'] + ['v1', 'verify', 'not', 'multi', 'multi_verify', 'multi_not', 'multi_unreached', 'multi_unreached_not']
             for kind in kinds:
                 if 'multi' in kind:
                     count = OP_2 if 'unreached' in kind else OP_1
@@ -116,8 +116,6 @@ class WitnessV1HashTypesTest(BitcoinTestFramework):
                     output = script_to_p2sh_script(script)
                 elif kind == 'v0_multi':
                     output = script_to_p2wsh_script(script)
-                elif kind.startswith('wrapped'):
-                    output = script_to_p2sh_script(program)
                 else:
                     output = program
                 rows.append((kind, secret, pubkey, script, program, output))
@@ -133,7 +131,7 @@ class WitnessV1HashTypesTest(BitcoinTestFramework):
             tx = CTransaction()
             tx.vin = [CTxIn(COutPoint(int(funding['tx'].txid_hex, 16), index))]
             tx.vout = [CTxOut(value - 10_000, mini.get_output_script())]
-            tx.vin[0].scriptSig = CScript([program]) if kind.startswith('wrapped') else b''
+            tx.vin[0].scriptSig = b''
             tx.wit.vtxinwit = [CTxInWitness()]
             tx.wit.vtxinwit[0].scriptWitness.stack = [b'\x04', bytes(script)]
             raw = tx.serialize().hex()
@@ -173,7 +171,7 @@ class WitnessV1HashTypesTest(BitcoinTestFramework):
                     elif kind == 'legacy_multi':
                         tx.vin[0].scriptSig = CScript([b'', sig, bytes(script)])
                     else:
-                        tx.vin[0].scriptSig = CScript([program]) if kind.startswith('wrapped') else b''
+                        tx.vin[0].scriptSig = b''
                         tx.wit.vtxinwit = [CTxInWitness()]
                         stack = [sig, pubkey if kind == 'v0' else bytes(script)]
                         if 'multi' in kind:
@@ -200,7 +198,7 @@ class WitnessV1HashTypesTest(BitcoinTestFramework):
                         assert_equal(admission['reject-reason'], 'mempool-script-verify-flag-failed (Signature hash type missing or not understood)')
                         if legacy_or_v0:
                             self.check_existing_final(tx, funding['tx'], index, value, kind, script, output, secret, active)
-        self.log.info('All five schemes: defined/undefined bytes, native/wrapped v1, legacy/v0 single-signature and multisig controls, and negated checks verified')
+        self.log.info('All five schemes: defined/undefined bytes, native v1, legacy/v0 single-signature and multisig controls, and negated checks verified')
 
 
 if __name__ == '__main__':

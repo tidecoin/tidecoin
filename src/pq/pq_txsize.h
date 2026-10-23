@@ -21,10 +21,10 @@ inline constexpr size_t SigLenMaxInScript(const SchemeInfo& info)
     return info.sig_bytes_max + 1;
 }
 
-inline constexpr size_t SigLenFixedInScript(const SchemeInfo& info)
+inline constexpr size_t SigLenSignMaxInScript(const SchemeInfo& info)
 {
-    // Fixed-size encoding (when applicable), plus sighash byte.
-    return info.sig_bytes_fixed + 1;
+    // Local signing bound, plus sighash byte. Falcon signatures remain variable length.
+    return info.sig_bytes_sign_max + 1;
 }
 
 inline int64_t VSizeFromWeight(int64_t weight)

@@ -349,4 +349,34 @@ BOOST_AUTO_TEST_CASE(witness_v1_spent_output_commitments)
     }
 }
 
+BOOST_AUTO_TEST_CASE(witness_v1_single_output_hash_cache)
+{
+    CMutableTransaction tx;
+    tx.version = 2;
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256{1}), 0}, CScript{}, 0xfffffffe);
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256{2}), 1}, CScript{}, 0xfffffffd);
+    tx.vout.emplace_back(700, CScript{} << OP_TRUE);
+    tx.vout.emplace_back(500, CScript{} << OP_2);
+    const CScript script{CScript{} << OP_TRUE};
+    PrecomputedTransactionData data;
+    data.Init(tx, std::vector<CTxOut>{{1000, script}, {2000, CScript{} << OP_2}}, true);
+    for (unsigned int input : {0U, 1U}) {
+        // One cache per input, as each checker holds; repeated checks reuse it.
+        std::optional<uint512> cache;
+        bool single_seen{false};
+        for (int round{0}; round < 2; ++round) {
+            for (int mode : std::initializer_list<int>{SIGHASH_ALL, SIGHASH_NONE, SIGHASH_SINGLE, SIGHASH_ALL | SIGHASH_ANYONECANPAY,
+                                                      SIGHASH_NONE | SIGHASH_ANYONECANPAY, SIGHASH_SINGLE | SIGHASH_ANYONECANPAY}) {
+                uint512 cached, fresh;
+                BOOST_REQUIRE(SignatureHash512(cached, script, tx, input, mode, 1000, &data, &cache));
+                BOOST_REQUIRE(SignatureHash512(fresh, script, tx, input, mode, 1000, &data));
+                BOOST_CHECK(cached == fresh);
+                // Only SINGLE fills the cache.
+                single_seen |= (mode & 0x1f) == SIGHASH_SINGLE;
+                BOOST_CHECK_EQUAL(cache.has_value(), single_seen);
+            }
+        }
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -107,27 +107,27 @@ BOOST_AUTO_TEST_CASE(v1_vectors_master_seed_0_all_schemes_hashes)
 
     // purpose' and coin_type' are centralized in `src/pq/pqhd_params.h` (see `doc/design/pqhd.md`).
     run(pq::SchemeId::FALCON_512,
-        {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 7U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U},
+        {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 7U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U},
         "cb72ac890ce605a32850b885abcd4e83a3e30bcc68f08eaacc342bfdd30ebba5",
         "935f9316ecc62adb2b2c5ce7b2b948d848d1884528a79c3162a2e25989e84f35");
 
     run(pq::SchemeId::FALCON_1024,
-        {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 8U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U},
+        {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 8U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U},
         "ec638e05cfb547b3315bcd798002e512869782382cbc290561df9435fe2ba7f1",
         "dcbc3734ce83292c3efede196ac38bbc9b6f92f153974507b86b379415a1d42c");
 
     run(pq::SchemeId::MLDSA_44,
-        {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 9U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U},
+        {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 9U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U},
         "e507351f4903882e597367309d0f1a25053200b39c93ed5288cb8b9821ff749b",
         "3364238c559c07268cde4e7b4bb8f54c46e944804a93abaada81a0645bca26e7");
 
     run(pq::SchemeId::MLDSA_65,
-        {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 10U, HARDENED | 2U, HARDENED | 1U, HARDENED | 5U},
+        {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 10U, HARDENED | 2U, HARDENED | 1U, HARDENED | 5U},
         "3ef25f8229327412340beac8b81af09482e5f7b15f040e919c38cd913045fbbd",
         "f7cac55ef3f5c164e4e17a801ebd7b2cc24aabf236443761427b28c8f2e4d10e");
 
     run(pq::SchemeId::MLDSA_87,
-        {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 11U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U},
+        {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 11U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U},
         "1288715e0d9a64a30ab5066536b5a7a50af1a882e193ec67433a675da7b36237",
         "7b5d56dd11ae1afd25e51b27f014492742b2ca2ebca324efdb0cdcee6a40cf98");
 }
@@ -150,8 +150,8 @@ BOOST_AUTO_TEST_CASE(v1_branch_domain_separation_receive_vs_change)
     };
 
     const std::array<uint32_t, 6> receive_path{
-        HARDENED | pqhd::PURPOSE,
-        HARDENED | pqhd::COIN_TYPE,
+        HARDENED | pqhd::PURPOSE_GENERIC,
+        HARDENED | pqhd::COIN_TYPE_MAIN,
         HARDENED | static_cast<uint32_t>(static_cast<uint8_t>(pq::SchemeId::FALCON_512)),
         HARDENED | 0U,
         HARDENED | 0U,
@@ -224,8 +224,8 @@ BOOST_AUTO_TEST_CASE(deterministic_keygen_retry_uses_next_stream_block)
     const auto master = pqhd::MakeMasterNode(std::span<const uint8_t, 32>(master_seed));
 
     const std::array<std::pair<pq::SchemeId, std::array<uint32_t, 6>>, 2> cases{{
-        {pq::SchemeId::FALCON_512, {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 7U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
-        {pq::SchemeId::FALCON_1024, {HARDENED | pqhd::PURPOSE, HARDENED | pqhd::COIN_TYPE, HARDENED | 8U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
+        {pq::SchemeId::FALCON_512, {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 7U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
+        {pq::SchemeId::FALCON_1024, {HARDENED | pqhd::PURPOSE_GENERIC, HARDENED | pqhd::COIN_TYPE_MAIN, HARDENED | 8U, HARDENED | 0U, HARDENED | 0U, HARDENED | 0U}},
     }};
 
     for (const auto& [scheme_id, path] : cases) {
@@ -273,8 +273,8 @@ BOOST_AUTO_TEST_CASE(deterministic_keygen_retry_exhausts_failures)
     const auto master_seed = ParseHexArray<32>("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
     const auto master = pqhd::MakeMasterNode(std::span<const uint8_t, 32>(master_seed));
     const std::array<uint32_t, 6> path{
-        HARDENED | pqhd::PURPOSE,
-        HARDENED | pqhd::COIN_TYPE,
+        HARDENED | pqhd::PURPOSE_GENERIC,
+        HARDENED | pqhd::COIN_TYPE_MAIN,
         HARDENED | 7U,
         HARDENED | 0U,
         HARDENED | 0U,

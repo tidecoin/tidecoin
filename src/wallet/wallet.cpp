@@ -2746,9 +2746,10 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, boo
         }
     }
 
-    // Check every enrolled manager before contacting any device. A later
-    // manager's conflicting target must not follow an earlier device request.
-    if (sign && IsWalletFlagSet(WALLET_FLAG_EXTERNAL_SIGNER)) {
+    // Check every manager before any signs or contacts a device. A manager
+    // could otherwise finalize another manager's cached partial signature, or
+    // a later manager's conflicting target follow an earlier device request.
+    if (sign) {
         std::optional<PSBTError> refusal;
         for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
             const auto error = spk_man->CheckPSBTSigningIntent(psbtx, txdata, *sighash_type, script_verify_flags, input_errors);
@@ -4189,8 +4190,8 @@ DescriptorScriptPubKeyMan* CWallet::FindPQHDDescriptorForPath(const OutputType& 
         if (info->path.size() != 5) return false;
 
         const auto masked = [](uint32_t v) { return v & 0x7FFFFFFFUL; };
-        if (masked(info->path[0]) != pqhd::PURPOSE) return false;
-        if (masked(info->path[1]) != pqhd::COIN_TYPE) return false;
+        if (masked(info->path[0]) != PQHDPurposeForOutputType(type)) return false;
+        if (masked(info->path[1]) != Params().PQHDCoinType()) return false;
         if (masked(info->path[2]) != scheme_u32) return false;
         if (masked(info->path[3]) != 0U) return false;
         if (masked(info->path[4]) != (internal ? 1U : 0U)) return false;

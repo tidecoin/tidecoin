@@ -335,7 +335,7 @@ BOOST_AUTO_TEST_CASE(PQHDSchemeGatePreAuxpow)
     }
 
     const std::string desc_str = strprintf("wpkh(pqhd(%s)/%uh/%uh/9h/0h/0h/*h)",
-                                           seed_id.ToString(), pqhd::PURPOSE, pqhd::COIN_TYPE);
+                                           seed_id.ToString(), pqhd::PURPOSE_WPKH, Params().PQHDCoinType());
     auto spk_man = CreateDescriptor(wallet, desc_str, true);
     BOOST_REQUIRE(spk_man != nullptr);
 
@@ -348,6 +348,71 @@ BOOST_AUTO_TEST_CASE(PQHDSchemeGatePreAuxpow)
     } else {
         BOOST_CHECK(!res);
     }
+}
+
+BOOST_AUTO_TEST_CASE(PQHDWitnessV1IssuanceGatedPreAuxpow)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
+
+    CWallet wallet(chain.get(), "", CreateMockableWalletDatabase());
+    wallet.m_keypool_size = 1; // This case tests issuance gating, not pool capacity.
+    uint256 seed_id;
+    {
+        LOCK(wallet.cs_wallet);
+        wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+        wallet.SetupDescriptorScriptPubKeyMans();
+        seed_id = Assert(wallet.GetPQHDPolicy())->default_seed_id;
+    }
+    BOOST_REQUIRE(wallet.GetTargetHeightForOutputs() < Params().GetConsensus().nAuxpowStartHeight);
+
+    // Native v1 issuance is gated; P2SH-wrapped v0 remains available.
+    const auto key = [&](uint32_t purpose) {
+        return strprintf("pqhd(%s)/%uh/%uh/7h/0h/0h/*h", seed_id.ToString(), purpose, Params().PQHDCoinType());
+    };
+    auto* native_v1 = CreateDescriptor(wallet, "wsh512(pk(" + key(pqhd::PURPOSE_WSH512) + "))", true);
+    BOOST_REQUIRE(native_v1);
+    const auto v1_res = native_v1->GetNewDestination(OutputType::BECH32PQ);
+    BOOST_REQUIRE(!v1_res);
+    BOOST_CHECK(util::ErrorString(v1_res).original.find("PQ v1 outputs not allowed") != std::string::npos);
+
+    auto* wrapped_v0 = CreateDescriptor(wallet, "sh(wpkh(" + key(pqhd::PURPOSE_GENERIC) + "))", true);
+    BOOST_REQUIRE(wrapped_v0);
+    BOOST_CHECK(wrapped_v0->GetNewDestination(OutputType::P2SH_SEGWIT));
+}
+
+BOOST_AUTO_TEST_CASE(PQHDDefaultDescriptorsUseFamilyPaths)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
+
+    CWallet wallet(chain.get(), "", CreateMockableWalletDatabase());
+    wallet.m_keypool_size = 1; // Index 0 of each family is enough.
+    LOCK(wallet.cs_wallet);
+    wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+    wallet.SetupDescriptorScriptPubKeyMans();
+
+    for (const OutputType type : {OutputType::LEGACY, OutputType::P2SH_SEGWIT, OutputType::BECH32}) {
+        for (const bool internal : {false, true}) {
+            auto* manager = dynamic_cast<DescriptorScriptPubKeyMan*>(wallet.GetScriptPubKeyMan(type, internal));
+            BOOST_REQUIRE(manager);
+            LOCK(manager->cs_desc_man);
+            const auto info = manager->GetWalletDescriptor().descriptor->GetPQHDKeyPathInfo();
+            BOOST_REQUIRE(info);
+            BOOST_REQUIRE_EQUAL(info->path.size(), 5U);
+            BOOST_CHECK_EQUAL(info->path[0] & 0x7FFFFFFFU, PQHDPurposeForOutputType(type));
+            BOOST_CHECK_EQUAL(info->path[1] & 0x7FFFFFFFU, Params().PQHDCoinType());
+        }
+    }
+
+    // pkh and wpkh at the same index would otherwise share HASH160(pubkey).
+    const auto legacy = wallet.GetNewDestination(OutputType::LEGACY, "");
+    const auto bech32 = wallet.GetNewDestination(OutputType::BECH32, "");
+    BOOST_REQUIRE(legacy && bech32);
+    const auto* pkh = std::get_if<PKHash>(&*legacy);
+    const auto* wpkh = std::get_if<WitnessV0KeyHash>(&*bech32);
+    BOOST_REQUIRE(pkh && wpkh);
+    BOOST_CHECK(uint160(*pkh) != uint160(*wpkh));
 }
 
 BOOST_AUTO_TEST_CASE(PQHDDefaultKeypoolAndInternalScheme)
@@ -411,8 +476,8 @@ BOOST_AUTO_TEST_CASE(PQHDSeedRemovalBlockedForMixedDescriptorPaths)
         "wsh(sortedmulti(2,"
         "pqhd(%s)/%uh/%uh/%uh/0h/0h/*h,"
         "pqhd(%s)/%uh/%uh/%uh/0h/1h/*h))",
-        default_seed_id.ToString(), pqhd::PURPOSE, pqhd::COIN_TYPE, falcon512,
-        imported_seed_id.ToString(), pqhd::PURPOSE, pqhd::COIN_TYPE, falcon512);
+        default_seed_id.ToString(), pqhd::PURPOSE_GENERIC, Params().PQHDCoinType(), falcon512,
+        imported_seed_id.ToString(), pqhd::PURPOSE_GENERIC, Params().PQHDCoinType(), falcon512);
     auto* spk_man = CreateDescriptor(wallet, desc_str, true);
     BOOST_REQUIRE(spk_man != nullptr);
 

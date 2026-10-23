@@ -536,6 +536,15 @@ public:
     }
 
     // NOLINTNEXTLINE(misc-no-recursion)
+    bool HasWitnessV1() const override
+    {
+        for (const auto& arg : m_subdescriptor_args) {
+            if (arg->HasWitnessV1()) return true;
+        }
+        return false;
+    }
+
+    // NOLINTNEXTLINE(misc-no-recursion)
     virtual bool ToStringSubScriptHelper(const SigningProvider* arg, std::string& ret, const StringType type, const DescriptorCache* cache = nullptr) const
     {
         size_t pos = 0;
@@ -765,6 +774,7 @@ public:
     {
         return OutputTypeFromDestination(m_destination);
     }
+    bool HasWitnessV1() const override { return std::holds_alternative<WitnessV1ScriptHash512>(m_destination); }
     bool IsSingleType() const final { return true; }
     bool ToPrivateString(const SigningProvider& arg, std::string& out) const final { return false; }
 
@@ -792,6 +802,11 @@ public:
         ExtractDestination(m_script, dest);
         return OutputTypeFromDestination(dest);
     }
+    bool HasWitnessV1() const override
+    {
+        std::vector<std::vector<unsigned char>> solutions;
+        return Solver(m_script, solutions) == TxoutType::WITNESS_V1_SCRIPTHASH_512;
+    }
     bool IsSingleType() const final { return true; }
     bool ToPrivateString(const SigningProvider& arg, std::string& out) const final { return false; }
 
@@ -815,7 +830,7 @@ size_t SigLenInScript(const PubkeyProvider& pubkey, bool use_max_sig)
 {
     if (const auto pfx = pubkey.GetSchemePrefix()) {
         if (const auto* scheme = pq::SchemeFromPrefix(*pfx)) {
-            return (use_max_sig ? scheme->sig_bytes_max : scheme->sig_bytes_fixed) + 1;
+            return (use_max_sig ? scheme->sig_bytes_max : scheme->sig_bytes_sign_max) + 1;
         }
     }
 
@@ -1125,6 +1140,7 @@ protected:
 public:
     WSH512Descriptor(std::unique_ptr<DescriptorImpl> desc) : DescriptorImpl({}, std::move(desc), "wsh512") {}
     std::optional<OutputType> GetOutputType() const override { return OutputType::BECH32PQ; }
+    bool HasWitnessV1() const override { return true; }
     bool IsSingleType() const final { return true; }
 
     std::optional<int64_t> ScriptSize() const override { return 1 + 1 + 64; }
@@ -1405,17 +1421,16 @@ std::vector<std::unique_ptr<PubkeyProvider>> ParsePubkeyInner(uint32_t key_exp_i
             return {};
         }
 
-        const auto check_eq = [&](size_t idx, uint32_t expected, std::string_view name) -> bool {
-            if (idx >= path.size()) return false;
-            const uint32_t v = path[idx] & 0x7FFFFFFFUL;
-            if (v != expected) {
-                error = strprintf("pqhd() %s must be %u, got %u", name, expected, v);
-                return false;
-            }
-            return true;
-        };
-        if (!check_eq(0, pqhd::PURPOSE, "purpose")) return {};
-        if (!check_eq(1, pqhd::COIN_TYPE, "coin_type")) return {};
+        const uint32_t purpose_u32 = path[0] & 0x7FFFFFFFUL;
+        if (!pqhd::IsKnownPurpose(purpose_u32)) {
+            error = strprintf("pqhd() purpose %u is not recognized", purpose_u32);
+            return {};
+        }
+        const uint32_t coin_type_u32 = path[1] & 0x7FFFFFFFUL;
+        if (!pqhd::IsKnownCoinType(coin_type_u32)) {
+            error = strprintf("pqhd() coin_type must be %u or %u, got %u", pqhd::COIN_TYPE_MAIN, pqhd::COIN_TYPE_TEST, coin_type_u32);
+            return {};
+        }
 
         const uint32_t scheme_u32 = path[2] & 0x7FFFFFFFUL;
         if (scheme_u32 > 0xFF) {
@@ -1755,7 +1770,7 @@ std::vector<std::unique_ptr<DescriptorImpl>> ParseScript(uint32_t& key_exp_index
         error = "Can only have wsh() at top level or inside sh()";
         return {};
     }
-    if ((ctx == ParseScriptContext::TOP || ctx == ParseScriptContext::P2SH) && Func("wsh512", expr)) {
+    if (ctx == ParseScriptContext::TOP && Func("wsh512", expr)) {
         auto descs = ParseScript(key_exp_index, expr, ParseScriptContext::P2WSH, out, error);
         if (descs.empty() || expr.size()) return {};
         for (auto& desc : descs) {
@@ -1763,7 +1778,7 @@ std::vector<std::unique_ptr<DescriptorImpl>> ParseScript(uint32_t& key_exp_index
         }
         return ret;
     } else if (Func("wsh512", expr)) {
-        error = "Can only have wsh512() at top level or inside sh()";
+        error = "Can only have wsh512() at top level";
         return {};
     }
     if (ctx == ParseScriptContext::TOP && Func("addr", expr)) {
@@ -1939,7 +1954,7 @@ std::unique_ptr<DescriptorImpl> InferScript(const CScript& script, ParseScriptCo
             if (sub) return std::make_unique<WSHDescriptor>(std::move(sub));
         }
     }
-    if (txntype == TxoutType::WITNESS_V1_SCRIPTHASH_512 && (ctx == ParseScriptContext::TOP || ctx == ParseScriptContext::P2SH)) {
+    if (txntype == TxoutType::WITNESS_V1_SCRIPTHASH_512 && ctx == ParseScriptContext::TOP) {
         CScriptID scriptid{RIPEMD160(data[0])};
         CScript subscript;
         if (provider.GetCScript(scriptid, subscript)) {

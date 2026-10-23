@@ -34,6 +34,18 @@ fs::path GetWalletDir()
     return path;
 }
 
+uint32_t PQHDPurposeForOutputType(OutputType output_type)
+{
+    switch (output_type) {
+    case OutputType::LEGACY: return pqhd::PURPOSE_PKH;
+    case OutputType::P2SH_SEGWIT: return pqhd::PURPOSE_SH_WPKH;
+    case OutputType::BECH32: return pqhd::PURPOSE_WPKH;
+    case OutputType::BECH32PQ: return pqhd::PURPOSE_WSH512;
+    case OutputType::UNKNOWN: break;
+    } // no default case, so the compiler can warn about missing cases
+    assert(false);
+}
+
 WalletDescriptor GeneratePQHDWalletDescriptor(const uint256& seed_id,
                                               uint8_t scheme_prefix,
                                               const OutputType& addr_type,
@@ -58,8 +70,8 @@ WalletDescriptor GeneratePQHDWalletDescriptor(const uint256& seed_id,
     const uint32_t scheme_u32{scheme_prefix};
     std::string key_expr = strprintf("pqhd(%s)/%uh/%uh/%uh/0h/%uh/*h",
                                      seed_id.ToString(),
-                                     pqhd::PURPOSE,
-                                     pqhd::COIN_TYPE,
+                                     PQHDPurposeForOutputType(addr_type),
+                                     Params().PQHDCoinType(),
                                      scheme_u32,
                                      internal ? 1U : 0U);
 

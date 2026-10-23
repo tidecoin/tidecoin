@@ -279,10 +279,8 @@ std::set<COutPoint> ParsePrevouts(const UniValue& prevTxsUnival, FlatSigningProv
                 CScript witness_output_script{GetScriptForDestination(WitnessV0ScriptHash(script))};
                 keystore->scripts.emplace(CScriptID(witness_output_script), witness_output_script);
                 const WitnessV1ScriptHash512 witness_hash512{script};
-                const CScript witness_output_script512{GetScriptForDestination(witness_hash512)};
-                keystore->scripts.emplace(CScriptID(witness_output_script512), witness_output_script512);
-                // Both direct and P2SH-wrapped v1 lookups use RIPEMD160 of
-                // the SHA-512 witness program, rather than CScriptID(script).
+                // Native v1 lookups use RIPEMD160 of the SHA-512 witness
+                // program, rather than CScriptID(script).
                 keystore->scripts.emplace(CScriptID{RIPEMD160(witness_hash512)}, script);
 
                 if (!ws.isNull() && !rs.isNull()) {
@@ -293,7 +291,7 @@ std::set<COutPoint> ParsePrevouts(const UniValue& prevTxsUnival, FlatSigningProv
                     if (ws.get_str() != rs.get_str()) {
                         std::vector<unsigned char> redeemScriptData(ParseHexV(rs, "redeemScript"));
                         CScript redeemScript(redeemScriptData.begin(), redeemScriptData.end());
-                        if (redeemScript != witness_output_script && redeemScript != witness_output_script512) {
+                        if (redeemScript != witness_output_script) {
                             throw JSONRPCError(RPC_INVALID_PARAMETER, "redeemScript does not correspond to witnessScript");
                         }
                         if (is_p2sh && scriptPubKey != GetScriptForDestination(ScriptHash(redeemScript))) {
@@ -305,15 +303,13 @@ std::set<COutPoint> ParsePrevouts(const UniValue& prevTxsUnival, FlatSigningProv
                 if (is_p2sh) {
                     const CTxDestination p2sh{ScriptHash(script)};
                     const CTxDestination p2sh_p2wsh{ScriptHash(witness_output_script)};
-                    const CTxDestination p2sh_p2wsh512{ScriptHash(witness_output_script512)};
                     if (scriptPubKey == GetScriptForDestination(p2sh)) {
                         // traditional p2sh; arguably an error if
                         // we got here with rs.IsNull(), because
                         // that means the p2sh script was specified
                         // via witnessScript param, but for now
                         // we'll just quietly accept it
-                    } else if (scriptPubKey == GetScriptForDestination(p2sh_p2wsh) ||
-                               scriptPubKey == GetScriptForDestination(p2sh_p2wsh512)) {
+                    } else if (scriptPubKey == GetScriptForDestination(p2sh_p2wsh)) {
                         // p2wsh encoded as p2sh; ideally the witness
                         // script was specified in the witnessScript
                         // param, but also support specifying it via

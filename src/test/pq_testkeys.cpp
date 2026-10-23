@@ -172,9 +172,10 @@ bool ParseArgs(int argc, char* argv[], Options& opt)
     if (!opt.have_seed) return false;
 
     if (opt.path_hardened.empty()) {
+        // A fixed generic path, independent of wallet defaults, keeps test keys stable.
         opt.path_hardened = {
-            0x80000000U | pqhd::PURPOSE,
-            0x80000000U | pqhd::COIN_TYPE,
+            0x80000000U | pqhd::PURPOSE_GENERIC,
+            0x80000000U | pqhd::COIN_TYPE_MAIN,
             0x80000000U | static_cast<uint32_t>(opt.scheme_id),
             0x80000000U | 0U,
             0x80000000U | 0U,

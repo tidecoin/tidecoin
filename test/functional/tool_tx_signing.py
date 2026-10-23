@@ -12,7 +12,7 @@ from pathlib import Path
 from feature_auxpow_mempool_transition import falcon_signature_variants
 from test_framework.address import ADDRESS_BCRT1_P2WSH_OP_TRUE
 from test_framework.messages import COutPoint, CTransaction, CTxIn, CTxInWitness, CTxOut, tx_from_hex
-from test_framework.script import CScript, OP_0, OP_1, OP_EQUAL, OP_NOP4, OP_TRUE
+from test_framework.script import CScript, OP_0, OP_1, OP_2DROP, OP_4, OP_CHECKMULTISIG, OP_EQUAL, OP_NOP4, OP_TRUE
 from test_framework.script_util import key_to_p2pk_script, key_to_p2sh_p2wpkh_script, key_to_p2wpkh_script, script_to_p2sh_script
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error
@@ -82,10 +82,24 @@ class TxSigningTest(BitcoinTestFramework):
                 ("v0-script", v0, {"witnessScript": script.hex()}),
                 ("v0-wrapped-script", script_to_p2sh_script(v0), {"witnessScript": script.hex(), "redeemScript": v0.hex()}),
                 ("v1-native", v1, {"witnessScript": script.hex()}),
-                ("v1-wrapped", script_to_p2sh_script(v1), {"witnessScript": script.hex(), "redeemScript": v1.hex()}),
             ]:
                 cases.append(dict(scheme=scheme, kind=kind, output=output, fields=fields, secret=secret, script=script,
                                   key_program=key_to_p2wpkh_script(pubkey)))
+            if scheme == 11:
+                # A PQ multisig witness script above the 8192-byte element
+                # limit, which applies to P2SH redeem scripts but not here.
+                others = [generate_keypair(scheme="11")[1] for _ in range(3)]
+                large = CScript([OP_1, pubkey, *others, OP_4, OP_CHECKMULTISIG])
+                assert len(large) > 8192
+                v0 = CScript([OP_0, sha256(large).digest()])
+                v1 = CScript([OP_1, sha512(large).digest()])
+                for kind, output, fields in [
+                    ("v0-script-large", v0, {"witnessScript": large.hex()}),
+                    ("v0-wrapped-script-large", script_to_p2sh_script(v0), {"witnessScript": large.hex(), "redeemScript": v0.hex()}),
+                    ("v1-native-large", v1, {"witnessScript": large.hex()}),
+                ]:
+                    cases.append(dict(scheme=scheme, kind=kind, output=output, fields=fields, secret=secret, script=large,
+                                      key_program=key_to_p2wpkh_script(pubkey)))
 
         payload = b"Offline SHA512 rules"
         sha_script = CScript([OP_NOP4, sha512(payload).digest(), OP_EQUAL])
@@ -139,9 +153,11 @@ class TxSigningTest(BitcoinTestFramework):
                 stack = changed.wit.vtxinwit[0].scriptWitness.stack
             else:
                 stack = list(CScript(changed.vin[0].scriptSig))
-            signature = bytearray(stack[0])
+            # Multisig witnesses start with an empty dummy element.
+            position = next(i for i, item in enumerate(stack) if item)
+            signature = bytearray(stack[position])
             signature[len(signature) // 2] ^= 1
-            stack[0] = bytes(signature)
+            stack[position] = bytes(signature)
             if not case["kind"].startswith("v"):
                 changed.vin[0].scriptSig = CScript(stack)
             self.tool(changed.serialize().hex(), previous, rules="post-auxpow", success=False)
@@ -155,19 +171,18 @@ class TxSigningTest(BitcoinTestFramework):
                     self.tool(unsigned, alias, rules="post-auxpow", keys=[case["secret"]])
                 mismatch = [{**previous[0], "witnessScript": CScript([OP_TRUE]).hex()}]
                 self.tool(unsigned, mismatch, rules="post-auxpow", keys=[case["secret"]], success=False)
-                # A matching pair of scripts must still match the actual output.
+                # Supplied scripts must still match the actual output.
                 different = CScript([OP_TRUE])
-                version = 1 if case["kind"].startswith("v1") else 0
-                digest = sha512(different).digest() if version else sha256(different).digest()
-                mismatch = [{**basic_previous[0], "witnessScript": different.hex(),
-                             "redeemScript": CScript([OP_1 if version else OP_0, digest]).hex()}]
+                mismatch = [{**basic_previous[0], "witnessScript": different.hex()}]
+                if "wrapped" in case["kind"]:
+                    mismatch[0]["redeemScript"] = CScript([OP_0, sha256(different).digest()]).hex()
                 self.tool(unsigned, mismatch, rules="post-auxpow", keys=[case["secret"]], success=False,
                           error="does not match scriptPubKey")
                 if "wrapped" in case["kind"]:
-                    other_wrapper = CScript([OP_0, sha256(case["script"]).digest()]) if version else CScript([OP_1, sha512(case["script"]).digest()])
+                    other_wrapper = CScript([OP_1, sha512(case["script"]).digest()])
                     mismatch = [{**previous[0], "redeemScript": other_wrapper.hex()}]
                     self.tool(unsigned, mismatch, rules="post-auxpow", keys=[case["secret"]], success=False,
-                              error="does not match scriptPubKey")
+                              error="does not correspond to witnessScript")
             if case["kind"].startswith("v"):
                 missing = [{k: v for k, v in previous[0].items() if k != "amount"}]
                 self.tool(raw, missing, rules="post-auxpow", success=False, error="Missing amount")
@@ -196,12 +211,18 @@ class TxSigningTest(BitcoinTestFramework):
         assert_equal(node.testmempoolaccept([completed])[0]["allowed"], True)
         self.tool(completed, [extra], rules="post-auxpow", success=False, error="prevtxs missing for input")
 
-        self.log.info("Script registration retains the size limit and rejects invalid fields")
-        tx, previous, secret, _ = fixtures["7/v1-native"]
-        # Tidecoin's MAX_SCRIPT_ELEMENT_SIZE is 8192 bytes.
-        oversized = [{**previous[0], "witnessScript": "51" * 8193}]
+        self.log.info("Script registration applies each script role's size limit and rejects invalid fields")
+        tx, previous, secret, _ = fixtures["7/p2sh"]
+        # A P2SH redeem script is one stack element: at most 8192 bytes.
+        redeem = CScript([bytes(4100), bytes(4100), OP_2DROP, OP_TRUE])
+        oversized = [{**previous[0], "scriptPubKey": script_to_p2sh_script(redeem).hex(), "redeemScript": redeem.hex()}]
         self.tool(tx.serialize().hex(), oversized, rules="post-auxpow", keys=[secret], success=False,
-                  error="exceeds maximum script element size")
+                  error="redeemScript exceeds maximum script element size")
+        tx, previous, secret, _ = fixtures["7/v1-native"]
+        # A witness script is limited only by the 65536-byte script size.
+        oversized = [{**previous[0], "witnessScript": "51" * 65537}]
+        self.tool(tx.serialize().hex(), oversized, rules="post-auxpow", keys=[secret], success=False,
+                  error="witnessScript exceeds maximum script size")
         malformed = [{**previous[0], "witnessScript": 123}]
         self.tool(tx.serialize().hex(), malformed, rules="post-auxpow", keys=[secret], success=False,
                   error="must be hexadecimal string")

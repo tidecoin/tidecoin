@@ -62,12 +62,12 @@ class WitnessV1PSBTTest(BitcoinTestFramework):
     def check_finalization(self, scheme):
         node, offline = self.nodes
         secret, _ = generate_keypair(wif=True, scheme=str(scheme))
-        for kind in ('v0', 'v1', 'wrapped_v1'):
-            template = 'wsh' if kind == 'v0' else 'wsh512'
+        for kind in ('v0', 'v1', 'wrapped_v0'):
+            template = 'wsh512' if kind == 'v1' else 'wsh'
             descriptor = descsum_create(f'{template}(pk({secret}))')
             public = node.getdescriptorinfo(descriptor)['descriptor']
             address = node.deriveaddresses(public)[0]
-            wrapper = bytes.fromhex(node.validateaddress(address)['scriptPubKey']) if kind == 'wrapped_v1' else None
+            wrapper = bytes.fromhex(node.validateaddress(address)['scriptPubKey']) if kind == 'wrapped_v0' else None
             if wrapper is not None:
                 address = script_to_p2sh(wrapper)
             outpoint, previous = self.fund(address)
@@ -78,7 +78,7 @@ class WitnessV1PSBTTest(BitcoinTestFramework):
             partial = offline.descriptorprocesspsbt(psbt=psbt.to_base64(), descriptors=[descriptor], finalize=False)['psbt']
             decoded = offline.decodepsbt(partial)['inputs'][0]
             assert 'partial_signatures' in decoded
-            assert_equal('non_witness_utxo' in decoded, kind == 'v0')
+            assert_equal('non_witness_utxo' in decoded, kind != 'v1')
             final = offline.finalizepsbt(partial)
             assert final['complete']
             assert node.testmempoolaccept([final['hex']])[0]['allowed']
@@ -116,7 +116,7 @@ class WitnessV1PSBTTest(BitcoinTestFramework):
                 assert not offline.finalizepsbt(bad.to_base64())['complete']
                 analysis = offline.analyzepsbt(bad.to_base64())
                 witness_script = bytes.fromhex(decoded['witness_script']['hex'])
-                commitment = (sha256 if kind == 'v0' else sha512)(witness_script).hexdigest()
+                commitment = (sha512 if kind == 'v1' else sha256)(witness_script).hexdigest()
                 assert_equal(analysis['inputs'][0]['missing']['witnessscript'], commitment)
                 assert_equal(analysis['next'], 'updater')
                 assert 'estimated_vsize' not in analysis
@@ -153,49 +153,41 @@ class WitnessV1PSBTTest(BitcoinTestFramework):
         secret1, pub1 = generate_keypair(wif=True, scheme=str(scheme))
         descriptors = [descsum_create(f'wsh512(multi(2,{secret0},{pub1.hex()}))'),
                        descsum_create(f'wsh512(multi(2,{pub0.hex()},{secret1}))')]
-        for wrapped in (False, True):
-            address = node.deriveaddresses(descriptors[0])[0]
-            wrapper = bytes.fromhex(node.validateaddress(address)['scriptPubKey'])
-            if wrapped:
-                address = script_to_p2sh(wrapper)
-            outpoint, previous = self.fund(address)
-            psbt = PSBT.from_base64(node.createpsbt([outpoint], {self.destination: Decimal('0.99')}))
-            psbt.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = previous
-            if wrapped:
-                psbt.i[0].map[PSBT_IN_REDEEM_SCRIPT] = wrapper
-            partials = [offline.descriptorprocesspsbt(psbt=psbt.to_base64(), descriptors=[desc], finalize=False)['psbt'] for desc in descriptors]
-            for partial in partials:
-                assert not offline.finalizepsbt(partial)['complete']
-                self.check_analysis(partial, 'signer')
-            combined = offline.combinepsbt(partials)
-            final = offline.finalizepsbt(combined)
-            assert final['complete']
-            assert node.testmempoolaccept([final['hex']])[0]['allowed']
-            vsize = node.decoderawtransaction(final['hex'])['vsize']
-            self.check_analysis(combined, 'finalizer', vsize=vsize)
-            self.check_analysis(offline.finalizepsbt(combined, False)['psbt'], 'extractor', vsize=vsize)
-            decoded = offline.decodepsbt(partials[0])['inputs'][0]
-            prevout = dict(outpoint, amount=1, scriptPubKey=node.validateaddress(address)['scriptPubKey'],
-                           witnessScript=decoded['witness_script']['hex'])
-            if wrapped:
-                prevout['redeemScript'] = wrapper.hex()
-            raw_partials = [node.signrawtransactionwithkey(psbt.tx.serialize().hex(), [secret], [prevout])
-                            for secret in (secret0, secret1)]
-            assert all(not part['complete'] for part in raw_partials)
-            combined_raw = node.combinerawtransaction([part['hex'] for part in raw_partials])
-            assert node.testmempoolaccept([combined_raw])[0]['allowed']
-            node.sendrawtransaction(final['hex'])
+        address = node.deriveaddresses(descriptors[0])[0]
+        outpoint, previous = self.fund(address)
+        psbt = PSBT.from_base64(node.createpsbt([outpoint], {self.destination: Decimal('0.99')}))
+        psbt.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = previous
+        partials = [offline.descriptorprocesspsbt(psbt=psbt.to_base64(), descriptors=[desc], finalize=False)['psbt'] for desc in descriptors]
+        for partial in partials:
+            assert not offline.finalizepsbt(partial)['complete']
+            self.check_analysis(partial, 'signer')
+        combined = offline.combinepsbt(partials)
+        final = offline.finalizepsbt(combined)
+        assert final['complete']
+        assert node.testmempoolaccept([final['hex']])[0]['allowed']
+        vsize = node.decoderawtransaction(final['hex'])['vsize']
+        self.check_analysis(combined, 'finalizer', vsize=vsize)
+        self.check_analysis(offline.finalizepsbt(combined, False)['psbt'], 'extractor', vsize=vsize)
+        decoded = offline.decodepsbt(partials[0])['inputs'][0]
+        prevout = dict(outpoint, amount=1, scriptPubKey=node.validateaddress(address)['scriptPubKey'],
+                       witnessScript=decoded['witness_script']['hex'])
+        raw_partials = [node.signrawtransactionwithkey(psbt.tx.serialize().hex(), [secret], [prevout])
+                        for secret in (secret0, secret1)]
+        assert all(not part['complete'] for part in raw_partials)
+        combined_raw = node.combinerawtransaction([part['hex'] for part in raw_partials])
+        assert node.testmempoolaccept([combined_raw])[0]['allowed']
+        node.sendrawtransaction(final['hex'])
 
     def check_mixed_analysis(self, scheme):
         node, offline = self.nodes
-        for kinds in (('v1', 'v0'), ('wrapped_v1', 'v1')):
+        for kinds in (('v1', 'v0'), ('v1', 'v1'), ('wrapped_v0', 'v1')):
             descriptors, inputs, previous, wrappers = [], [], [], []
             for kind in kinds:
                 secret, _ = generate_keypair(wif=True, scheme=str(scheme))
-                template = 'wsh' if kind == 'v0' else 'wsh512'
+                template = 'wsh512' if kind == 'v1' else 'wsh'
                 descriptor = descsum_create(f'{template}(pk({secret}))')
                 address = node.deriveaddresses(descriptor)[0]
-                wrapper = bytes.fromhex(node.validateaddress(address)['scriptPubKey']) if kind == 'wrapped_v1' else None
+                wrapper = bytes.fromhex(node.validateaddress(address)['scriptPubKey']) if kind == 'wrapped_v0' else None
                 if wrapper is not None:
                     address = script_to_p2sh(wrapper)
                 outpoint, transaction = self.fund(address)
@@ -310,42 +302,39 @@ class WitnessV1PSBTTest(BitcoinTestFramework):
     def check_multisig_foreign_data(self, scheme):
         from test_framework.psbt import PSBT_IN_FINAL_SCRIPTSIG
         node, offline = self.nodes
-        for wrapped in (False, True):
-            descriptors, inputs, previous = [], [], []
-            for owner in range(2):
-                keys = [generate_keypair(wif=True, scheme=str(scheme))[0] for _ in range(2)]
-                desc = f'wsh512(multi(2,{keys[0]},{keys[1]}))'
-                if wrapped:
-                    desc = f'sh({desc})'
-                descriptors.append(descsum_create(desc))
-                outpoint, transaction = self.fund(node.deriveaddresses(descriptors[-1])[0])
-                inputs.append(outpoint)
-                previous.append(transaction)
-            base = PSBT.from_base64(node.createpsbt(inputs, {self.destination: Decimal('0.995'), node.get_wallet_rpc(self.default_wallet_name).getnewaddress(): Decimal('0.995')}))
-            for i, transaction in enumerate(previous):
-                base.i[i].map[PSBT_IN_NON_WITNESS_UTXO] = transaction
-            public = [node.getdescriptorinfo(desc)['descriptor'] for desc in descriptors]
-            filled = offline.descriptorprocesspsbt(base.to_base64(), public, 'ALL', False)['psbt']
-            for mode in ('ALL', 'NONE', 'SINGLE', 'ALL|ANYONECANPAY', 'NONE|ANYONECANPAY', 'SINGLE|ANYONECANPAY'):
-                for change_script in (False, True):
-                    raw = CTransaction(base.tx)
-                    raw.wit.vtxinwit = [CTxInWitness(), CTxInWitness()]
-                    for owner in range(2):
-                        request = PSBT.from_base64(filled)
-                        for item in request.i:
-                            item.map.pop(PSBT_IN_NON_WITNESS_UTXO, None)
-                        foreign = request.i[1 - owner]
-                        output = CTxOut()
-                        output.deserialize(BytesIO(foreign.map[PSBT_IN_WITNESS_UTXO]))
-                        if change_script:
-                            output.scriptPubKey = b'\x51'
-                        else:
-                            output.nValue -= 1000
-                        foreign.map[PSBT_IN_WITNESS_UTXO] = output.serialize()
-                        response = PSBT.from_base64(offline.descriptorprocesspsbt(request.to_base64(), [descriptors[owner]], mode)['psbt'])
-                        raw.vin[owner].scriptSig = response.i[owner].map.get(PSBT_IN_FINAL_SCRIPTSIG, b'')
-                        raw.wit.vtxinwit[owner].deserialize(BytesIO(response.i[owner].map[PSBT_IN_FINAL_SCRIPTWITNESS]))
-                    assert_equal(node.testmempoolaccept([raw.serialize().hex()])[0]['allowed'], 'ANYONECANPAY' in mode)
+        descriptors, inputs, previous = [], [], []
+        for owner in range(2):
+            keys = [generate_keypair(wif=True, scheme=str(scheme))[0] for _ in range(2)]
+            desc = f'wsh512(multi(2,{keys[0]},{keys[1]}))'
+            descriptors.append(descsum_create(desc))
+            outpoint, transaction = self.fund(node.deriveaddresses(descriptors[-1])[0])
+            inputs.append(outpoint)
+            previous.append(transaction)
+        base = PSBT.from_base64(node.createpsbt(inputs, {self.destination: Decimal('0.995'), node.get_wallet_rpc(self.default_wallet_name).getnewaddress(): Decimal('0.995')}))
+        for i, transaction in enumerate(previous):
+            base.i[i].map[PSBT_IN_NON_WITNESS_UTXO] = transaction
+        public = [node.getdescriptorinfo(desc)['descriptor'] for desc in descriptors]
+        filled = offline.descriptorprocesspsbt(base.to_base64(), public, 'ALL', False)['psbt']
+        for mode in ('ALL', 'NONE', 'SINGLE', 'ALL|ANYONECANPAY', 'NONE|ANYONECANPAY', 'SINGLE|ANYONECANPAY'):
+            for change_script in (False, True):
+                raw = CTransaction(base.tx)
+                raw.wit.vtxinwit = [CTxInWitness(), CTxInWitness()]
+                for owner in range(2):
+                    request = PSBT.from_base64(filled)
+                    for item in request.i:
+                        item.map.pop(PSBT_IN_NON_WITNESS_UTXO, None)
+                    foreign = request.i[1 - owner]
+                    output = CTxOut()
+                    output.deserialize(BytesIO(foreign.map[PSBT_IN_WITNESS_UTXO]))
+                    if change_script:
+                        output.scriptPubKey = b'\x51'
+                    else:
+                        output.nValue -= 1000
+                    foreign.map[PSBT_IN_WITNESS_UTXO] = output.serialize()
+                    response = PSBT.from_base64(offline.descriptorprocesspsbt(request.to_base64(), [descriptors[owner]], mode)['psbt'])
+                    raw.vin[owner].scriptSig = response.i[owner].map.get(PSBT_IN_FINAL_SCRIPTSIG, b'')
+                    raw.wit.vtxinwit[owner].deserialize(BytesIO(response.i[owner].map[PSBT_IN_FINAL_SCRIPTWITNESS]))
+                assert_equal(node.testmempoolaccept([raw.serialize().hex()])[0]['allowed'], 'ANYONECANPAY' in mode)
 
     def run_test(self):
         self.generate(self.nodes[0], 201, sync_fun=self.no_op)

@@ -1,5 +1,5 @@
 schema_version = 1
-manifest_updated_on = "2026-10-11"
+manifest_updated_on = "2026-10-22"
 
 [upstream]
 pqclean_repo = "https://github.com/PQClean/PQClean"
@@ -21,9 +21,9 @@ files = ["src/pq/fips202.c"]
 id = "falcon-512-local-adaptations"
 patch_file = "src/pq/patches/falcon-512-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for Falcon-512 clean implementation."
-reason = "Expose deterministic keygen, route RNG/fips202 includes to Tidecoin-local adapters, and keep local verification behavior."
+reason = "Expose deterministic keygen, route RNG/fips202 includes to Tidecoin-local adapters, and require exact compressed signatures in strict verification."
 owner = "Tidecoin developers"
-consensus_impact = "indirect"
+consensus_impact = "direct"
 files = [
   "src/pq/falcon-512/api.h",
   "src/pq/falcon-512/inner.h",
@@ -34,9 +34,9 @@ files = [
 id = "falcon-1024-local-adaptations"
 patch_file = "src/pq/patches/falcon-1024-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for Falcon-1024 clean implementation."
-reason = "Expose deterministic keygen and route RNG/fips202 includes to Tidecoin-local adapters."
+reason = "Expose deterministic keygen, route RNG/fips202 includes to Tidecoin-local adapters, and require exact compressed signatures in strict verification."
 owner = "Tidecoin developers"
-consensus_impact = "indirect"
+consensus_impact = "direct"
 files = [
   "src/pq/falcon-1024/api.h",
   "src/pq/falcon-1024/inner.h",

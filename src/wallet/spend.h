@@ -20,6 +20,13 @@
 #include <vector>
 
 namespace wallet {
+/** Detect a native 64-byte v1 program or its unsupported, known P2SH wrapper. */
+bool IsWitnessV1Script(const CScript& script_pubkey, const SigningProvider* provider);
+
+/** Witness v1 outputs are unenforced before activation: the wallet must not
+ *  create them, and cannot spend them because a witness spend is invalid. */
+bool WitnessV1SpendsAllowed(const CWallet& wallet);
+
 /** Get the marginal bytes if spending the specified output from this transaction.
  * Use CoinControl to determine whether to expect signature grinding when calculating the size of the input spend. */
 int CalculateMaximumSignedInputSize(const CTxOut& txout, const CWallet* pwallet, const CCoinControl* coin_control);

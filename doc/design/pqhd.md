@@ -55,15 +55,25 @@ PQHD uses Tidecoin scheme prefix bytes from `src/pq/pq_scheme.h`:
 
 Constants from `src/pq/pqhd_params.h`:
 
-- `PURPOSE = 10007`
-- `COIN_TYPE = 6868`
+- `PURPOSE_GENERIC = 10007` (custom and multisig descriptors)
+- `PURPOSE_PKH = 10044` (`pkh`)
+- `PURPOSE_SH_WPKH = 10049` (`sh(wpkh)`)
+- `PURPOSE_WPKH = 10084` (`wpkh`)
+- `PURPOSE_WSH512 = 10087` (`wsh512`)
+- `COIN_TYPE_MAIN = 6868` (mainnet)
+- `COIN_TYPE_TEST = 1` (testnet and regtest)
+
+Each script family has its own purpose so that one seed and index never derive
+the same key for two families. Otherwise `pkh` and `wpkh` addresses at the same
+index would carry the same `HASH160(pubkey)` and be linkable on-chain.
+The test-network coin type keeps test keys distinct from mainnet keys.
 
 PQHD v1 leaf paths MUST satisfy:
 
 - exactly 6 elements
 - every element hardened (bit 31 set)
-- element 0 = `10007h`
-- element 1 = `6868h`
+- element 0 = a known purpose (`pqhd::IsKnownPurpose`), hardened
+- element 1 = a known coin type (`pqhd::IsKnownCoinType`), hardened
 - element 2 = known scheme prefix as hardened integer
 - element 4 (`change`) MUST be `0h` or `1h`
 
@@ -198,7 +208,9 @@ Parser constraints in `src/script/descriptor.cpp`:
 - Wildcard form must have exactly 5 fixed hardened elements before `*h`.
 - Multipath (`<...;...>`) is rejected.
 - Non-hardened derivation is rejected.
-- `purpose` and `coin_type` must match constants.
+- `purpose` must be a known purpose (section 4); any known purpose is accepted
+  with any script.
+- `coin_type` must be `6868` or `1`.
 - `scheme` must be recognized and fit in `uint8`.
 - `change` must be 0 or 1.
 
@@ -312,14 +324,36 @@ For descriptor wallets with local keys (`SetupOwnDescriptorScriptPubKeyMans`):
 
 Descriptor template from `GeneratePQHDWalletDescriptor`:
 
-`pqhd(SEEDID32)/10007h/6868h/<scheme>h/0h/<change>h/*h`
+`pqhd(SEEDID32)/<purpose>h/<coin_type>h/<scheme>h/0h/<change>h/*h`
 
-Address wrappers by output type:
+`<coin_type>` is the network's (`CChainParams::PQHDCoinType()`). Address
+wrappers and purposes by output type (`PQHDPurposeForOutputType`):
 
-- `LEGACY` -> `pkh(...)`
-- `P2SH_SEGWIT` -> `sh(wpkh(...))`
-- `BECH32` -> `wpkh(...)`
-- `BECH32PQ` -> `wsh512(pk(...))`
+- `LEGACY` -> `pkh(...)`, purpose `10044`
+- `P2SH_SEGWIT` -> `sh(wpkh(...))`, purpose `10049`
+- `BECH32` -> `wpkh(...)`, purpose `10084`
+- `BECH32PQ` -> `wsh512(pk(...))`, purpose `10087`
+
+Default descriptor discovery (`CWallet::FindPQHDDescriptorForPath`) requires the
+family purpose and the network coin type, so a custom descriptor on another
+path is never taken for a default one.
+
+Native witness v1 descriptors are gated on content, including literal
+`addr()` and `raw()` forms. Before activation the wallet refuses to issue
+addresses from a descriptor with `Descriptor::HasWitnessV1()`, excludes native
+v1 coins from coin selection, and refuses v1 recipients and change addresses.
+`importdescriptors` accepts native v1 descriptors for restore and monitoring,
+and returns a warning. `sh(wsh512(...))` is rejected by the descriptor parser.
+
+A wallet created before activation has no `wsh512` descriptors. Once the next
+block is at or past activation, the first `bech32pq` request creates the
+descriptor for that direction from the PQHD policy
+(`CWallet::GetScriptPubKeyMan`), and loading the wallet creates every missing
+one (`SyncActiveScriptPubKeyMansWithPQHDPolicy`). Creation needs the seed, so an
+encrypted wallet must be unlocked; an external-signer wallet gets descriptors
+only from its device. [Descriptors](../descriptors.md) documents native v1
+and the unchanged ordinary-script interpretation of a 64-byte v1 program
+inside P2SH.
 
 When a cached script is observed in an incoming transaction, its consumed index
 is persisted before attempting to replenish the cache. A locked wallet can
@@ -607,7 +641,8 @@ A bounded restoration uses existing interfaces:
    change binding.
 3. Include each historical scheme, account, receive/change branch and script
    construction. The standard path is
-   `10007h/6868h/<scheme>h/0h/<branch>h/*h`; custom accounts and multikey scripts
+   `<purpose>h/<coin_type>h/<scheme>h/0h/<branch>h/*h` with the family purpose
+   and network coin type from section 10; custom accounts and multikey scripts
    require their exact descriptors. Schemes 7, 8, 9, 10 and 11 are Falcon-512,
    Falcon-1024, ML-DSA-44, ML-DSA-65 and ML-DSA-87 respectively. Consensus
    activation restrictions still apply to spending and new address issuance.
@@ -702,8 +737,8 @@ Decode checks (`DecodePQHDOrigin`):
 - pubkey must be valid non-hybrid CPubKey
 - path length must be exactly `6` (PQHD v1 leaf path shape)
 - every path element must be hardened
-- path[0] must be `10007h` (`PURPOSE`)
-- path[1] must be `6868h` (`COIN_TYPE`)
+- path[0] must be a known purpose, hardened
+- path[1] must be a known coin type, hardened
 - path[4] (`change`) must be `0h` or `1h`
 - scheme from `path[2]` must be recognized
 - pubkey prefix must equal scheme in `path[2]`
@@ -754,7 +789,9 @@ This is controlled by `include_pqhd_origin` (default `true`).
 The following are protocol-level wallet invariants and MUST be treated as
 stable for PQHD v1:
 
-- `PURPOSE = 10007`, `COIN_TYPE = 6868`
+- purpose values (`10007`, `10044`, `10049`, `10084`, `10087`) and
+  their script-family assignments; coin types `6868` (mainnet) and `1` (test
+  networks)
 - hardened-only derivation model
 - SeedID32 tag and KDF domain-separation strings
 - path element layout and scheme-in-path semantics

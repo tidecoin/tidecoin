@@ -1391,7 +1391,7 @@ uint256 SignatureHash(const CScript& scriptCode, const T& txTo, unsigned int nIn
 }
 
 template <class T>
-bool SignatureHash512(uint512& hash_out, const CScript& scriptCode, const T& txTo, unsigned int nIn, int32_t nHashType, const CAmount& amount, const PrecomputedTransactionData* cache)
+bool SignatureHash512(uint512& hash_out, const CScript& scriptCode, const T& txTo, unsigned int nIn, int32_t nHashType, const CAmount& amount, const PrecomputedTransactionData* cache, std::optional<uint512>* single_output_hash)
 {
     assert(nIn < txTo.vin.size());
 
@@ -1418,9 +1418,14 @@ bool SignatureHash512(uint512& hash_out, const CScript& scriptCode, const T& txT
     if ((nHashType & 0x1f) != SIGHASH_SINGLE && (nHashType & 0x1f) != SIGHASH_NONE) {
         hashOutputs = cacheready ? cache->hashOutputs_512 : GetOutputsSHA512(txTo);
     } else if ((nHashType & 0x1f) == SIGHASH_SINGLE && nIn < txTo.vout.size()) {
-        SHA512Writer inner_ss{};
-        inner_ss << txTo.vout[nIn];
-        hashOutputs = inner_ss.GetHash();
+        if (single_output_hash && single_output_hash->has_value()) {
+            hashOutputs = single_output_hash->value();
+        } else {
+            SHA512Writer inner_ss{};
+            inner_ss << txTo.vout[nIn];
+            hashOutputs = inner_ss.GetHash();
+            if (single_output_hash) *single_output_hash = hashOutputs;
+        }
     }
 
     static constexpr std::string_view kTag = "TidecoinSighashV1_512";
@@ -1499,7 +1504,7 @@ bool GenericTransactionSignatureChecker<T>::CheckPostQuantumSignature(const std:
             return false;
         }
         uint512 sighash;
-        if (!SignatureHash512(sighash, scriptCode, *txTo, nIn, nHashType, amount, this->txdata)) return false;
+        if (!SignatureHash512(sighash, scriptCode, *txTo, nIn, nHashType, amount, this->txdata, &m_single_output_hash_512)) return false;
         if (!VerifyPostQuantumSignature512(vchSig, pubkey, sighash)) {
             return false;
         }
@@ -1651,16 +1656,8 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
         } else {
             return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_WRONG_LENGTH);
         }
-    } else if (witversion == 1) {
-        if ((flags & SCRIPT_VERIFY_WITNESS_V1_512) == 0) {
-            if (flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM) {
-                return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM);
-            }
-            return true;
-        }
-        if (program.size() != WITNESS_V1_SCRIPTHASH_512_SIZE) {
-            return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_WRONG_LENGTH);
-        }
+    } else if (witversion == 1 && program.size() == WITNESS_V1_SCRIPTHASH_512_SIZE && !is_p2sh &&
+               (flags & SCRIPT_VERIFY_WITNESS_V1_512)) {
         if (stack.size() == 0) {
             return set_error(serror, SCRIPT_ERR_WITNESS_PROGRAM_WITNESS_EMPTY);
         }
@@ -1681,13 +1678,13 @@ static bool VerifyWitnessProgram(const CScriptWitness& witness, int witversion, 
     // There is intentionally no return statement here, to be able to use "control reaches end of non-void function" warnings to detect gaps in the logic above.
 }
 
-/** Recognize witness programs under the candidate's rules. The structural
- * classifier also describes v1-512 outputs before their interpretation activates. */
-static bool IsWitnessProgramForFlags(const CScript& script, unsigned int flags, int& version, std::vector<unsigned char>& program)
+/** The 64-byte v1 extension applies only to native outputs after activation.
+ * In P2SH it remains an ordinary script, as it was before activation. */
+static bool IsWitnessProgramForFlags(const CScript& script, unsigned int flags, bool is_p2sh, int& version, std::vector<unsigned char>& program)
 {
     if (!script.IsWitnessProgram(version, program)) return false;
     return version != 1 || program.size() != WITNESS_V1_SCRIPTHASH_512_SIZE ||
-           (flags & SCRIPT_VERIFY_WITNESS_V1_512) != 0;
+           (!is_p2sh && (flags & SCRIPT_VERIFY_WITNESS_V1_512) != 0);
 }
 
 bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const CScriptWitness* witness, unsigned int flags, const BaseSignatureChecker& checker, ScriptError* serror)
@@ -1724,7 +1721,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
     int witnessversion;
     std::vector<unsigned char> witnessprogram;
     if (flags & SCRIPT_VERIFY_WITNESS) {
-        if (IsWitnessProgramForFlags(scriptPubKey, flags, witnessversion, witnessprogram)) {
+        if (IsWitnessProgramForFlags(scriptPubKey, flags, /*is_p2sh=*/false, witnessversion, witnessprogram)) {
             hadWitness = true;
             if (scriptSig.size() != 0) {
                 // The scriptSig must be _exactly_ CScript(), otherwise we reintroduce malleability.
@@ -1768,7 +1765,7 @@ bool VerifyScript(const CScript& scriptSig, const CScript& scriptPubKey, const C
 
         // P2SH witness program
         if (flags & SCRIPT_VERIFY_WITNESS) {
-            if (IsWitnessProgramForFlags(pubKey2, flags, witnessversion, witnessprogram)) {
+            if (IsWitnessProgramForFlags(pubKey2, flags, /*is_p2sh=*/true, witnessversion, witnessprogram)) {
                 hadWitness = true;
                 if (scriptSig != CScript() << std::vector<unsigned char>(pubKey2.begin(), pubKey2.end())) {
                     // The scriptSig must be _exactly_ a single push of the redeemScript. Otherwise we
@@ -1843,7 +1840,7 @@ size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey,
 
     int witnessversion;
     std::vector<unsigned char> witnessprogram;
-    if (IsWitnessProgramForFlags(scriptPubKey, flags, witnessversion, witnessprogram)) {
+    if (IsWitnessProgramForFlags(scriptPubKey, flags, /*is_p2sh=*/false, witnessversion, witnessprogram)) {
         return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty);
     }
 
@@ -1855,7 +1852,7 @@ size_t CountWitnessSigOps(const CScript& scriptSig, const CScript& scriptPubKey,
             scriptSig.GetOp(pc, opcode, data);
         }
         CScript subscript(data.begin(), data.end());
-        if (IsWitnessProgramForFlags(subscript, flags, witnessversion, witnessprogram)) {
+        if (IsWitnessProgramForFlags(subscript, flags, /*is_p2sh=*/true, witnessversion, witnessprogram)) {
             return WitnessSigOps(witnessversion, witnessprogram, witness ? *witness : witnessEmpty);
         }
     }

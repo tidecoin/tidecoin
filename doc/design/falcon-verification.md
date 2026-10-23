@@ -240,11 +240,11 @@ From `https://raw.githubusercontent.com/tidecoin/tidecoin/master/src/api.h`:
 #define CRYPTO_SECRETKEYBYTES 1281
 ```
 
-- **CRYPTO_BYTES = 690**: This is the legacy maximum signature size (compressed format, variable length, average ~652 bytes)
+- **CRYPTO_BYTES = 690**: This is the legacy signed-message overhead bound. The detached signer reserves two bytes from that bound and returns compressed signatures of at most 688 bytes, excluding the transaction sighash byte.
 - Standard PQClean uses **CRYPTO_BYTES = 752** (allows for slightly larger compressed signatures)
-- Padded format (post-AuxPoW): 666 bytes fixed
+- Tidecoin uses variable-length compressed signatures before and after AuxPoW. Both legacy and strict verification require exact decoder consumption; appended zero padding is rejected.
 
-**Result: CONFIRMED** — The legacy signature size cap of 690 bytes is consistent with the relaxed norm bound, which produces shorter signatures on average.
+The current local signer retries until a compressed signature is at most 666 bytes for Falcon-512 or 1280 bytes for Falcon-1024. This applies to both message lengths and to legacy Falcon-512 signing, making the wallet's local signing estimates upper bounds. Signatures are never padded, and the transaction sighash byte is additional. The shared retry loop returns failure after 10,000 unsuccessful attempts. External-signing estimates retain the larger PQClean bounds. Verification does not impose the local signing bounds as consensus maxima.
 
 ---
 
