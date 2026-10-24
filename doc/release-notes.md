@@ -146,6 +146,26 @@ the BIP-32 HD wallet for post-quantum key derivation:
 - **Separate test-network keys** — testnet and regtest use coin type 1; mainnet
   uses 6868
 
+Wallet encryption saves the encrypted existing keys and seeds before setting up
+a new seed and descriptors. If that setup fails, its changes are rolled back and
+the wallet remains encrypted and locked. The error reports this state; the
+supplied passphrase still unlocks the saved wallet and its existing descriptors.
+Existing active descriptors continue to supply addresses; no replacement seed
+was installed. After resolving the write error, unlock, run `createpqhdseed`,
+and select its returned `seed_id` with `setpqhdseed` to use fresh key material.
+Make a new wallet backup. Existing coins retain their original keys.
+
+`createpqhdseed` generates and saves a random 32-byte PQHD seed inside the wallet,
+returning only its ID. It leaves existing defaults and active descriptors
+unchanged; selecting the seed is a separate operation. An encrypted wallet must
+be unlocked. Watch-only and external-signer wallets cannot generate local seeds.
+
+If initialization fails after `createwallet` has encrypted a new wallet, its
+encrypted blank file is retained and the error explains recovery. Resolve the
+write error, then use `loadwallet`, `walletpassphrase`, `createpqhdseed` and
+`setpqhdseed`, followed by a backup. Repeating `createwallet` does not overwrite
+the retained file.
+
 Default descriptor paths changed after 1.0.0rc2, which derived every address
 type from `10007h/6868h`. Wallets created by rc1 or rc2 keep their existing
 descriptors; their seeds' older keys are recovered only by importing those
@@ -162,8 +182,12 @@ of an imported descriptor, is counted by `getbalances` but cannot be spent until
 the activation height.
 
 A wallet created before activation gains its `bech32pq` (`wsh512`) descriptors
-after activation, when such an address is first requested or when the wallet is
-next loaded; an encrypted wallet must be unlocked for this. Witness v1 is
+after activation, when such an address is first requested or when an unencrypted
+wallet is next loaded. Locked encrypted wallets load successfully and
+create missing eligible descriptors on their next successful unlock, preserving
+existing active imports. This includes encrypted wallets containing only a PQHD
+seed and policy. A failed creation is rolled back and leaves the
+wallet locked so unlocking can be retried. Witness v1 is
 native only: `sh(wsh512(...))` descriptors are rejected, including when loading
 wallet records, and have no signing or PSBT support. `decodescript` no longer
 suggests P2SH wrappers for native v1. Known wrapped-v1 recipients and change

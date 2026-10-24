@@ -4,11 +4,27 @@
 #include <serialize.h>
 #include <support/allocators/secure.h>
 #include <uint256.h>
+#include <util/result.h>
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace wallet {
+
+//! RPC callers must identify an unlock requirement independently of its wording.
+enum class PQHDErrorCode { Generic, UnlockNeeded };
+
+//! Keep typed PQHD errors local while retaining util::Result's value/message API.
+template <typename T>
+struct PQHDResult : util::Result<T> {
+    using util::Result<T>::Result;
+    PQHDResult() = default;
+    PQHDResult(util::Error error, PQHDErrorCode code = PQHDErrorCode::Generic)
+        : util::Result<T>(std::move(error)), error_code(code) {}
+
+    PQHDErrorCode error_code{PQHDErrorCode::Generic};
+};
 
 //! Wallet DB record containing PQHD master seed material (plaintext wallet only).
 struct PQHDSeed

@@ -4,6 +4,7 @@
 
 #include <tidecoin-build-config.h> // IWYU pragma: keep
 
+#include <common/signmessage.h>
 #include <crypto/common.h>
 #include <hash.h>
 #include <key_io.h>
@@ -16,6 +17,7 @@
 #include <scheduler.h>
 #include <script/descriptor.h>
 #include <test/util/setup_common.h>
+#include <test/util/logging.h>
 #include <test/util/mining.h>
 #include <util/chaintype.h>
 #include <util/fs_helpers.h>
@@ -37,6 +39,7 @@
 #include <wallet/walletutil.h>
 
 #include <boost/test/unit_test.hpp>
+#include <sqlite3.h>
 
 #include <array>
 #include <fstream>
@@ -138,6 +141,19 @@ struct WalletReconciliationTestAccess {
 namespace {
 MockableData ReadRecords(WalletDatabase& database);
 
+// Capture only connections opened on this test's thread. The auto-extension is
+// removed before leaving the test, including when an assertion throws.
+thread_local sqlite3* creation_database{nullptr};
+int CaptureCreationDatabase(sqlite3* db, char**, const sqlite3_api_routines*)
+{
+    creation_database = db;
+    return SQLITE_OK;
+}
+struct CaptureSQLiteCreation {
+    CaptureSQLiteCreation() { BOOST_REQUIRE_EQUAL(sqlite3_auto_extension(reinterpret_cast<void (*)()>(CaptureCreationDatabase)), SQLITE_OK); }
+    ~CaptureSQLiteCreation() { sqlite3_cancel_auto_extension(reinterpret_cast<void (*)()>(CaptureCreationDatabase)); creation_database = nullptr; }
+};
+
 // Faults are confined to this test adapter. All successful operations go to a
 // real SQLite database, which is closed and reopened to check durable state.
 struct Failure {
@@ -222,10 +238,12 @@ public:
 class FailingDatabase final : public SQLiteDatabase {
 public:
     Failure failure;
+    unsigned int rewrite_calls{0};
     std::function<void()> before_begin;
     std::function<void(std::string_view)> after_write;
     explicit FailingDatabase(const fs::path& path) : SQLiteDatabase(path, path / "wallet.dat", DatabaseOptions{}) {}
     std::unique_ptr<DatabaseBatch> MakeBatch() override { return std::make_unique<FailingBatch>(SQLiteDatabase::MakeBatch(), failure, before_begin, after_write); }
+    bool Rewrite() override { ++rewrite_calls; return SQLiteDatabase::Rewrite(); }
 };
 struct PersistenceSetup : BasicTestingSetup {
     PersistenceSetup() : BasicTestingSetup(ChainType::REGTEST) {}
@@ -589,6 +607,98 @@ BOOST_AUTO_TEST_CASE(encryption_failures_survive_reopen)
     }
 }
 
+BOOST_AUTO_TEST_CASE(encryption_setup_failures_preserve_encrypted_wallet)
+{
+    const SecureString pass{"encryption passphrase"};
+    const CKey imported_key{GenerateRandomKey(pq::SchemeId::FALCON_512)};
+    unsigned int index{0};
+    for (const Failure& point : std::vector<Failure>{
+             {"commit", "", false, 1}, {"begin", "", false, 1},
+             {"write", DBKeys::PQHD_CRYPTED_SEED, false, 1}, {"write", DBKeys::PQHD_POLICY},
+             {"write", DBKeys::WALLETDESCRIPTOR}, {"write", DBKeys::WALLETDESCRIPTOR, false, 2},
+             {"write", "walletdescriptorpubkeycache"}, {"write", DBKeys::FLAGS},
+             {"write", DBKeys::ACTIVEEXTERNALSPK}, {"write", DBKeys::ACTIVEINTERNALSPK}}) {
+        BOOST_TEST_CONTEXT(point.operation << " " << point.record << " skip=" << point.skip) {
+            const auto path{m_args.GetDataDirBase() / fs::PathFromString(strprintf("encryption-setup-%u", index++))};
+            auto wallet{Open(path)};
+            WITH_LOCK(wallet->cs_wallet, wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS));
+            WITH_LOCK(wallet->cs_wallet, wallet->SetupDescriptorScriptPubKeyMans());
+            Import(*wallet, imported_key);
+            const auto original_seed{WITH_LOCK(wallet->cs_wallet, return wallet->GetPQHDPolicy()->default_seed_id)};
+            auto& db{dynamic_cast<FailingDatabase&>(wallet->GetDatabase())};
+            std::optional<WalletReconciliationTestAccess::State> encrypted_state;
+            MockableData encrypted_records;
+            std::optional<uint256> abandoned_seed;
+            unsigned int begins{0};
+            db.before_begin = [&] {
+                if (++begins == 2) {
+                    // Snapshot after encryption commits, before new setup starts.
+                    encrypted_state = WalletReconciliationTestAccess::Snapshot(*wallet);
+                    encrypted_records = ReadRecords(db);
+                }
+            };
+            db.after_write = [&](std::string_view type) {
+                if (type != DBKeys::PQHD_CRYPTED_SEED) return;
+                for (const auto& [key, value] : ReadRecords(db)) {
+                    DataStream stream{key};
+                    std::string kind;
+                    stream >> kind;
+                    if (kind == DBKeys::PQHD_CRYPTED_SEED) {
+                        uint256 id;
+                        stream >> id;
+                        if (id != original_seed) abandoned_seed = id;
+                    }
+                }
+            };
+            Fault(*wallet) = point;
+            BOOST_CHECK_EXCEPTION(wallet->EncryptWallet(pass), std::runtime_error, [](const std::runtime_error& e) {
+                return std::string{e.what()}.find("Wallet was encrypted and locked, but replacement-seed setup failed. Existing active descriptors remain in use; no replacement seed was installed. Reason:") == 0;
+            });
+            db.before_begin = {};
+            db.after_write = {};
+            BOOST_REQUIRE(Fault(*wallet).hit);
+            BOOST_REQUIRE(encrypted_state);
+            BOOST_CHECK(wallet->IsCrypted());
+            BOOST_REQUIRE(wallet->IsLocked());
+            BOOST_CHECK(*encrypted_state == WalletReconciliationTestAccess::Snapshot(*wallet));
+            BOOST_CHECK(encrypted_records == ReadRecords(db));
+            BOOST_CHECK(!db.HasActiveTxn());
+            BOOST_CHECK_EQUAL(db.rewrite_calls, 1U);
+            if (abandoned_seed) {
+                BOOST_CHECK(!wallet->HavePQHDSeed(*abandoned_seed));
+                BOOST_CHECK(!wallet->GetPQHDSeed(*abandoned_seed));
+            }
+            Fault(*wallet) = {};
+            for (int reopen = 0; reopen < 2; ++reopen) {
+                if (reopen) {
+                    wallet.reset();
+                    wallet = Open(path);
+                    BOOST_CHECK(wallet->IsLocked());
+                }
+                BOOST_REQUIRE(wallet->Unlock(pass));
+                CheckKey(*wallet, imported_key.GetPubKey());
+                if (abandoned_seed) BOOST_CHECK(!wallet->GetPQHDSeed(*abandoned_seed));
+                for (int i = 0; i < 3; ++i) {
+                    auto address = wallet->GetNewDestination(OutputType::BECH32, "", pq::kSchemePrefixFalcon512);
+                    BOOST_REQUIRE(address);
+                    const auto descriptors = WITH_LOCK(wallet->cs_wallet, return wallet->GetWalletDescriptors(GetScriptForDestination(*address)));
+                    BOOST_REQUIRE(!descriptors.empty());
+                    BOOST_CHECK(descriptors[0].descriptor->GetPQHDSeedIDs() == std::set<uint256>{original_seed});
+                }
+            }
+            // Retry just descriptor setup, since encryption has already completed.
+            WITH_LOCK(wallet->cs_wallet, wallet->SetupDescriptorScriptPubKeyMans());
+            const auto replacement{WITH_LOCK(wallet->cs_wallet, return wallet->GetPQHDPolicy()->default_seed_id)};
+            BOOST_CHECK(replacement != original_seed);
+            wallet.reset();
+            wallet = Open(path);
+            BOOST_REQUIRE(wallet->Unlock(pass));
+            BOOST_CHECK(wallet->GetPQHDSeed(replacement));
+            CheckKey(*wallet, imported_key.GetPubKey());
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(passphrase_failures_preserve_lock_and_disk_state)
 {
     const SecureString old_pass{"old passphrase"}, new_pass{"new passphrase"};
@@ -804,6 +914,171 @@ BOOST_AUTO_TEST_CASE(empty_encrypted_wallet_rejects_wrong_length_master_key)
     BOOST_REQUIRE(wallet->GetPQHDSeed(seed_id));
 }
 
+BOOST_AUTO_TEST_CASE(generated_pqhd_seeds_survive_failures_and_reload)
+{
+    for (bool encrypted : {false, true}) {
+        for (bool blank : {false, true}) {
+            const auto path{m_args.GetDataDirBase() / fs::PathFromString(strprintf("generated-%d-%d", encrypted, blank))};
+            auto wallet{Open(path)};
+            uint256 selected;
+            {
+                LOCK(wallet->cs_wallet);
+                wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS | WALLET_FLAG_BLANK_WALLET);
+                if (!blank) wallet->SetupDescriptorScriptPubKeyMans();
+                if (encrypted) {
+                    BOOST_REQUIRE(wallet->EncryptWallet(SecureString{"pass"}));
+                    const auto records{ReadRecords(wallet->GetDatabase())};
+                    const auto locked = wallet->CreatePQHDSeed();
+                    BOOST_REQUIRE(!locked);
+                    BOOST_CHECK(locked.error_code == PQHDErrorCode::UnlockNeeded);
+                    BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+                    BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
+                }
+                const auto records{ReadRecords(wallet->GetDatabase())};
+                const auto state{WalletReconciliationTestAccess::Snapshot(*wallet)};
+                std::vector<Failure> failures{{"begin"}, {"write", encrypted ? DBKeys::PQHD_CRYPTED_SEED : DBKeys::PQHD_SEED}, {"commit"}};
+                if (blank) failures.push_back({"write", DBKeys::PQHD_POLICY});
+                for (const auto& point : failures) {
+                    Fault(*wallet) = point;
+                    const auto result = wallet->CreatePQHDSeed();
+                    BOOST_REQUIRE(!result);
+                    BOOST_CHECK(result.error_code == PQHDErrorCode::Generic);
+                    BOOST_CHECK(Fault(*wallet).hit);
+                    BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+                    BOOST_CHECK(state == WalletReconciliationTestAccess::Snapshot(*wallet));
+                }
+                Fault(*wallet) = {};
+                const auto first = wallet->CreatePQHDSeed();
+                BOOST_REQUIRE(first);
+                const auto seed = wallet->GetPQHDSeed(*first);
+                BOOST_REQUIRE(seed);
+                BOOST_CHECK(pqhd::ComputeSeedID32AsUint256(seed->Span()) == *first);
+                const auto policy = wallet->GetPQHDPolicy();
+                BOOST_REQUIRE(policy);
+                const auto second = wallet->CreatePQHDSeed();
+                BOOST_REQUIRE(second);
+                BOOST_CHECK(*second != *first);
+                BOOST_CHECK(wallet->GetPQHDPolicy()->default_seed_id == policy->default_seed_id);
+                BOOST_CHECK(wallet->GetPQHDPolicy()->default_change_seed_id == policy->default_change_seed_id);
+                // Only the explicit selection changes descriptors. A failed selection
+                // retains the saved seed and can be retried without generating another.
+                Fault(*wallet) = {"commit"};
+                BOOST_CHECK(!wallet->SetPQHDSeedDefaults(*second, *second));
+                BOOST_CHECK(Fault(*wallet).hit);
+                BOOST_CHECK(wallet->GetPQHDSeed(*second));
+                BOOST_CHECK(wallet->GetPQHDPolicy()->default_seed_id == policy->default_seed_id);
+                Fault(*wallet) = {};
+                BOOST_REQUIRE(wallet->SetPQHDSeedDefaults(*second, *second));
+                selected = *second;
+            }
+            wallet.reset();
+            wallet = Open(path);
+            if (encrypted) {
+                BOOST_CHECK(wallet->IsLocked());
+                BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
+            }
+            LOCK(wallet->cs_wallet);
+            BOOST_REQUIRE(wallet->GetPQHDSeed(selected));
+            BOOST_CHECK(wallet->GetPQHDPolicy()->default_seed_id == selected);
+            BOOST_CHECK(wallet->GetPQHDPolicy()->default_change_seed_id == selected);
+            const auto destination = wallet->GetNewDestination(OutputType::LEGACY, "");
+            BOOST_REQUIRE(destination);
+            std::string signature;
+            BOOST_REQUIRE(wallet->SignMessage("saved seed", std::get<PKHash>(*destination), signature) == SigningResult::OK);
+            BOOST_CHECK(MessageVerify(EncodeDestination(*destination), signature, "saved seed") == MessageVerificationResult::OK);
+        }
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(encrypted_creation_failure_retains_recoverable_file, TestingSetup)
+{
+    m_args.ForceSetArg("-keypool", "1");
+    WalletContext context;
+    context.args = &m_args;
+    context.chain = m_node.chain.get();
+    // Keep SQLite initialized before installing its test-only auto-extension.
+    FailingDatabase sqlite_guard{m_args.GetDataDirBase() / "sqlite-guard"};
+    for (const auto& record : {DBKeys::PQHD_CRYPTED_SEED, DBKeys::PQHD_POLICY, DBKeys::ACTIVEINTERNALSPK}) {
+        const auto path = m_args.GetDataDirBase() / fs::PathFromString("failed-create-" + record);
+        DatabaseOptions options;
+        ReadDatabaseArgs(m_args, options);
+        options.require_create = true;
+        options.create_flags = WALLET_FLAG_DESCRIPTORS;
+        options.create_passphrase = SecureString{"pass"};
+        DatabaseStatus status;
+        bilingual_str error;
+        std::vector<bilingual_str> warnings;
+        bool installed{false};
+        {
+            CaptureSQLiteCreation capture;
+            DebugLogHelper inject("Encrypting Wallet with an nDeriveIterations", [&](const std::string* line) {
+                if (!line) return true;
+                BOOST_REQUIRE(creation_database);
+                // This callback holds the log mutex. Disable SQL tracing before
+                // executing SQL here, so the trace cannot recursively log.
+                sqlite3_trace_v2(creation_database, 0, nullptr, nullptr);
+                DataStream prefix;
+                prefix << record;
+                const auto sql = strprintf("CREATE TRIGGER fail_creation BEFORE INSERT ON main WHEN substr(NEW.key,1,%u)=X'%s' BEGIN SELECT RAISE(FAIL,'injected creation failure'); END", prefix.size(), HexStr(prefix));
+                BOOST_REQUIRE_EQUAL(sqlite3_exec(creation_database, sql.c_str(), nullptr, nullptr, nullptr), SQLITE_OK);
+                installed = true;
+                return true;
+            });
+            BOOST_CHECK(!CreateWallet(context, fs::PathToString(path), false, options, status, error, warnings));
+        }
+        BOOST_REQUIRE(installed);
+        BOOST_CHECK(status == DatabaseStatus::FAILED_CREATE);
+        BOOST_CHECK(error.original.find("was created and encrypted, but initialization failed") != std::string::npos);
+        BOOST_CHECK(error.original.find("createpqhdseed and setpqhdseed") != std::string::npos);
+        BOOST_CHECK(GetWallets(context).empty());
+        BOOST_CHECK(fs::exists(path / "wallet.dat"));
+        // Retrying creation cannot overwrite the retained encrypted file.
+        BOOST_CHECK(!CreateWallet(context, fs::PathToString(path), false, options, status, error, warnings));
+        BOOST_CHECK(error.original.find("already exists") != std::string::npos);
+
+        auto wallet = std::make_unique<CWallet>(m_node.chain.get(), "", std::make_unique<FailingDatabase>(path));
+        wallet->m_keypool_size = 1;
+        BOOST_REQUIRE(wallet->LoadWallet() == DBErrors::LOAD_OK);
+        BOOST_REQUIRE(wallet->IsCrypted());
+        BOOST_CHECK(wallet->IsLocked());
+        {
+            LOCK(wallet->cs_wallet);
+            BOOST_CHECK(wallet->IsWalletFlagSet(WALLET_FLAG_BLANK_WALLET));
+            BOOST_CHECK(wallet->ListPQHDSeeds().empty());
+            BOOST_CHECK(!wallet->GetPQHDPolicy());
+            BOOST_CHECK_EQUAL(WalletReconciliationTestAccess::Snapshot(*wallet).managers, 0U);
+        }
+        auto& db = dynamic_cast<SQLiteDatabase&>(wallet->GetDatabase());
+        BOOST_REQUIRE_EQUAL(sqlite3_exec(db.m_db, "DROP TRIGGER fail_creation", nullptr, nullptr, nullptr), SQLITE_OK);
+        BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
+        uint256 seed_id;
+        PKHash address;
+        {
+            LOCK(wallet->cs_wallet);
+            const auto seed = wallet->CreatePQHDSeed();
+            BOOST_REQUIRE(seed);
+            seed_id = *seed;
+            BOOST_REQUIRE(wallet->SetPQHDSeedDefaults(seed_id, seed_id));
+            const auto destination = wallet->GetNewDestination(OutputType::LEGACY, "");
+            BOOST_REQUIRE(destination);
+            address = std::get<PKHash>(*destination);
+            std::string signature;
+            BOOST_REQUIRE(wallet->SignMessage("initialized", address, signature) == SigningResult::OK);
+            BOOST_CHECK(MessageVerify(EncodeDestination(address), signature, "initialized") == MessageVerificationResult::OK);
+        }
+        wallet.reset();
+        wallet = std::make_unique<CWallet>(m_node.chain.get(), "", std::make_unique<FailingDatabase>(path));
+        wallet->m_keypool_size = 1;
+        BOOST_REQUIRE(wallet->LoadWallet() == DBErrors::LOAD_OK);
+        BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
+        LOCK(wallet->cs_wallet);
+        BOOST_CHECK(wallet->GetPQHDPolicy()->default_seed_id == seed_id);
+        std::string signature;
+        BOOST_REQUIRE(wallet->SignMessage("reloaded", address, signature) == SigningResult::OK);
+        BOOST_CHECK(MessageVerify(EncodeDestination(address), signature, "reloaded") == MessageVerificationResult::OK);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(pqhd_private_seed_restrictions_preserve_state)
 {
     size_t index{0};
@@ -819,6 +1094,9 @@ BOOST_AUTO_TEST_CASE(pqhd_private_seed_restrictions_preserve_state)
         const auto records{ReadRecords(wallet->GetDatabase())};
         const auto state{WalletReconciliationTestAccess::Snapshot(*wallet)};
         BOOST_CHECK(!wallet->ImportPQHDSeed(bytes));
+        const auto created = wallet->CreatePQHDSeed();
+        BOOST_CHECK(!created);
+        BOOST_CHECK(created.error_code == PQHDErrorCode::Generic);
         PQHDSeed seed;
         seed.seed.assign(bytes.begin(), bytes.end());
         const bool seed_loaded{wallet->LoadPQHDSeed(id, std::move(seed))};
@@ -2349,6 +2627,19 @@ MockableData ReadRecords(WalletDatabase& database)
 struct ReconciliationSetup : PersistenceSetup {
     static FailingDatabase& Database(CWallet& wallet) { return dynamic_cast<FailingDatabase&>(wallet.GetDatabase()); }
 
+    void PrepareLockedSeedOnly(const fs::path& path)
+    {
+        auto wallet{Open(path)};
+        WITH_LOCK(wallet->cs_wallet, wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS | WALLET_FLAG_BLANK_WALLET));
+        BOOST_REQUIRE(wallet->EncryptWallet(SecureString{"pass"}));
+        BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
+        std::array<unsigned char, 32> seed;
+        seed.fill(0x42);
+        WITH_LOCK(wallet->cs_wallet, BOOST_REQUIRE(wallet->ImportPQHDSeed(seed)));
+        BOOST_REQUIRE(wallet->GetAllScriptPubKeyMans().empty());
+        BOOST_REQUIRE(wallet->Lock());
+    }
+
     void Prepare(const fs::path& path, bool existing, int64_t birth = 1,
                  pq::SchemeId scheme = pq::SchemeId::FALCON_512)
     {
@@ -2444,6 +2735,113 @@ struct ReconciliationSetup : PersistenceSetup {
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(wallet_persistence_tests_reconciliation, ReconciliationSetup)
+
+BOOST_AUTO_TEST_CASE(locked_pqhd_load_defers_creation_until_unlock)
+{
+    const auto path{m_args.GetDataDirBase() / "locked-reconciliation"};
+    PrepareLockedSeedOnly(path);
+    auto wallet{Unloaded(path)};
+    const auto records{ReadRecords(wallet->GetDatabase())};
+    BOOST_REQUIRE(wallet->LoadWallet() == DBErrors::LOAD_OK);
+    BOOST_CHECK(wallet->IsLocked());
+    BOOST_CHECK(wallet->GetAllScriptPubKeyMans().empty());
+    BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+    const auto state{WalletReconciliationTestAccess::Snapshot(*wallet)};
+    BOOST_CHECK(!wallet->Unlock(SecureString{"wrong"}));
+    BOOST_CHECK(state == WalletReconciliationTestAccess::Snapshot(*wallet));
+
+    // Failed deferred creation during unlock or passphrase change must roll
+    // back all managers and bindings, keep the wallet locked, and permit retry.
+    for (const Failure& point : std::vector<Failure>{{"begin"}, {"write", DBKeys::WALLETDESCRIPTOR},
+             {"write", DBKeys::ACTIVEINTERNALSPK}, {"commit"}}) {
+        for (bool change_passphrase : {false, true}) {
+            BOOST_TEST_CONTEXT(point.operation << " " << point.record << " change_passphrase=" << change_passphrase) {
+                Fault(*wallet) = point;
+                if (change_passphrase) {
+                    BOOST_CHECK_THROW(wallet->ChangeWalletPassphrase(SecureString{"pass"}, SecureString{"new"}), std::runtime_error);
+                } else {
+                    BOOST_CHECK_THROW(wallet->Unlock(SecureString{"pass"}), std::runtime_error);
+                }
+                BOOST_REQUIRE(Fault(*wallet).hit);
+                BOOST_CHECK(wallet->IsLocked());
+                BOOST_CHECK(state == WalletReconciliationTestAccess::Snapshot(*wallet));
+                BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+                BOOST_CHECK(!Database(*wallet).HasActiveTxn());
+            }
+        }
+    }
+    Fault(*wallet) = {};
+    BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
+    BOOST_CHECK(wallet->CanGetAddresses());
+    BOOST_CHECK(wallet->CanGetAddresses(true));
+    const auto created{ReadRecords(wallet->GetDatabase())};
+    const auto managers{wallet->GetAllScriptPubKeyMans().size()};
+    BOOST_CHECK_GT(managers, 0U);
+    for (int i = 0; i < 2; ++i) {
+        BOOST_REQUIRE(wallet->Lock());
+        BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
+        BOOST_CHECK(created == ReadRecords(wallet->GetDatabase()));
+        BOOST_CHECK_EQUAL(wallet->GetAllScriptPubKeyMans().size(), managers);
+    }
+    wallet.reset();
+    wallet = Open(path);
+    BOOST_CHECK(wallet->IsLocked());
+    BOOST_CHECK_EQUAL(wallet->GetAllScriptPubKeyMans().size(), managers);
+    BOOST_CHECK(created == ReadRecords(wallet->GetDatabase()));
+    BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
+    BOOST_REQUIRE(wallet->GetNewDestination(OutputType::BECH32, ""));
+    BOOST_REQUIRE(wallet->GetNewChangeDestination(OutputType::BECH32));
+}
+
+BOOST_AUTO_TEST_CASE(locked_pqhd_load_still_rejects_invalid_policy)
+{
+    const auto path{m_args.GetDataDirBase() / "locked-invalid-policy"};
+    PrepareLockedSeedOnly(path);
+    auto wallet{Open(path)};
+    const PQHDPolicy valid{WITH_LOCK(wallet->cs_wallet, return *wallet->GetPQHDPolicy())};
+    for (int variant = 0; variant < 7; ++variant) {
+        BOOST_TEST_CONTEXT("invalid policy variant " << variant) {
+            PQHDPolicy policy{valid};
+            switch (variant) {
+            case 0: policy.default_seed_id.SetNull(); break;
+            // A null change seed defaults to the receive seed, so both must be
+            // absent to exercise a missing change seed after normalization.
+            case 1: policy.default_seed_id.SetNull(); policy.default_change_seed_id.SetNull(); break;
+            case 2: policy.default_seed_id = uint256::ONE; break;
+            case 3: policy.default_change_seed_id = uint256::ONE; break;
+            case 4: policy.default_receive_scheme = 0xff; break;
+            case 5: policy.default_change_scheme = 0xff; break;
+            case 6: policy.nVersion = PQHDPolicy::CURRENT_VERSION + 1; break;
+            }
+            BOOST_REQUIRE(WalletBatch(wallet->GetDatabase()).WritePQHDPolicy(policy));
+            const auto records{ReadRecords(wallet->GetDatabase())};
+            wallet.reset();
+            wallet = Unloaded(path);
+            BOOST_CHECK(wallet->LoadWallet() == DBErrors::CORRUPT);
+            BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+        }
+    }
+    BOOST_REQUIRE(WalletBatch(wallet->GetDatabase()).WritePQHDPolicy(valid));
+    wallet.reset();
+    wallet = Open(path);
+    BOOST_REQUIRE(wallet->Unlock(SecureString{"pass"}));
+    BOOST_CHECK(wallet->CanGetAddresses());
+
+    // Locked loading must still reject an existing binding to the wrong type.
+    const auto legacy_id{wallet->GetScriptPubKeyMan(OutputType::LEGACY, false)->GetID()};
+    const auto witness_id{wallet->GetScriptPubKeyMan(OutputType::BECH32, false)->GetID()};
+    BOOST_REQUIRE(WalletBatch(wallet->GetDatabase()).WriteActiveScriptPubKeyMan(static_cast<uint8_t>(OutputType::LEGACY), witness_id, false));
+    const auto records{ReadRecords(wallet->GetDatabase())};
+    wallet.reset();
+    wallet = Unloaded(path);
+    BOOST_CHECK(wallet->LoadWallet() == DBErrors::CORRUPT);
+    BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+    BOOST_REQUIRE(WalletBatch(wallet->GetDatabase()).WriteActiveScriptPubKeyMan(static_cast<uint8_t>(OutputType::LEGACY), legacy_id, false));
+    wallet.reset();
+    wallet = Open(path);
+    BOOST_CHECK(wallet->IsLocked());
+    BOOST_CHECK_EQUAL(wallet->GetScriptPubKeyMan(OutputType::LEGACY, false)->GetID(), legacy_id);
+}
 
 BOOST_AUTO_TEST_CASE(wallet_load_pqhd_reconciliation_is_atomic)
 {
@@ -2544,12 +2942,44 @@ BOOST_AUTO_TEST_CASE(descriptor_setup_propagates_expansion_failure)
     BOOST_REQUIRE(wallet->GetNewDestination(OutputType::BECH32, ""));
 }
 
+BOOST_AUTO_TEST_CASE(own_descriptor_setup_failures_restore_blank_wallet)
+{
+    unsigned int index{0};
+    for (const Failure& point : std::vector<Failure>{{"begin"}, {"write", DBKeys::PQHD_SEED},
+             {"write", DBKeys::PQHD_POLICY}, {"write", DBKeys::WALLETDESCRIPTOR},
+             {"write", DBKeys::WALLETDESCRIPTOR, false, 2}, {"write", "walletdescriptorpubkeycache"},
+             {"write", DBKeys::FLAGS}, {"write", DBKeys::ACTIVEEXTERNALSPK},
+             {"write", DBKeys::ACTIVEINTERNALSPK}, {"commit"}}) {
+        BOOST_TEST_CONTEXT(point.operation << " " << point.record << " skip=" << point.skip) {
+            const auto path{m_args.GetDataDirBase() / fs::PathFromString(strprintf("blank-setup-%u", index++))};
+            auto wallet{Open(path)};
+            WITH_LOCK(wallet->cs_wallet, wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS | WALLET_FLAG_BLANK_WALLET));
+            const auto records{ReadRecords(wallet->GetDatabase())};
+            const auto state{WalletReconciliationTestAccess::Snapshot(*wallet)};
+            Fault(*wallet) = point;
+            WITH_LOCK(wallet->cs_wallet, BOOST_CHECK_THROW(wallet->SetupDescriptorScriptPubKeyMans(), std::runtime_error));
+            BOOST_REQUIRE(Fault(*wallet).hit);
+            BOOST_CHECK(state == WalletReconciliationTestAccess::Snapshot(*wallet));
+            BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+            BOOST_CHECK(!wallet->HasPQHDSeeds());
+            BOOST_CHECK(!Database(*wallet).HasActiveTxn());
+            Fault(*wallet) = {};
+            WITH_LOCK(wallet->cs_wallet, wallet->SetupDescriptorScriptPubKeyMans());
+            BOOST_REQUIRE(wallet->GetNewDestination(OutputType::BECH32, ""));
+            wallet.reset();
+            wallet = Open(path);
+            BOOST_REQUIRE(wallet->GetNewDestination(OutputType::BECH32, ""));
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(own_descriptor_setup_propagates_expansion_failure)
 {
     const auto path{m_args.GetDataDirBase() / "own-setup-false"};
     auto wallet{Open(path)};
     WITH_LOCK(wallet->cs_wallet, wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS | WALLET_FLAG_BLANK_WALLET));
     const auto records{ReadRecords(wallet->GetDatabase())};
+    const auto state{WalletReconciliationTestAccess::Snapshot(*wallet)};
     Failure fault{"seed", DBKeys::WALLETDESCRIPTOR};
     std::map<uint256, CKeyingMaterial> seeds;
     Database(*wallet).after_write = [&](std::string_view type) {
@@ -2562,6 +2992,7 @@ BOOST_AUTO_TEST_CASE(own_descriptor_setup_propagates_expansion_failure)
     Database(*wallet).after_write = {};
     if (fault.hit) WalletReconciliationTestAccess::SwapSeeds(*wallet, seeds);
     BOOST_REQUIRE(fault.hit);
+    BOOST_CHECK(state == WalletReconciliationTestAccess::Snapshot(*wallet));
     BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
     BOOST_CHECK(!Database(*wallet).HasActiveTxn());
     wallet.reset();

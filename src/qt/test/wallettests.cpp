@@ -12,6 +12,7 @@
 #include <key_io.h>
 #include <policy/policy.h>
 #include <pq/pq_scheme.h>
+#include <qt/askpassphrasedialog.h>
 #include <qt/tidecoinamountfield.h>
 #include <qt/tidecoinunits.h>
 #include <qt/clientmodel.h>
@@ -36,8 +37,10 @@
 #include <wallet/test/util.h>
 #include <wallet/wallet.h>
 
+#include <array>
 #include <chrono>
 #include <memory>
+#include <stdexcept>
 
 #include <QAbstractButton>
 #include <QAction>
@@ -50,6 +53,7 @@
 #include <QVBoxLayout>
 #include <QTextEdit>
 #include <QListView>
+#include <QLineEdit>
 #include <QDialogButtonBox>
 
 using wallet::AddWallet;
@@ -257,6 +261,134 @@ public:
     }
 
 };
+
+void TestPassphraseChangeDeferredCreationFailure(interfaces::Node& node)
+{
+    // Reload an encrypted seed-only wallet, leaving descriptor creation for
+    // the unlock performed while checking the old passphrase.
+    auto wallet = std::make_shared<CWallet>(node.context()->chain.get(), "passphrase-change", CreateMockableWalletDatabase());
+    QVERIFY(wallet->LoadWallet() == wallet::DBErrors::LOAD_OK);
+    WITH_LOCK(wallet->cs_wallet, wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS | wallet::WALLET_FLAG_BLANK_WALLET));
+    QVERIFY(wallet->EncryptWallet(SecureString{"old"}));
+    QVERIFY(wallet->Unlock(SecureString{"old"}));
+    std::array<unsigned char, 32> seed;
+    seed.fill(0x42);
+    WITH_LOCK(wallet->cs_wallet, QVERIFY(wallet->ImportPQHDSeed(seed)));
+    QVERIFY(wallet->Lock());
+    const auto records = wallet::GetMockableDatabase(*wallet).m_records;
+    wallet = std::make_shared<CWallet>(node.context()->chain.get(), "passphrase-change", CreateMockableWalletDatabase(records));
+    wallet->m_keypool_size = 1;
+    QVERIFY(wallet->LoadWallet() == wallet::DBErrors::LOAD_OK);
+    QVERIFY(wallet->IsLocked());
+    QVERIFY(wallet->GetAllScriptPubKeyMans().empty());
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    MiniGUI gui(node, style.get());
+    gui.initModelForWallet(node, wallet, style.get());
+
+    for (bool fail : {true, false}) {
+        wallet::GetMockableDatabase(*wallet).m_pass = !fail;
+        AskPassphraseDialog dialog(AskPassphraseDialog::ChangePass, nullptr);
+        dialog.setModel(gui.walletModel.get());
+        dialog.findChild<QLineEdit*>("passEdit1")->setText("old");
+        dialog.findChild<QLineEdit*>("passEdit2")->setText("new");
+        dialog.findChild<QLineEdit*>("passEdit3")->setText("new");
+        QString message;
+        // Tie the callback to the dialog so an escaping exception cancels it.
+        QTimer::singleShot(0, &dialog, [&message] {
+            for (QWidget* widget : QApplication::topLevelWidgets()) {
+                if (auto* box = qobject_cast<QMessageBox*>(widget)) {
+                    message = box->text();
+                    box->defaultButton()->click();
+                }
+            }
+        });
+        try {
+            dialog.accept();
+        } catch (const std::runtime_error& e) {
+            QFAIL(e.what());
+        }
+        QVERIFY(wallet->IsLocked());
+        if (fail) {
+            QVERIFY(message.contains("Unable to commit deferred PQHD descriptors"));
+            QCOMPARE(dialog.result(), int(QDialog::Rejected));
+            QVERIFY(wallet::GetMockableDatabase(*wallet).m_records == records);
+            QVERIFY(wallet->GetAllScriptPubKeyMans().empty());
+        } else {
+            QVERIFY(message.contains("Wallet passphrase was successfully changed."));
+            QCOMPARE(dialog.result(), int(QDialog::Accepted));
+            QVERIFY(wallet->CanGetAddresses());
+        }
+    }
+    QVERIFY(!wallet->Unlock(SecureString{"old"}));
+    QVERIFY(wallet->Unlock(SecureString{"new"}));
+}
+
+class EncryptionSetupFailDatabase : public wallet::MockableDatabase
+{
+    class Batch : public wallet::MockableBatch {
+        unsigned int& m_commits_until_failure;
+    public:
+        Batch(wallet::MockableData& records, unsigned int& commits) : MockableBatch(records, true), m_commits_until_failure(commits) {}
+        bool TxnCommit() override
+        {
+            if (m_commits_until_failure > 0 && --m_commits_until_failure == 0) return false;
+            return MockableBatch::TxnCommit();
+        }
+    };
+public:
+    unsigned int commits_until_failure{0};
+    std::unique_ptr<wallet::DatabaseBatch> MakeBatch() override { return std::make_unique<Batch>(m_records, commits_until_failure); }
+};
+
+void TestEncryptionSetupFailure(interfaces::Node& node)
+{
+    auto database = std::make_unique<EncryptionSetupFailDatabase>();
+    auto* db = database.get();
+    auto wallet = std::make_shared<CWallet>(node.context()->chain.get(), "encryption-setup", std::move(database));
+    wallet->m_keypool_size = 1;
+    QVERIFY(wallet->LoadWallet() == wallet::DBErrors::LOAD_OK);
+    WITH_LOCK(wallet->cs_wallet, wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS));
+    WITH_LOCK(wallet->cs_wallet, wallet->SetupDescriptorScriptPubKeyMans());
+    const auto old_seed = WITH_LOCK(wallet->cs_wallet, return wallet->GetPQHDPolicy()->default_seed_id);
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    MiniGUI gui(node, style.get());
+    gui.initModelForWallet(node, wallet, style.get());
+    db->commits_until_failure = 2;
+    AskPassphraseDialog dialog(AskPassphraseDialog::Encrypt, nullptr);
+    dialog.setModel(gui.walletModel.get());
+    dialog.findChild<QLineEdit*>("passEdit2")->setText("pass");
+    dialog.findChild<QLineEdit*>("passEdit3")->setText("pass");
+    QString message, title;
+    QTimer dismiss;
+    QObject::connect(&dismiss, &QTimer::timeout, &dialog, [&] {
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (!widget->isVisible()) continue;
+            if (auto* box = qobject_cast<QMessageBox*>(widget)) {
+                message = box->text();
+                title = box->windowTitle();
+                auto* button = box->button(QMessageBox::Yes);
+                (button ? button : box->defaultButton())->click();
+            }
+        }
+    });
+    dismiss.start(0);
+    try {
+        dialog.accept();
+    } catch (const std::runtime_error& e) {
+        QFAIL(e.what());
+    }
+    dismiss.stop();
+    QVERIFY2(message.contains("Wallet was encrypted and locked, but replacement-seed setup failed. Existing active descriptors remain in use; no replacement seed was installed. Reason:"), qPrintable(message));
+    QCOMPARE(title, QString{"Wallet encryption incomplete"});
+    QCOMPARE(dialog.result(), int(QDialog::Rejected));
+    QCOMPARE(db->commits_until_failure, 0U);
+    QVERIFY(wallet->IsCrypted());
+    QVERIFY(wallet->IsLocked());
+    QCOMPARE(WITH_LOCK(wallet->cs_wallet, return wallet->GetPQHDSeedCount()), size_t{1});
+    QVERIFY(wallet->Unlock(SecureString{"pass"}));
+    QVERIFY(wallet->GetPQHDSeed(old_seed));
+    QCOMPARE(WITH_LOCK(wallet->cs_wallet, return wallet->GetPQHDPolicy()->default_seed_id), old_seed);
+}
 
 void TestPSBTAmountRendering(WalletModel& walletModel, ClientModel* client_model)
 {
@@ -721,6 +853,9 @@ void TestGUI(interfaces::Node& node)
     auto wallet_loader = interfaces::MakeWalletLoader(*test.m_node.chain, *Assert(test.m_node.args));
     test.m_node.wallet_loader = wallet_loader.get();
     node.setContext(&test.m_node);
+
+    TestPassphraseChangeDeferredCreationFailure(node);
+    TestEncryptionSetupFailure(node);
 
     // "Full" GUI tests, use descriptor wallet
     const std::shared_ptr<CWallet>& desc_wallet = SetupDescriptorsWallet(node, test);

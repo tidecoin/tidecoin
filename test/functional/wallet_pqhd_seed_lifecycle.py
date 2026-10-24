@@ -39,11 +39,13 @@ class WalletPQHDSeedLifecycleTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
         self.setup_clean_chain = True
+        self.extra_args = [["-keypool=2"]]
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
 
     def run_test(self):
+        self.check_locked_seed_only_reload()
         wallet_name = "pqhdseed"
         self.nodes[0].createwallet(wallet_name=wallet_name)
         wallet = self.nodes[0].get_wallet_rpc(wallet_name)
@@ -217,10 +219,13 @@ class WalletPQHDSeedLifecycleTest(BitcoinTestFramework):
             assert imported_locked["inserted"]
         imported_locked_seed = imported_locked["seed_id"]
 
+        # An unrelated failure must keep its wallet-error code even when locked.
+        assert_raises_rpc_error(-4, "Receive seed id not found in wallet", locked_wallet.setpqhdseed, "00" * 32)
+
         self.log.info("Locked-wallet policy updates must fail atomically when descriptor sync cannot create missing descriptors")
         assert_raises_rpc_error(
-            -4,
-            "Missing PQHD descriptor",
+            -13,
+            "Wallet must be unlocked to create PQHD descriptors",
             locked_wallet.setpqhdseed,
             imported_locked_seed,
             imported_locked_seed,
@@ -231,8 +236,8 @@ class WalletPQHDSeedLifecycleTest(BitcoinTestFramework):
         assert_equal(active_bech32_pqhd_descriptors(locked_wallet), locked_active_before)
 
         assert_raises_rpc_error(
-            -4,
-            "Missing PQHD descriptor",
+            -13,
+            "Wallet must be unlocked to create PQHD descriptors",
             locked_wallet.setpqhdpolicy,
             "mldsa44",
             "mldsa65",
@@ -241,6 +246,66 @@ class WalletPQHDSeedLifecycleTest(BitcoinTestFramework):
         assert_equal(next(entry["seed_id"] for entry in locked_after_setpolicy if entry["default_receive"]), locked_default_receive_seed)
         assert_equal(next(entry["seed_id"] for entry in locked_after_setpolicy if entry["default_change"]), locked_default_change_seed)
         assert_equal(active_bech32_pqhd_descriptors(locked_wallet), locked_active_before)
+
+        self.log.info("Locked policy changes can still reuse existing descriptors")
+        with WalletUnlock(locked_wallet, "pass"):
+            locked_wallet.setpqhdseed(imported_locked_seed, imported_locked_seed)
+            locked_wallet.setpqhdpolicy("mldsa44", "mldsa65")
+        # Both the imported seed's Falcon descriptors and the original seed's
+        # descriptors exist, so neither change needs an unlock to derive keys.
+        locked_wallet.setpqhdpolicy("falcon512", "falcon512")
+        locked_wallet.setpqhdseed(locked_default_receive_seed, locked_default_change_seed)
+        assert_equal(locked_wallet.getwalletinfo()["unlocked_until"], 0)
+        assert_equal(active_bech32_pqhd_descriptors(locked_wallet), locked_active_before)
+        locked_wallet.unloadwallet()
+        self.nodes[0].loadwallet(locked_wallet_name)
+        locked_wallet = self.nodes[0].get_wallet_rpc(locked_wallet_name)
+        assert_equal(locked_wallet.getwalletinfo()["unlocked_until"], 0)
+        assert_equal(active_bech32_pqhd_descriptors(locked_wallet), locked_active_before)
+
+    def check_locked_seed_only_reload(self):
+        node = self.nodes[0]
+        name = "seed-only-locked"
+        self.log.info("An encrypted seed-only wallet loads while locked and creates its descriptors on unlock")
+        node.createwallet(name, blank=True, passphrase="pass")
+        wallet = node.get_wallet_rpc(name)
+        assert_raises_rpc_error(-4, "PQHD policy not initialized", wallet.setpqhdpolicy, "falcon512")
+        with WalletUnlock(wallet, "pass"):
+            seed_id = wallet.importpqhdseed("42" * 32)["seed_id"]
+        assert_equal(wallet.listdescriptors()["descriptors"], [])
+        wallet.unloadwallet()
+        node.loadwallet(name)
+        wallet = node.get_wallet_rpc(name)
+        assert_equal(wallet.getwalletinfo()["unlocked_until"], 0)
+        assert_equal(wallet.listdescriptors()["descriptors"], [])
+        assert_raises_rpc_error(-14, "incorrect", wallet.walletpassphrase, "wrong", 60)
+        assert_equal(wallet.listdescriptors()["descriptors"], [])
+
+        # Exercise startup loading too, before any descriptor has been created.
+        self.restart_node(0, extra_args=self.extra_args[0] + [f"-wallet={name}"])
+        wallet = node.get_wallet_rpc(name)
+        assert_equal(wallet.getwalletinfo()["unlocked_until"], 0)
+        assert_equal(wallet.listdescriptors()["descriptors"], [])
+        with WalletUnlock(wallet, "pass"):
+            active = active_bech32_pqhd_descriptors(wallet)
+            assert_equal(active[False]["seed_id"], seed_id)
+            assert_equal(active[True]["seed_id"], seed_id)
+            receive = wallet.getnewaddress("", "bech32")
+            change = wallet.getrawchangeaddress("bech32")
+            assert_equal(wallet.getaddressinfo(receive)["pqhd_seedid"], seed_id)
+            assert_equal(wallet.getaddressinfo(change)["pqhd_seedid"], seed_id)
+        # Refill after issuing the two addresses before checking idempotence.
+        with WalletUnlock(wallet, "pass"):
+            descriptors = wallet.listdescriptors()["descriptors"]
+        for _ in range(2):
+            wallet.unloadwallet()
+            node.loadwallet(name)
+            wallet = node.get_wallet_rpc(name)
+            assert_equal(wallet.getwalletinfo()["unlocked_until"], 0)
+            assert_equal(wallet.listdescriptors()["descriptors"], descriptors)
+            with WalletUnlock(wallet, "pass"):
+                assert_equal(wallet.listdescriptors()["descriptors"], descriptors)
+        wallet.unloadwallet()
 
 
 if __name__ == "__main__":

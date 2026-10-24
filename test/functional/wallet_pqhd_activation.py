@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """PQHD scheme preferences survive load and reorg around positive activation."""
+from test_framework.descriptors import descsum_create
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error
 
@@ -18,7 +19,7 @@ class PQHDActivationTest(BitcoinTestFramework):
 
     def run_test(self):
         node = self.nodes[0]
-        self.generate(node, 5)
+        self.check_locked_activation_reload()
         node.createwallet('policy')
         wallet = node.get_wallet_rpc('policy')
         receive_seed = wallet.listpqhdseeds()[0]['seed_id']
@@ -58,6 +59,63 @@ class PQHDActivationTest(BitcoinTestFramework):
         node.syncwithvalidationinterfacequeue()
         assert_equal(node.getblockcount(), 5)
         self.check_addresses(wallet, receive_seed, change_seed)
+
+    def check_locked_activation_reload(self):
+        node = self.nodes[0]
+        name = 'preactivation-locked'
+        self.log.info('A wallet made before activation reloads locked after activation')
+        node.createwallet(name, passphrase='pass')
+        wallet = node.get_wallet_rpc(name)
+        wallet.walletpassphrase('pass', 60)
+        seed_id = wallet.listpqhdseeds()[0]['seed_id']
+        # Explicit active imports must survive both deferred load and unlock.
+        imported = []
+        for internal in (False, True):
+            desc = descsum_create(f'wpkh(pqhd({seed_id})/10007h/1h/7h/42h/{int(internal)}h/*h)')
+            result = wallet.importdescriptors([{'desc': desc, 'timestamp': 'now', 'range': [0, 2],
+                                               'active': True, 'internal': internal}])[0]
+            assert_equal(result['success'], True)
+            imported.append(desc)
+        before = self.active(wallet)
+        assert_equal(len(before), 6)
+        assert not any(desc.startswith('wsh512(') for desc in before)
+        wallet.walletlock()
+        wallet.unloadwallet()
+        self.generate(node, 5)
+        node.loadwallet(name)
+        wallet = node.get_wallet_rpc(name)
+        assert_equal(wallet.getwalletinfo()['unlocked_until'], 0)
+        assert_equal(self.active(wallet), before)
+        assert_raises_rpc_error(-14, 'incorrect', wallet.walletpassphrase, 'wrong', 60)
+        assert_equal(self.active(wallet), before)
+
+        self.restart_node(0, extra_args=self.extra_args[0] + [f'-wallet={name}'])
+        wallet = node.get_wallet_rpc(name)
+        assert_equal(wallet.getwalletinfo()['unlocked_until'], 0)
+        assert_equal(self.active(wallet), before)
+        wallet.walletpassphrase('pass', 60)
+        expected = self.active(wallet)
+        assert_equal(len(expected), 8)
+        assert set(before).issubset(expected)
+        assert set(imported).issubset(expected)
+        issued = set()
+        for _ in range(2):
+            for internal in (False, True):
+                address = wallet.getrawchangeaddress('bech32pq') if internal else wallet.getnewaddress('', 'bech32pq')
+                assert address not in issued
+                issued.add(address)
+                info = wallet.getaddressinfo(address)
+                assert_equal(info['pqhd_seedid'], seed_id)
+                assert f'/0h/{int(internal)}h/' in info['pqhd_path']
+            wallet.walletlock()
+            wallet.unloadwallet()
+            node.loadwallet(name)
+            wallet = node.get_wallet_rpc(name)
+            assert_equal(wallet.getwalletinfo()['unlocked_until'], 0)
+            assert_equal(self.active(wallet), expected)
+            wallet.walletpassphrase('pass', 60)
+            assert_equal(self.active(wallet), expected)
+        wallet.unloadwallet()
 
     def active(self, wallet):
         return sorted(d['desc'] for d in wallet.listdescriptors()['descriptors'] if d['active'])

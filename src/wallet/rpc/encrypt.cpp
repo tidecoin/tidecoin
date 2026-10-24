@@ -284,8 +284,12 @@ RPCHelpMan encryptwallet()
         throw JSONRPCError(RPC_INVALID_PARAMETER, "passphrase cannot be empty");
     }
 
-    if (!pwallet->EncryptWallet(strWalletPass)) {
-        throw JSONRPCError(RPC_WALLET_ENCRYPTION_FAILED, "Error: Failed to encrypt the wallet.");
+    try {
+        if (!pwallet->EncryptWallet(strWalletPass)) {
+            throw JSONRPCError(RPC_WALLET_ENCRYPTION_FAILED, "Error: Failed to encrypt the wallet.");
+        }
+    } catch (const std::runtime_error& e) {
+        throw JSONRPCError(RPC_WALLET_ENCRYPTION_FAILED, e.what());
     }
 
     return "wallet encrypted; The keypool has been flushed and a new PQHD seed was generated. You need to make a new backup with the backupwallet RPC.";

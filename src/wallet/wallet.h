@@ -466,8 +466,10 @@ private:
 
     // Reconcile active SPKM bindings to current PQHD policy defaults.
     // When create_missing_descriptors=true, missing policy descriptors may be created.
-    util::Result<void> SyncActiveScriptPubKeyMansWithPQHDPolicy(WalletBatch& batch,
-                                                                 bool create_missing_descriptors, bool preserve_active = false) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+    // Return whether creation was deferred until unlock (permitted only during load).
+    PQHDResult<bool> SyncActiveScriptPubKeyMansWithPQHDPolicy(WalletBatch& batch,
+                                                                 bool create_missing_descriptors, bool preserve_active = false,
+                                                                 bool defer_locked_creation = false) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     util::Result<DescriptorScriptPubKeyMan*> CreatePQHDDescriptorForPathWithDb(WalletBatch& batch,
                                                                                 const OutputType& type,
                                                                                 bool internal,
@@ -512,6 +514,7 @@ private:
     };
     PQHDSeedIDs m_pqhd_seed_ids;
     std::optional<PQHDPolicy> m_pqhd_policy GUARDED_BY(cs_wallet);
+    bool m_deferred_pqhd_descriptors GUARDED_BY(cs_wallet){false};
 
     /**
      * Catch wallet up to current chain, scanning new blocks, updating the best
@@ -575,7 +578,7 @@ public:
     bool HavePQHDSeed(const uint256& seed_id) const override;
     size_t GetPQHDSeedCount() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     std::optional<PQHDPolicy> GetPQHDPolicy() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
-    util::Result<void> SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
+    PQHDResult<void> SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
                                      std::optional<uint8_t> change_scheme) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     struct PQHDSeedInfo {
         uint256 seed_id;
@@ -588,7 +591,9 @@ public:
     };
     std::vector<PQHDSeedInfo> ListPQHDSeeds() const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     util::Result<ImportPQHDSeedResult> ImportPQHDSeed(const std::array<unsigned char, 32>& master_seed) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
-    util::Result<void> SetPQHDSeedDefaults(const uint256& receive_seed_id, const uint256& change_seed_id) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+    //! Generate and persist a seed; existing policy defaults and descriptors are unchanged.
+    PQHDResult<uint256> CreatePQHDSeed() EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+    PQHDResult<void> SetPQHDSeedDefaults(const uint256& receive_seed_id, const uint256& change_seed_id) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     util::Result<void> RemovePQHDSeed(const uint256& seed_id) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     int GetTargetHeightForOutputs() const override;
 

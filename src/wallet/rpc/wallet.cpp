@@ -346,6 +346,15 @@ static RPCHelpMan setwalletflag()
     };
 }
 
+template <typename T>
+static UniValue PQHDOperationError(const PQHDResult<T>& result)
+{
+    const auto error = util::ErrorString(result).original;
+    const auto code = result.error_code == PQHDErrorCode::UnlockNeeded
+        ? RPC_WALLET_UNLOCK_NEEDED : RPC_WALLET_ERROR;
+    return JSONRPCError(code, error);
+}
+
 static RPCHelpMan setpqhdpolicy()
 {
     return RPCHelpMan{
@@ -382,9 +391,9 @@ static RPCHelpMan setpqhdpolicy()
         throw JSONRPCError(RPC_INVALID_PARAMETER, "At least one scheme must be provided");
     }
 
-    util::Result<void> result = pwallet->SetPQHDPolicy(receive_scheme, change_scheme);
+    auto result = pwallet->SetPQHDPolicy(receive_scheme, change_scheme);
     if (!result) {
-        throw JSONRPCError(RPC_WALLET_ERROR, util::ErrorString(result).original);
+        throw PQHDOperationError(result);
     }
 
     UniValue obj(UniValue::VOBJ);
@@ -448,6 +457,33 @@ static RPCHelpMan listpqhdseeds()
     }
     return out;
 },
+    };
+}
+
+static RPCHelpMan createpqhdseed()
+{
+    return RPCHelpMan{
+        "createpqhdseed",
+        "Generate and save a random 32-byte PQHD master seed. Returns only its identifier, never the seed bytes.\n"
+        "Existing receive/change defaults and active descriptors are unchanged. Use setpqhdseed to select the new seed.\n"
+        "In a wallet without a PQHD policy, initializes the default policy but does not create active descriptors.\n"
+        "Make a new wallet backup after generating and selecting a seed.\n"
+        + HELP_REQUIRING_PASSPHRASE,
+        {},
+        RPCResult{RPCResult::Type::OBJ, "", "", {
+            {RPCResult::Type::STR_HEX, "seed_id", "Identifier of the saved PQHD seed"},
+        }},
+        RPCExamples{HelpExampleCli("createpqhdseed", "") + HelpExampleRpc("createpqhdseed", "")},
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
+            const auto wallet = GetWalletForJSONRPCRequest(request);
+            if (!wallet) return UniValue::VNULL;
+            LOCK(wallet->cs_wallet);
+            const auto result = wallet->CreatePQHDSeed();
+            if (!result) throw PQHDOperationError(result);
+            UniValue out{UniValue::VOBJ};
+            out.pushKV("seed_id", result->ToString());
+            return out;
+        },
     };
 }
 
@@ -533,7 +569,7 @@ static RPCHelpMan setpqhdseed()
     LOCK(pwallet->cs_wallet);
     auto result = pwallet->SetPQHDSeedDefaults(receive_seed_id, change_seed_id);
     if (!result) {
-        throw JSONRPCError(RPC_WALLET_ERROR, util::ErrorString(result).original);
+        throw PQHDOperationError(result);
     }
 
     UniValue out(UniValue::VOBJ);
@@ -587,7 +623,9 @@ static RPCHelpMan createwallet()
 {
     return RPCHelpMan{
         "createwallet",
-        "Creates and loads a new wallet.\n",
+        "Creates and loads a new wallet.\n"
+        "If initialization fails after encryption, the encrypted blank wallet file is retained.\n"
+        "After resolving the database error, use loadwallet, walletpassphrase, createpqhdseed and setpqhdseed to finish initialization, then make a backup.\n",
         {
             {"wallet_name", RPCArg::Type::STR, RPCArg::Optional::NO, "The name for the new wallet. If this is a path, the wallet will be created at the path location."},
             {"disable_private_keys", RPCArg::Type::BOOL, RPCArg::Default{false}, "Disable the possibility of private keys (only watchonlys are possible in this mode)."},
@@ -1052,6 +1090,7 @@ std::span<const CRPCCommand> GetWalletRPCCommands()
         {"wallet", &setlabel},
         {"wallet", &listpqhdseeds},
         {"wallet", &importpqhdseed},
+        {"wallet", &createpqhdseed},
         {"wallet", &setpqhdpolicy},
         {"wallet", &setpqhdseed},
         {"wallet", &removepqhdseed},

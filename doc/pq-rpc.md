@@ -12,6 +12,7 @@ particular AuxPoW merge-mining flows and PQHD wallet policy/seed management.
 | `getauxblock` | Wallet RPC (`wallet`) | Wallet-assisted create/submit flow for merge-mining. |
 | `setpqhdpolicy` | Wallet RPC (`wallet`) | Set default PQ scheme policy for receive/change addresses. |
 | `listpqhdseeds` | Wallet RPC (`wallet`) | List PQHD seeds tracked by the wallet. |
+| `createpqhdseed` | Wallet RPC (`wallet`) | Generate and save a random 32-byte PQHD seed, returning only its ID. |
 | `importpqhdseed` | Wallet RPC (`wallet`) | Import a 32-byte PQHD master seed. |
 | `setpqhdseed` | Wallet RPC (`wallet`) | Select default PQHD seed ids for receive/change derivation. |
 | `removepqhdseed` | Wallet RPC (`wallet`) | Remove a non-default, unreferenced PQHD seed. |
@@ -122,6 +123,34 @@ Each entry contains:
 - `encrypted` (bool)
 - `default_receive` (bool)
 - `default_change` (bool)
+
+### `createpqhdseed`
+
+Generate a new seed inside the wallet and save it before returning its identifier.
+This command takes no arguments and never returns the seed bytes.
+
+```bash
+tidecoin-cli -rpcwallet="<wallet>" createpqhdseed
+```
+
+The result contains only `seed_id`. Existing receive/change defaults and active
+descriptors are unchanged. To select the saved seed, pass that ID to
+`setpqhdseed`, then make a new wallet backup. Earlier backups do not contain it.
+If selection fails, the seed remains saved; retry with the same ID after fixing
+the error. Selecting it does not move coins or remove older descriptors.
+
+In a wallet with no PQHD policy, the first seed initializes one, as an import
+would; generation itself does not create active descriptors. `setpqhdseed`
+provisions them immediately, and normal load/unlock reconciliation can also
+provision them later. An encrypted wallet must be unlocked (`-13`). Wallets with
+private keys disabled, including external-signer wallets, reject local generation
+(`-4`). Failed writes or commits return an error without publishing a new seed.
+
+This is also the recovery path after a failed replacement-seed setup during
+encryption: resolve the write error, unlock the saved wallet, generate and select
+a fresh seed, then back up. If encrypted `createwallet` initialization failed,
+first load the retained blank file with `loadwallet`. See
+[PQHD storage and state](design/pqhd.md#9-wallet-storage-and-state).
 
 ### `importpqhdseed`
 

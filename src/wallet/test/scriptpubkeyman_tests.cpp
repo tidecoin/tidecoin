@@ -554,7 +554,8 @@ BOOST_FIXTURE_TEST_CASE(PQHDPolicyUpdatesRollbackWhenDescriptorReconciliationFai
 
     const auto set_seed_result = wallet.SetPQHDSeedDefaults(imported_seed_id, imported_seed_id);
     BOOST_REQUIRE(!set_seed_result);
-    BOOST_CHECK(util::ErrorString(set_seed_result).original.find("Missing PQHD descriptor") != std::string::npos);
+    BOOST_CHECK(set_seed_result.error_code == PQHDErrorCode::UnlockNeeded);
+    BOOST_CHECK(util::ErrorString(set_seed_result).original.find("Wallet must be unlocked to create PQHD descriptors") != std::string::npos);
 
     const auto after_seed_policy = wallet.GetPQHDPolicy();
     BOOST_REQUIRE(after_seed_policy);
@@ -576,7 +577,11 @@ BOOST_FIXTURE_TEST_CASE(PQHDPolicyUpdatesRollbackWhenDescriptorReconciliationFai
     const auto set_policy_result = wallet.SetPQHDPolicy(static_cast<uint8_t>(pq::SchemeId::MLDSA_44),
                                                         static_cast<uint8_t>(pq::SchemeId::MLDSA_65));
     BOOST_REQUIRE(!set_policy_result);
-    BOOST_CHECK(util::ErrorString(set_policy_result).original.find("Missing PQHD descriptor") != std::string::npos);
+    BOOST_CHECK(util::ErrorString(set_policy_result).original.find("Wallet must be unlocked to create PQHD descriptors") != std::string::npos);
+    BOOST_CHECK(set_policy_result.error_code == PQHDErrorCode::UnlockNeeded);
+    const auto invalid_policy = wallet.SetPQHDPolicy(0xff, std::nullopt);
+    BOOST_REQUIRE(!invalid_policy);
+    BOOST_CHECK(invalid_policy.error_code == PQHDErrorCode::Generic);
 
     const auto after_scheme_policy = wallet.GetPQHDPolicy();
     BOOST_REQUIRE(after_scheme_policy);

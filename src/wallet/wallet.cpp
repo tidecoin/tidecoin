@@ -512,26 +512,39 @@ std::shared_ptr<CWallet> CreateWallet(WalletContext& context, const std::string&
 
     // Encrypt the wallet
     if (!passphrase.empty() && !(wallet_creation_flags & WALLET_FLAG_DISABLE_PRIVATE_KEYS)) {
+        const auto close_failed_wallet = [&] {
+            wallet->Lock();
+            // Attachment registers a shared reference with chain notifications.
+            // Release it before returning so the retained file can be reloaded.
+            wallet->m_chain_notifications_handler.reset();
+            WaitForDeleteWallet(std::move(wallet));
+        };
         if (!wallet->EncryptWallet(passphrase)) {
             error = Untranslated("Error: Wallet created but failed to encrypt.");
             status = DatabaseStatus::FAILED_ENCRYPT;
+            close_failed_wallet();
             return nullptr;
         }
         if (!create_blank) {
-            // Unlock the wallet
-            if (!wallet->Unlock(passphrase)) {
-                error = Untranslated("Error: Wallet was encrypted but could not be unlocked");
-                status = DatabaseStatus::FAILED_ENCRYPT;
-                return nullptr;
-            }
-
-            // Set a seed for the wallet
-            {
+            // Encryption has committed. Failed initialization retains a blank
+            // encrypted file that can be loaded and provisioned later.
+            try {
+                if (!wallet->Unlock(passphrase)) {
+                    throw std::runtime_error("Could not unlock the newly encrypted wallet");
+                }
                 LOCK(wallet->cs_wallet);
                 wallet->SetupDescriptorScriptPubKeyMans();
+            } catch (const std::exception& e) {
+                close_failed_wallet();
+                error = Untranslated(strprintf("Wallet '%s' was created and encrypted, but initialization failed. "
+                    "The wallet file has been retained. After resolving the database error, use loadwallet to load it, "
+                    "walletpassphrase to unlock it, then createpqhdseed and setpqhdseed to complete initialization. Reason: %s", name, e.what()));
+                status = DatabaseStatus::FAILED_CREATE;
+                return nullptr;
+            } catch (...) {
+                close_failed_wallet();
+                throw;
             }
-
-            // Relock the wallet
             wallet->Lock();
         }
     }
@@ -875,6 +888,7 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
         return false;
 
     CKeyingMaterial plain_master_key;
+    std::exception_ptr setup_error;
 
     plain_master_key.resize(WALLET_CRYPTO_KEY_SIZE);
     GetStrongRandBytes(plain_master_key);
@@ -923,14 +937,18 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
         mapMasterKeys[new_master_key_id] = std::move(master_key);
 
         Lock();
-        if (!Unlock(strWalletPassphrase)) {
-            throw std::runtime_error(std::string(__func__) + ": Failed to unlock wallet after encrypting keys");
+        try {
+            if (!Unlock(strWalletPassphrase)) {
+                throw std::runtime_error(std::string(__func__) + ": Failed to unlock wallet after encrypting keys");
+            }
+            // Encryption is already committed. Only this new setup can roll back.
+            if (!IsWalletFlagSet(WALLET_FLAG_BLANK_WALLET)) {
+                SetupDescriptorScriptPubKeyMans();
+            }
+        } catch (...) {
+            setup_error = std::current_exception();
         }
-
-        // Make new descriptors with a new seed
-        if (!IsWalletFlagSet(WALLET_FLAG_BLANK_WALLET)) {
-            SetupDescriptorScriptPubKeyMans();
-        }
+        // Relock and attempt the rewrite even if new descriptor setup failed.
         Lock();
 
         // Need to completely rewrite the wallet file; if we don't, the database might keep
@@ -939,6 +957,15 @@ bool CWallet::EncryptWallet(const SecureString& strWalletPassphrase)
     }
     NotifyStatusChanged(this);
 
+    if (setup_error) {
+        try {
+            std::rethrow_exception(setup_error);
+        } catch (const std::exception& e) {
+            throw std::runtime_error(strprintf("Wallet was encrypted and locked, but replacement-seed setup failed. Existing active descriptors remain in use; no replacement seed was installed. Reason: %s", e.what()));
+        } catch (...) {
+            throw std::runtime_error("Wallet was encrypted and locked, but replacement-seed setup failed. Existing active descriptors remain in use; no replacement seed was installed. Reason: unknown error");
+        }
+    }
     return true;
 }
 
@@ -1941,7 +1968,7 @@ std::optional<PQHDPolicy> CWallet::GetPQHDPolicy() const
     return m_pqhd_policy;
 }
 
-util::Result<void> CWallet::SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
+PQHDResult<void> CWallet::SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
                                           std::optional<uint8_t> change_scheme) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
 {
     AssertLockHeld(cs_wallet);
@@ -1968,17 +1995,17 @@ util::Result<void> CWallet::SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
             return util::Error{Untranslated(strprintf("%s scheme %s is not allowed before auxpow activation height %d",
                                                      field, info->name, params.nAuxpowStartHeight))};
         }
-        return util::Result<void>();
+        return {};
     };
 
     if (receive_scheme) {
         auto res = validate_scheme(*receive_scheme, "Receive");
-        if (!res) return res;
+        if (!res) return util::Error{util::ErrorString(res)};
         policy.default_receive_scheme = *receive_scheme;
     }
     if (change_scheme) {
         auto res = validate_scheme(*change_scheme, "Change");
-        if (!res) return res;
+        if (!res) return util::Error{util::ErrorString(res)};
         policy.default_change_scheme = *change_scheme;
     }
 
@@ -2008,10 +2035,10 @@ util::Result<void> CWallet::SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
         restore_previous_policy();
         return util::Error{Untranslated("Failed to start PQHD policy update transaction")};
     }
-    const auto rollback = [&](const bilingual_str& err) -> util::Result<void> {
+    const auto rollback = [&](const bilingual_str& err, PQHDErrorCode code = PQHDErrorCode::Generic) -> PQHDResult<void> {
         restore_previous_policy();
         (void)batch.TxnAbort();
-        return util::Error{err};
+        return {util::Error{err}, code};
     };
 
     if (!batch.WritePQHDPolicy(policy)) {
@@ -2020,7 +2047,7 @@ util::Result<void> CWallet::SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
 
     try {
         auto sync_result = SyncActiveScriptPubKeyMansWithPQHDPolicy(batch, /*create_missing_descriptors=*/true);
-        if (!sync_result) return rollback(util::ErrorString(sync_result));
+        if (!sync_result) return rollback(util::ErrorString(sync_result), sync_result.error_code);
     } catch (const std::exception& e) {
         return rollback(Untranslated(e.what()));
     }
@@ -2030,7 +2057,7 @@ util::Result<void> CWallet::SetPQHDPolicy(std::optional<uint8_t> receive_scheme,
         (void)batch.TxnAbort();
         return util::Error{Untranslated("Failed to commit PQHD policy update transaction")};
     }
-    return util::Result<void>();
+    return {};
 }
 
 std::vector<CWallet::PQHDSeedInfo> CWallet::ListPQHDSeeds() const
@@ -2143,7 +2170,25 @@ util::Result<CWallet::ImportPQHDSeedResult> CWallet::ImportPQHDSeed(const std::a
     return ImportPQHDSeedResult{seed_id, /*inserted=*/true};
 }
 
-util::Result<void> CWallet::SetPQHDSeedDefaults(const uint256& receive_seed_id, const uint256& change_seed_id) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
+PQHDResult<uint256> CWallet::CreatePQHDSeed()
+{
+    AssertLockHeld(cs_wallet);
+    if (IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) {
+        return util::Error{Untranslated("Private PQHD seeds are disabled for this wallet")};
+    }
+    if (IsLocked()) {
+        return {util::Error{Untranslated("Wallet must be unlocked to create a PQHD seed")}, PQHDErrorCode::UnlockNeeded};
+    }
+    std::array<unsigned char, 32> seed;
+    const ScopedMemoryCleanse cleanse_seed{seed.data(), seed.size()};
+    GetStrongRandBytes(seed);
+    auto result = ImportPQHDSeed(seed);
+    if (!result) return util::Error{util::ErrorString(result)};
+    if (!result->inserted) return util::Error{Untranslated("Generated PQHD seed already exists in wallet")};
+    return result->seed_id;
+}
+
+PQHDResult<void> CWallet::SetPQHDSeedDefaults(const uint256& receive_seed_id, const uint256& change_seed_id) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
 {
     AssertLockHeld(cs_wallet);
     if (IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) {
@@ -2179,10 +2224,10 @@ util::Result<void> CWallet::SetPQHDSeedDefaults(const uint256& receive_seed_id, 
         restore_previous_policy();
         return util::Error{Untranslated("Failed to start PQHD seed defaults update transaction")};
     }
-    const auto rollback = [&](const bilingual_str& err) -> util::Result<void> {
+    const auto rollback = [&](const bilingual_str& err, PQHDErrorCode code = PQHDErrorCode::Generic) -> PQHDResult<void> {
         restore_previous_policy();
         (void)batch.TxnAbort();
-        return util::Error{err};
+        return {util::Error{err}, code};
     };
 
     if (!batch.WritePQHDPolicy(policy)) {
@@ -2191,7 +2236,7 @@ util::Result<void> CWallet::SetPQHDSeedDefaults(const uint256& receive_seed_id, 
 
     try {
         auto sync_result = SyncActiveScriptPubKeyMansWithPQHDPolicy(batch, /*create_missing_descriptors=*/true);
-        if (!sync_result) return rollback(util::ErrorString(sync_result));
+        if (!sync_result) return rollback(util::ErrorString(sync_result), sync_result.error_code);
     } catch (const std::exception& e) {
         return rollback(Untranslated(e.what()));
     }
@@ -2201,7 +2246,7 @@ util::Result<void> CWallet::SetPQHDSeedDefaults(const uint256& receive_seed_id, 
         (void)batch.TxnAbort();
         return util::Error{Untranslated("Failed to commit PQHD seed defaults update transaction")};
     }
-    return util::Result<void>();
+    return {};
 }
 
 util::Result<void> CWallet::RemovePQHDSeed(const uint256& seed_id)
@@ -2934,7 +2979,8 @@ DBErrors CWallet::LoadWallet()
             return DBErrors::CORRUPT;
         }
         const uint64_t wallet_flags_before = m_wallet_flags;
-        auto sync_result = SyncActiveScriptPubKeyMansWithPQHDPolicy(batch, /*create_missing_descriptors=*/true, /*preserve_active=*/true);
+        auto sync_result = SyncActiveScriptPubKeyMansWithPQHDPolicy(batch, /*create_missing_descriptors=*/true,
+                                                                 /*preserve_active=*/true, /*defer_locked_creation=*/true);
         if (!sync_result) {
             m_wallet_flags = wallet_flags_before;
             (void)batch.TxnAbort();
@@ -2948,6 +2994,7 @@ DBErrors CWallet::LoadWallet()
             WalletLogPrintf("Error: failed to commit db txn for PQHD policy reconciliation on load\n");
             return DBErrors::CORRUPT;
         }
+        m_deferred_pqhd_descriptors = *sync_result;
     }
 
     return nLoadWalletRet;
@@ -4127,6 +4174,23 @@ bool CWallet::Unlock(const CKeyingMaterial& vMasterKeyIn)
             throw std::runtime_error("PQHD cache does not match wallet seed; wallet may be corrupted");
         }
         vMasterKey = vMasterKeyIn;
+        if (m_deferred_pqhd_descriptors) {
+            try {
+                if (!RunWithinTxn(GetDatabase(), "deferred PQHD descriptor creation", [&](WalletBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
+                        const auto result = SyncActiveScriptPubKeyMansWithPQHDPolicy(batch, /*create_missing_descriptors=*/true, /*preserve_active=*/true);
+                        if (!result) throw std::runtime_error(util::ErrorString(result).original);
+                        return true;
+                    })) {
+                    throw std::runtime_error("Unable to commit deferred PQHD descriptors");
+                }
+                m_deferred_pqhd_descriptors = false;
+            } catch (...) {
+                // Creation is rolled back by the batch. Keep the retry pending
+                // and do not publish an unlocked wallet after a failed retry.
+                CleanseAndClearVector(vMasterKey);
+                throw;
+            }
+        }
     }
     NotifyStatusChanged(this);
     return true;
@@ -4263,16 +4327,17 @@ util::Result<DescriptorScriptPubKeyMan*> CWallet::CreatePQHDDescriptorForPathWit
     }
 }
 
-util::Result<void> CWallet::SyncActiveScriptPubKeyMansWithPQHDPolicy(WalletBatch& batch,
-                                                                      bool create_missing_descriptors, bool preserve_active)
+PQHDResult<bool> CWallet::SyncActiveScriptPubKeyMansWithPQHDPolicy(WalletBatch& batch,
+                                                                      bool create_missing_descriptors, bool preserve_active,
+                                                                      bool defer_locked_creation)
 {
     AssertLockHeld(cs_wallet);
 
     if (!IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS) || !m_pqhd_policy) {
-        return util::Result<void>();
+        return false;
     }
     if (IsWalletFlagSet(WALLET_FLAG_EXTERNAL_SIGNER)) {
-        return util::Result<void>();
+        return false;
     }
 
     const uint256 receive_seed_id = m_pqhd_policy->default_seed_id;
@@ -4293,6 +4358,7 @@ util::Result<void> CWallet::SyncActiveScriptPubKeyMansWithPQHDPolicy(WalletBatch
     if (receive_scheme_info == nullptr || change_scheme_info == nullptr) {
         return util::Error{Untranslated("PQHD default scheme id is unknown")};
     }
+    bool deferred{false};
     for (bool internal : {false, true}) {
         const uint8_t scheme_prefix = internal ? change_scheme : receive_scheme;
         const uint256 seed_id = internal ? change_seed_id : receive_seed_id;
@@ -4318,6 +4384,15 @@ util::Result<void> CWallet::SyncActiveScriptPubKeyMansWithPQHDPolicy(WalletBatch
             if (!desired && (!pq::IsSchemeAllowedAtHeight(scheme->id, consensus, target_height) ||
                              (type == OutputType::BECH32PQ && target_height < consensus.nAuxpowStartHeight))) continue;
             if (desired == nullptr && create_missing_descriptors) {
+                // Policy/seed validity and existing active bindings are checked
+                // above even while locked. Only missing key derivation waits.
+                if (IsLocked()) {
+                    if (!defer_locked_creation) {
+                        return {util::Error{Untranslated("Wallet must be unlocked to create PQHD descriptors")}, PQHDErrorCode::UnlockNeeded};
+                    }
+                    deferred = true;
+                    continue;
+                }
                 auto create_result = CreatePQHDDescriptorForPathWithDb(batch, type, internal, seed_id, scheme_prefix, target_height);
                 if (!create_result) {
                     return util::Error{util::ErrorString(create_result)};
@@ -4340,7 +4415,7 @@ util::Result<void> CWallet::SyncActiveScriptPubKeyMansWithPQHDPolicy(WalletBatch
         }
     }
 
-    return util::Result<void>();
+    return deferred;
 }
 
 ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool internal) const
@@ -4731,6 +4806,7 @@ void CWallet::SetupOwnDescriptorScriptPubKeyMans(WalletBatch& batch)
     if (IsWalletFlagSet(WALLET_FLAG_DISABLE_PRIVATE_KEYS | WALLET_FLAG_EXTERNAL_SIGNER)) {
         throw std::runtime_error("Private PQHD seeds are disabled for this wallet");
     }
+    assert(batch.HasActiveTxn());
 
     // Create a PQHD seed and default policy for descriptor wallets.
     pqhd::SecureSeed32 master_seed;
@@ -4739,6 +4815,17 @@ void CWallet::SetupOwnDescriptorScriptPubKeyMans(WalletBatch& batch)
     // Store SeedID32 as a uint256 using the standard uint256 hex representation.
     // The helper normalizes endianness so seed_id.ToString() matches canonical SeedID32 hex.
     const uint256 seed_id{pqhd::ComputeSeedID32AsUint256(master_seed.Span())};
+    if (HavePQHDSeed(seed_id)) throw std::runtime_error("Generated PQHD seed already exists in wallet");
+    // Derivation needs the seed during setup. Its temporary publication must be
+    // undone along with the database writes if any later step fails.
+    batch.RegisterTxnListener({
+        .on_commit = {},
+        .on_abort = [this, seed_id, birth = GetBirthTime()]() EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
+            m_pqhd_seeds.erase(seed_id);
+            m_pqhd_seed_ids.Erase(seed_id);
+            m_birth_time = birth;
+        },
+    });
 
     if (IsCrypted()) {
         if (IsLocked()) {
@@ -4757,7 +4844,9 @@ void CWallet::SetupOwnDescriptorScriptPubKeyMans(WalletBatch& batch)
         if (!batch.WriteCryptedPQHDSeed(seed_id, seed_record)) {
             throw std::runtime_error(std::string(__func__) + ": writing encrypted PQHD seed failed");
         }
-        LoadPQHDCryptedSeed(seed_id, PQHDCryptedSeed(seed_record));
+        if (!LoadPQHDCryptedSeed(seed_id, PQHDCryptedSeed(seed_record))) {
+            throw std::runtime_error("Could not load new encrypted PQHD seed");
+        }
     } else {
         PQHDSeed seed_record;
         seed_record.nCreateTime = GetTime();
@@ -4765,7 +4854,9 @@ void CWallet::SetupOwnDescriptorScriptPubKeyMans(WalletBatch& batch)
         if (!batch.WritePQHDSeed(seed_id, seed_record)) {
             throw std::runtime_error(std::string(__func__) + ": writing PQHD seed failed");
         }
-        LoadPQHDSeed(seed_id, PQHDSeed(seed_record));
+        if (!LoadPQHDSeed(seed_id, PQHDSeed(seed_record))) {
+            throw std::runtime_error("Could not load new PQHD seed");
+        }
     }
 
     PQHDPolicy policy;
@@ -4776,7 +4867,12 @@ void CWallet::SetupOwnDescriptorScriptPubKeyMans(WalletBatch& batch)
     if (!batch.WritePQHDPolicy(policy)) {
         throw std::runtime_error(std::string(__func__) + ": writing PQHD policy failed");
     }
-    LoadPQHDPolicy(PQHDPolicy(policy));
+    batch.RegisterTxnListener({
+        .on_commit = [this, policy]() EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
+            LoadPQHDPolicy(PQHDPolicy(policy));
+        },
+        .on_abort = {},
+    });
 
     const Consensus::Params& consensus = Params().GetConsensus();
     const int target_height = GetTargetHeightForOutputs();
@@ -4789,22 +4885,10 @@ void CWallet::SetupOwnDescriptorScriptPubKeyMans(WalletBatch& batch)
             // Don't create descriptors for output types that are not yet active under
             // current consensus rules (e.g. witness v1 PQ outputs pre-auxpow).
             if (t == OutputType::BECH32PQ && target_height < consensus.nAuxpowStartHeight) continue;
-            WalletDescriptor w_desc = GeneratePQHDWalletDescriptor(seed_for_descriptor, scheme_prefix, t, internal, consensus, target_height);
-            auto spk_manager = std::unique_ptr<DescriptorScriptPubKeyMan>(new DescriptorScriptPubKeyMan(*this, m_keypool_size));
-            if (IsCrypted()) {
-                if (IsLocked()) {
-                    throw std::runtime_error(std::string(__func__) + ": Wallet is locked, cannot setup new descriptors");
-                }
-                if (!spk_manager->CheckDecryptionKey(vMasterKey) && !spk_manager->Encrypt(vMasterKey, &batch)) {
-                    throw std::runtime_error(std::string(__func__) + ": Could not encrypt new descriptors");
-                }
-            }
-            if (!spk_manager->SetupDescriptor(batch, std::move(w_desc))) {
-                throw std::runtime_error(std::string(__func__) + ": Could not set up PQHD descriptor keypool");
-            }
-            uint256 id = spk_manager->GetID();
-            AddScriptPubKeyManWithDb(batch, id, std::move(spk_manager));
-            AddActiveScriptPubKeyManWithDb(batch, id, t, internal);
+            auto manager = CreatePQHDDescriptorForPathWithDb(batch, t, internal, seed_for_descriptor, scheme_prefix, target_height);
+            if (!manager) throw std::runtime_error(util::ErrorString(manager).original);
+            if (!*manager) throw std::runtime_error("Could not create default PQHD descriptor");
+            AddActiveScriptPubKeyManWithDb(batch, (*manager)->GetID(), t, internal);
         }
     }
 }

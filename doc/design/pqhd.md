@@ -256,6 +256,30 @@ Encrypted individual private keys, when present, are checked as well. The same
 validation protects passphrase changes: invalid candidate keys or damaged seed
 records must not cause the existing master-key record to be replaced.
 
+`encryptwallet` commits encryption of the existing keys and seeds before
+creating a fresh PQHD seed and default descriptors in a separate transaction.
+The fresh seed is temporarily available for derivation during setup; an abort
+removes it and its descriptor managers and restores the previous wallet state.
+The new policy and active bindings take effect only on commit. A setup failure
+leaves the already-encrypted wallet locked and reports that encryption completed
+but setup failed (`RPC_WALLET_ENCRYPTION_FAILED`, `-16`). The existing seeds and
+descriptors remain available after unlocking with the supplied passphrase.
+Existing active descriptors continue to issue receive/change addresses; no
+replacement seed was installed. Seeds that existed before encryption may also
+exist in earlier unencrypted backups. To select fresh key material, resolve the
+database error, unlock, run `createpqhdseed`, then pass its `seed_id` to
+`setpqhdseed`. Take a new wallet backup. This changes future issuance, not the
+keys controlling existing coins; the wallet retains those older descriptors.
+The database rewrite is attempted even when setup fails. Calling `encryptwallet`
+again is rejected because the wallet is already encrypted.
+
+For `createwallet` with a passphrase, encryption precedes initial seed/descriptor
+setup. If that setup fails, the RPC returns a creation error (`-4`), retains the
+encrypted blank wallet file, and does not register the wallet as loaded. A retry
+with the same name cannot overwrite it. After resolving the database error,
+complete initialization with `loadwallet`, `walletpassphrase`, `createpqhdseed`,
+and `setpqhdseed`, followed by `backupwallet`. No automatic file deletion occurs.
+
 A genuinely empty encrypted wallet has no seed or private-key record against
 which to verify the candidate. Its existing encryption format is retained, with
 the exact master-key length check; seed verification applies once it contains
@@ -295,6 +319,23 @@ Import behavior (`ImportPQHDSeed`):
 - re-import is idempotent (`inserted=false`)
 - encrypted wallets require unlocked state for import
 - first imported seed initializes default PQHD policy if missing
+
+Generation (`CreatePQHDSeed`, RPC `createpqhdseed`) uses `GetStrongRandBytes` to
+produce a new 32-byte master seed inside the wallet and saves it through the
+same transactional import path. The 32-byte length is PQHD v1's existing master
+seed format (§5.1), not the length of a scheme's expanded private key. Temporary
+seed bytes are cleared on return. The result contains only `seed_id`, never the
+seed bytes. A failed write or commit does not publish the seed in wallet memory.
+An encrypted wallet must be unlocked (`-13`); restricted wallets and database
+errors return `-4`.
+
+Generation leaves existing policy defaults and active descriptors unchanged.
+In a wallet without a policy, the first generated seed initializes one, as an
+import would, but active descriptors are created by explicit selection with
+`setpqhdseed` (or subsequent normal descriptor provisioning). Generation and
+selection are separate transactions. If selection fails, the saved seed remains
+available in `listpqhdseeds`; retry selection with the same ID after resolving
+the error. Generating another seed is unnecessary.
 
 Wallets with private keys disabled, including external-signer wallets, reject
 local private-seed import, generation, and default-seed/policy changes at the
@@ -348,10 +389,21 @@ and returns a warning. `sh(wsh512(...))` is rejected by the descriptor parser.
 A wallet created before activation has no `wsh512` descriptors. Once the next
 block is at or past activation, the first `bech32pq` request creates the
 descriptor for that direction from the PQHD policy
-(`CWallet::GetScriptPubKeyMan`), and loading the wallet creates every missing
-one (`SyncActiveScriptPubKeyMansWithPQHDPolicy`). Creation needs the seed, so an
-encrypted wallet must be unlocked; an external-signer wallet gets descriptors
-only from its device. [Descriptors](../descriptors.md) documents native v1
+(`CWallet::GetScriptPubKeyMan`). Loading an unencrypted wallet creates missing
+eligible policy descriptors (`SyncActiveScriptPubKeyMansWithPQHDPolicy`). A
+locked encrypted wallet loads successfully and defers that creation until its
+next successful unlock. This also applies to a wallet containing only an
+encrypted PQHD seed and policy. Unlock creates and persists the missing
+descriptors without replacing existing active imports. If creation fails, its
+database transaction is rolled back, the wallet remains locked, and a later
+unlock retries. Missing seeds or invalid policies still cause a load error.
+Explicit policy changes that require creating descriptors report that the
+wallet must be unlocked; `setpqhdpolicy` and `setpqhdseed` return
+`RPC_WALLET_UNLOCK_NEEDED` (`-13`) for this case. Their policy changes are rolled
+back on failure. Changes that reuse existing descriptors can succeed while
+locked, and unrelated wallet errors retain their existing codes.
+An external-signer wallet gets descriptors only from its device.
+[Descriptors](../descriptors.md) documents native v1
 and the unchanged ordinary-script interpretation of a 64-byte v1 program
 inside P2SH.
 
@@ -493,6 +545,7 @@ Primary PQHD wallet RPCs:
 - `setpqhdpolicy`
 - `listpqhdseeds`
 - `importpqhdseed`
+- `createpqhdseed`
 - `setpqhdseed`
 - `removepqhdseed`
 
@@ -611,11 +664,28 @@ If an output type has no active binding, the policy descriptor can still be foun
 or created on demand when eligible. Absence of an active binding is therefore not
 a persistent instruction to disable that policy output type.
 
-First encryption retains its existing security behavior: it generates a new
-policy seed and selects its default descriptors. It can consequently replace
+Successful first encryption generates a new policy seed and selects its default
+descriptors. It can consequently replace
 custom active bindings. Install/reactivate custom descriptors after encryption
 if they are to remain the issuance choice. Historical descriptors remain in the
 wallet; importing an older seed/path deliberately reuses that older key material.
+Failed replacement setup keeps the previous active bindings, as described in §9.1.
+
+To generate and select fresh key material explicitly, unlock an encrypted wallet
+first and run:
+
+```text
+tidecoin-cli -rpcwallet=NAME createpqhdseed
+# Copy the returned seed_id (an identifier, not secret seed bytes).
+tidecoin-cli -rpcwallet=NAME setpqhdseed SEED_ID
+tidecoin-cli -rpcwallet=NAME backupwallet /absolute/path/to/new-backup.dat
+```
+
+`setpqhdseed` without a second ID selects the same seed for receive and change,
+and rebinds active descriptors to policy defaults, including imported active
+bindings. It does not move funds or remove older seeds/descriptors. Generation
+alone does not rotate an existing wallet's defaults. A backup made before seed
+generation cannot recover the new seed; retain a backup made after selection.
 
 ### 12.4 Seed and descriptor recovery
 
