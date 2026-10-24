@@ -25,7 +25,7 @@ if [ -z "${COMMIT_RANGE:-}" ]; then
   fi
 fi
 
-PQ_VENDOR_DEEP_PATHS_REGEX='^(src/pq/|contrib/devtools/check_pq_vendor.py$|test/lint/lint-pq-vendor.py$|test/lint/test_runner/src/main.rs$|doc/developer-notes.md$|test/lint/README.md$)'
+PQ_VENDOR_DEEP_PATHS_REGEX='^(src/pq/|contrib/devtools/(check|test)_pq_vendor.py$|test/lint/lint-pq-vendor.py$|test/lint/test_runner/src/main.rs$|ci/lint/06_script.sh$|doc/developer-notes.md$|test/lint/README.md$)'
 CHANGED_PATHS="$(git diff --name-only "${COMMIT_RANGE}" -- || true)"
 if printf '%s\n' "$CHANGED_PATHS" | grep -Eq "$PQ_VENDOR_DEEP_PATHS_REGEX"; then
   export RUN_PQ_VENDOR_DEEP=1

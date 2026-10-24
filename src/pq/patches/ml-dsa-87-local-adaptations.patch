@@ -1,18 +1,25 @@
---- a/crypto_sign/ml-dsa-87/clean/api.h
+diff --git a/src/pq/ml-dsa-87/api.h b/src/pq/ml-dsa-87/api.h
+index 1a30eac47afb3b5f642a6aba3a0abd00c00bfaf2..5846ca8486492067fa7628c7e1d4e8e79d6554dc 100644
+--- a/src/pq/ml-dsa-87/api.h
 +++ b/src/pq/ml-dsa-87/api.h
 @@ -10,6 +10,9 @@
  #define PQCLEAN_MLDSA87_CLEAN_CRYPTO_ALGNAME "ML-DSA-87"
- 
+
  int PQCLEAN_MLDSA87_CLEAN_crypto_sign_keypair(uint8_t *pk, uint8_t *sk);
 +int PQCLEAN_MLDSA87_CLEAN_crypto_sign_keypair_deterministic(
 +    uint8_t *pk, uint8_t *sk,
 +    const uint8_t *seed, size_t seed_len);
- 
+
  int PQCLEAN_MLDSA87_CLEAN_crypto_sign_signature_ctx(uint8_t *sig, size_t *siglen,
          const uint8_t *m, size_t mlen,
---- a/crypto_sign/ml-dsa-87/clean/sign.c
+diff --git a/src/pq/ml-dsa-87/sign.c b/src/pq/ml-dsa-87/sign.c
+index 2637de3d6870656ff9a427ac478945798d3e9b83..ac93c95009ca41d4442151213fd65389fbf80ee0 100644
+--- a/src/pq/ml-dsa-87/sign.c
 +++ b/src/pq/ml-dsa-87/sign.c
-@@ -3,9 +3,10 @@
+@@ -1,11 +1,13 @@
++#include "../cleanse.h"
+ #include "fips202.h"
+ #include "packing.h"
  #include "params.h"
  #include "poly.h"
  #include "polyvec.h"
@@ -22,15 +29,12 @@
  #include "symmetric.h"
 +#include <string.h>
  #include <stdint.h>
- 
+
  /*************************************************
-@@ -63,6 +64,49 @@
-     shake256(tr, TRBYTES, pk, PQCLEAN_MLDSA87_CLEAN_CRYPTO_PUBLICKEYBYTES);
-     PQCLEAN_MLDSA87_CLEAN_pack_sk(sk, rho, tr, key, &t0, &s1, &s2);
- 
-+    return 0;
-+}
-+
+@@ -66,6 +68,56 @@ int PQCLEAN_MLDSA87_CLEAN_crypto_sign_keypair(uint8_t *pk, uint8_t *sk) {
+     return 0;
+ }
+
 +int PQCLEAN_MLDSA87_CLEAN_crypto_sign_keypair_deterministic(uint8_t *pk, uint8_t *sk,
 +                                                           const uint8_t *seed, size_t seed_len)
 +{
@@ -71,6 +75,16 @@
 +    shake256(tr, TRBYTES, pk, PQCLEAN_MLDSA87_CLEAN_CRYPTO_PUBLICKEYBYTES);
 +    PQCLEAN_MLDSA87_CLEAN_pack_sk(sk, rho, tr, key, &t0, &s1, &s2);
 +
-     return 0;
- }
- 
++    pq_cleanse(seedbuf, sizeof seedbuf);
++    pq_cleanse(tr, sizeof tr);
++    pq_cleanse(&s1, sizeof s1);
++    pq_cleanse(&s1hat, sizeof s1hat);
++    pq_cleanse(&s2, sizeof s2);
++    pq_cleanse(&t0, sizeof t0);
++    pq_cleanse(&t1, sizeof t1);
++    return 0;
++}
++
+ /*************************************************
+ * Name:        crypto_sign_signature
+ *

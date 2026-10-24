@@ -109,7 +109,7 @@ fn get_linter_list() -> Vec<&'static Linter> {
             lint_fn: lint_pq_vendor_manifest,
         },
         &Linter {
-            description: "Check PQ vendored component diffs against pinned upstream commits",
+            description: "Test PQ change-record tooling and reconstruct maintained sources from preserved origins",
             name: "pq_vendor_deep",
             lint_fn: lint_pq_vendor_deep,
         },
@@ -807,16 +807,20 @@ fn lint_pq_vendor_deep() -> LintResult {
         return Ok(());
     }
 
-    if Command::new("python3")
-        .arg("contrib/devtools/check_pq_vendor.py")
-        .status()
-        .expect("command error")
-        .success()
-    {
-        Ok(())
-    } else {
-        Err("".to_string())
+    for script in [
+        "contrib/devtools/test_pq_vendor.py",
+        "contrib/devtools/check_pq_vendor.py",
+    ] {
+        if !Command::new("python3")
+            .arg(script)
+            .status()
+            .expect("command error")
+            .success()
+        {
+            return Err("".to_string());
+        }
     }
+    Ok(())
 }
 
 fn lint_pq_script_coverage() -> LintResult {

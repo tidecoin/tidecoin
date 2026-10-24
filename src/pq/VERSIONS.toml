@@ -1,9 +1,30 @@
-schema_version = 1
-manifest_updated_on = "2026-10-22"
+schema_version = 2
+manifest_updated_on = "2026-10-24"
+
+[maintenance]
+owner = "Tidecoin developers"
+source_of_truth = "checked-in-source"
 
 [upstream]
+status = "archived"
 pqclean_repo = "https://github.com/PQClean/PQClean"
 default_upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
+
+[[snapshots]]
+upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
+archive_file = "src/pq/upstream/pqclean-3730b32aa50ba9e712592c1476bdd048f5f6ed7e.tar.gz"
+sha256 = "437950c7579b7e016d286d676227255dce943b63c3199e1b84adcd338e3b3cb7"
+paths = [
+  "README.md",
+  "common/fips202.c",
+  "common/fips202.h",
+  "crypto_kem/ml-kem-512/clean",
+  "crypto_sign/falcon-1024/clean",
+  "crypto_sign/falcon-512/clean",
+  "crypto_sign/ml-dsa-44/clean",
+  "crypto_sign/ml-dsa-65/clean",
+  "crypto_sign/ml-dsa-87/clean",
+]
 
 [settings]
 ignored_upstream_files = ["Makefile", "Makefile.Microsoft_nmake"]
@@ -47,7 +68,7 @@ files = [
 id = "ml-dsa-44-local-adaptations"
 patch_file = "src/pq/patches/ml-dsa-44-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for ML-DSA-44 clean implementation."
-reason = "Expose deterministic keygen API and route RNG include to Tidecoin adapter."
+reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear deterministic key-generation workspaces."
 owner = "Tidecoin developers"
 consensus_impact = "indirect"
 files = [
@@ -59,7 +80,7 @@ files = [
 id = "ml-dsa-65-local-adaptations"
 patch_file = "src/pq/patches/ml-dsa-65-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for ML-DSA-65 clean implementation."
-reason = "Expose deterministic keygen API and route RNG include to Tidecoin adapter."
+reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear deterministic key-generation workspaces."
 owner = "Tidecoin developers"
 consensus_impact = "indirect"
 files = [
@@ -71,7 +92,7 @@ files = [
 id = "ml-dsa-87-local-adaptations"
 patch_file = "src/pq/patches/ml-dsa-87-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for ML-DSA-87 clean implementation."
-reason = "Expose deterministic keygen API and route RNG include to Tidecoin adapter."
+reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear deterministic key-generation workspaces."
 owner = "Tidecoin developers"
 consensus_impact = "indirect"
 files = [
@@ -104,7 +125,7 @@ include_files = ["fips202.c", "fips202.h"]
 upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
 import_commit = "11d6245a25b4b5e4cf519937a582e9e86cac6f26"
 local_patch_set = ["shared-fips202-cleanup"]
-notes = "Shared PQClean SHAKE/FIPS202 primitives used by vendored PQ components."
+notes = "Tidecoin-maintained SHAKE/FIPS202 primitives derived from PQClean."
 
 [[components]]
 name = "falcon-512"
@@ -115,7 +136,7 @@ upstream_path = "crypto_sign/falcon-512/clean"
 upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
 import_commit = "11d6245a25b4b5e4cf519937a582e9e86cac6f26"
 local_patch_set = ["falcon-512-local-adaptations"]
-notes = "Vendored PQClean Falcon-512 clean implementation with Tidecoin integration deltas."
+notes = "Tidecoin-maintained, PQClean-derived Falcon-512 clean implementation with Tidecoin integration deltas."
 
 [[components]]
 name = "falcon-1024"
@@ -126,7 +147,7 @@ upstream_path = "crypto_sign/falcon-1024/clean"
 upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
 import_commit = "11d6245a25b4b5e4cf519937a582e9e86cac6f26"
 local_patch_set = ["falcon-1024-local-adaptations"]
-notes = "Vendored PQClean Falcon-1024 clean implementation with Tidecoin integration deltas."
+notes = "Tidecoin-maintained, PQClean-derived Falcon-1024 clean implementation with Tidecoin integration deltas."
 
 [[components]]
 name = "ml-dsa-44"
@@ -137,7 +158,7 @@ upstream_path = "crypto_sign/ml-dsa-44/clean"
 upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
 import_commit = "11d6245a25b4b5e4cf519937a582e9e86cac6f26"
 local_patch_set = ["ml-dsa-44-local-adaptations"]
-notes = "Vendored PQClean ML-DSA-44 clean implementation with Tidecoin integration deltas."
+notes = "Tidecoin-maintained, PQClean-derived ML-DSA-44 clean implementation with Tidecoin integration deltas."
 
 [[components]]
 name = "ml-dsa-65"
@@ -148,7 +169,7 @@ upstream_path = "crypto_sign/ml-dsa-65/clean"
 upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
 import_commit = "11d6245a25b4b5e4cf519937a582e9e86cac6f26"
 local_patch_set = ["ml-dsa-65-local-adaptations"]
-notes = "Vendored PQClean ML-DSA-65 clean implementation with Tidecoin integration deltas."
+notes = "Tidecoin-maintained, PQClean-derived ML-DSA-65 clean implementation with Tidecoin integration deltas."
 
 [[components]]
 name = "ml-dsa-87"
@@ -159,7 +180,7 @@ upstream_path = "crypto_sign/ml-dsa-87/clean"
 upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
 import_commit = "11d6245a25b4b5e4cf519937a582e9e86cac6f26"
 local_patch_set = ["ml-dsa-87-local-adaptations"]
-notes = "Vendored PQClean ML-DSA-87 clean implementation with Tidecoin integration deltas."
+notes = "Tidecoin-maintained, PQClean-derived ML-DSA-87 clean implementation with Tidecoin integration deltas."
 
 [[components]]
 name = "ml-kem-512"
@@ -170,7 +191,7 @@ upstream_path = "crypto_kem/ml-kem-512/clean"
 upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
 import_commit = "11d6245a25b4b5e4cf519937a582e9e86cac6f26"
 local_patch_set = ["ml-kem-512-local-adaptations"]
-notes = "Vendored PQClean ML-KEM-512 clean implementation with Tidecoin integration deltas."
+notes = "Tidecoin-maintained, PQClean-derived ML-KEM-512 clean implementation with Tidecoin integration deltas."
 
 [[native_adapters]]
 name = "pq-randombytes-adapter"

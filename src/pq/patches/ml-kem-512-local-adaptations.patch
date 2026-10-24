@@ -1,29 +1,33 @@
---- a/crypto_kem/ml-kem-512/clean/api.h
+diff --git a/src/pq/ml-kem-512/api.h b/src/pq/ml-kem-512/api.h
+index 44bf7ccddb55562f7f4ef306b56d83a4b43046d6..c577d79fb9a66e518a792cb66d6695a7c4b30b01 100644
+--- a/src/pq/ml-kem-512/api.h
 +++ b/src/pq/ml-kem-512/api.h
 @@ -9,10 +9,22 @@
  #define PQCLEAN_MLKEM512_CLEAN_CRYPTO_BYTES           32
  #define PQCLEAN_MLKEM512_CLEAN_CRYPTO_ALGNAME "ML-KEM-512"
- 
+
 +#ifdef __cplusplus
 +extern "C" {
 +#endif
 +
  int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(uint8_t *pk, uint8_t *sk);
- 
+
 +int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair_derand(uint8_t *pk, uint8_t *sk, const uint8_t *coins);
 +
  int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_t *pk);
- 
+
 +int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc_derand(uint8_t *ct, uint8_t *ss, const uint8_t *pk, const uint8_t *coins);
 +
  int PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk);
- 
+
 +#ifdef __cplusplus
 +} // extern "C"
 +#endif
 +
  #endif
---- a/crypto_kem/ml-kem-512/clean/indcpa.c
+diff --git a/src/pq/ml-kem-512/indcpa.c b/src/pq/ml-kem-512/indcpa.c
+index 3eed8f4e2fcbf53dfc7b54c86849a977078e7b5f..725390182626d7bd342bb326f91ba8711c5a841e 100644
+--- a/src/pq/ml-kem-512/indcpa.c
 +++ b/src/pq/ml-kem-512/indcpa.c
 @@ -3,7 +3,7 @@
  #include "params.h"
@@ -34,7 +38,9 @@
  #include "symmetric.h"
  #include <stddef.h>
  #include <stdint.h>
---- a/crypto_kem/ml-kem-512/clean/kem.c
+diff --git a/src/pq/ml-kem-512/kem.c b/src/pq/ml-kem-512/kem.c
+index 3d3eae32889c4b01cedd661bca52f28be4b97218..0f0a501c10226f04cec5b1c607ffe53628c9abc9 100644
+--- a/src/pq/ml-kem-512/kem.c
 +++ b/src/pq/ml-kem-512/kem.c
 @@ -1,7 +1,7 @@
  #include "indcpa.h"
@@ -45,29 +51,33 @@
  #include "symmetric.h"
  #include "verify.h"
  #include <stddef.h>
---- a/crypto_kem/ml-kem-512/clean/kem.h
+diff --git a/src/pq/ml-kem-512/kem.h b/src/pq/ml-kem-512/kem.h
+index ed79efd15986a4ba56b2d28823b6074e5445532a..771cca189d0e915346eb79cf1b7d51aea2594e22 100644
+--- a/src/pq/ml-kem-512/kem.h
 +++ b/src/pq/ml-kem-512/kem.h
 @@ -10,6 +10,10 @@
- 
+
  #define PQCLEAN_MLKEM512_CLEAN_CRYPTO_ALGNAME "ML-KEM-512"
- 
+
 +#ifdef __cplusplus
 +extern "C" {
 +#endif
 +
  int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair_derand(uint8_t *pk, uint8_t *sk, const uint8_t *coins);
- 
+
  int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(uint8_t *pk, uint8_t *sk);
-@@ -20,4 +24,8 @@
- 
+@@ -20,4 +24,8 @@ int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_
+
  int PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk);
- 
+
 +#ifdef __cplusplus
 +} // extern "C"
 +#endif
 +
  #endif
---- a/crypto_kem/ml-kem-512/clean/verify.c
+diff --git a/src/pq/ml-kem-512/verify.c b/src/pq/ml-kem-512/verify.c
+index b913890413191884db6dfd823e80f3c5418bf234..267fed7f8b4fc17f64740c45cb4a6f037a4856d8 100644
+--- a/src/pq/ml-kem-512/verify.c
 +++ b/src/pq/ml-kem-512/verify.c
 @@ -1,4 +1,4 @@
 -#include "compat.h"

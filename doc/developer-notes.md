@@ -1193,28 +1193,47 @@ The ultimate upstream of the few externally managed subtrees are:
   - Used by leveldb for hardware acceleration of CRC32C checksums for data integrity.
   - Upstream at https://github.com/google/crc32c ; maintained by Google.
 
-## Vendored PQClean components
+## Tidecoin-maintained PQ implementations
 
-Post-quantum implementations in `src/pq/` are vendored from PQClean, but this
-repository also carries explicit local integration patches (for deterministic
-keygen entrypoints, include-path wiring, and Tidecoin adapter integration).
+Tidecoin maintains the checked-in source under `src/pq/`, derived from a pinned
+PQClean revision. PQClean is now [retired and archived read-only](https://github.com/PQClean/PQClean#readme).
+The node builds our source directly; it does not download PQClean or apply patch
+files at build time. Preserve original attribution and licenses. Implementation
+updates and their effect on Tidecoin's existing behavior require our own review
+and tests, regardless of changes in other projects.
 
-Governance artifacts:
+Maintenance artifacts:
 
-- `src/pq/VERSIONS.toml`: canonical provenance and patch metadata.
-- `src/pq/patches/`: local patch snapshots referenced by the manifest.
-- `test/lint/lint-pq-vendor.py`: fast schema/metadata lint gate.
-- `contrib/devtools/check_pq_vendor.py`: deep upstream-vs-local diff checker.
+- `src/pq/VERSIONS.toml`: ownership, immutable origin and component/change metadata.
+- `src/pq/upstream/`: preserved original source snapshot, with its digest and
+  selection recorded in the manifest; normal verification works offline.
+- `src/pq/patches/`: generated change records; edit implementation source first.
+- `test/lint/lint-pq-vendor.py`: fast metadata validation.
+- `contrib/devtools/check_pq_vendor.py`: patch generation and exact reconstruction.
+- `contrib/devtools/test_pq_vendor.py`: regression tests for the tooling.
 
-When modifying vendored PQ code:
+When changing these implementations, update the affected-file inventory and
+explanation as needed, then run:
 
-1. Update `src/pq/VERSIONS.toml` in the same PR.
-2. Update patch snapshots under `src/pq/patches/` for any changed component.
-3. Run:
-   - `test/lint/lint-pq-vendor.py`
-   - `python3 contrib/devtools/check_pq_vendor.py`
-4. Include a short PR note with affected component names, patch reason, and
-   whether consensus behavior is impacted.
+```sh
+python3 contrib/devtools/check_pq_vendor.py --regenerate
+python3 test/lint/lint-pq-vendor.py
+python3 contrib/devtools/test_pq_vendor.py
+python3 contrib/devtools/check_pq_vendor.py
+```
+
+The checker applies the declared patches to an isolated copy of the preserved
+origin and compares every component file byte for byte. Unrecorded edits to an
+already-listed file still fail. Generation changes only patch records, leaving
+source and the origin revision unchanged. Multiple records per component must
+own disjoint file sets; Git commits retain the development history.
+
+See [the maintenance workflow](../src/pq/patches/README.md) and
+[origin preservation and verification](../src/pq/upstream/README.md) for scope,
+offline operation and an optional comparison with the pinned Git objects.
+Reconstruction verifies the change record; it does not replace implementation
+or compatibility testing. Include the affected components, reason for each
+change, and any effect on Tidecoin's rules in the PR description.
 
 ## Upgrading LevelDB
 

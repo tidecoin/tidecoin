@@ -84,31 +84,43 @@ This is enforced by
 [`lint-tidecoin-naming.py`](/test/lint/lint-tidecoin-naming.py). Historical
 release notes under `doc/release-notes/**` are intentionally excluded.
 
-PQ vendor provenance policy
-===========================
+PQ implementation provenance policy
+===================================
 
-Vendored post-quantum components under `src/pq/` are tracked by
-`src/pq/VERSIONS.toml`.
+Tidecoin-maintained PQ components under `src/pq/` are tracked by
+`src/pq/VERSIONS.toml`. Their frozen PQClean origin is preserved in
+`src/pq/upstream/`; routine checks do not depend on a remote repository.
 
-- `test/lint/lint-pq-vendor.py` validates manifest schema and required metadata.
-- `contrib/devtools/check_pq_vendor.py` performs deep diffs against pinned
-  upstream PQClean commits and verifies declared divergence.
+- `test/lint/lint-pq-vendor.py` validates schema and metadata.
+- `contrib/devtools/test_pq_vendor.py` tests generation/replay, missing hunks,
+  source drift, extra files, additions/deletions, multiple records, snapshot
+  integrity, CLI failures and offline behavior.
+- `contrib/devtools/check_pq_vendor.py` verifies the preserved snapshot digest,
+  applies the actual patch contents in a temporary tree and compares the
+  reconstruction byte for byte with the maintained source.
 
 Run locally:
 
 ```sh
-test/lint/lint-pq-vendor.py
+python3 test/lint/lint-pq-vendor.py
+python3 contrib/devtools/test_pq_vendor.py
 python3 contrib/devtools/check_pq_vendor.py
 ```
 
-Deep vendor check in test runner (`pq_vendor_deep`):
+Generate change records after an implementation edit with
+`python3 contrib/devtools/check_pq_vendor.py --regenerate`. See the
+[maintenance workflow](../../src/pq/patches/README.md) for inventory rules and
+optional independent verification against the pinned Git objects.
+
+Deep check in the test runner (`pq_vendor_deep`), including the tool tests:
 
 ```sh
-RUN_PQ_VENDOR_DEEP=1 cargo run --manifest-path "./test/lint/test_runner/Cargo.toml" -- --lint=pq_vendor_deep
+RUN_PQ_VENDOR_DEEP=1 cargo run --manifest-path test/lint/test_runner/Cargo.toml -- --lint=pq_vendor_deep
 ```
 
-In CI, `RUN_PQ_VENDOR_DEEP` is auto-enabled when relevant PQ vendor paths
-change in `COMMIT_RANGE`.
+In CI, `RUN_PQ_VENDOR_DEEP` is auto-enabled when relevant PQ source, snapshot,
+tooling, CI dispatch or documentation paths change in `COMMIT_RANGE`. This mode
+is offline too. It never regenerates records to make a failing check pass.
 
 PQ script coverage scorecard
 ============================
