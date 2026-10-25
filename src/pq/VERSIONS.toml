@@ -42,69 +42,81 @@ files = ["src/pq/fips202.c"]
 id = "falcon-512-local-adaptations"
 patch_file = "src/pq/patches/falcon-512-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for Falcon-512 clean implementation."
-reason = "Expose deterministic keygen, route RNG/fips202 includes to Tidecoin-local adapters, and require exact compressed signatures in strict verification."
+reason = "Expose deterministic keygen, route RNG/fips202 includes to Tidecoin-local adapters, require exact compressed signatures in strict verification, release signing SHAKE contexts on encoding failure, and clear key-generation/signing workspaces including sampler and PRNG temporaries."
 owner = "Tidecoin developers"
 consensus_impact = "direct"
 files = [
   "src/pq/falcon-512/api.h",
   "src/pq/falcon-512/inner.h",
   "src/pq/falcon-512/pqclean.c",
+  "src/pq/falcon-512/keygen.c",
+  "src/pq/falcon-512/rng.c",
+  "src/pq/falcon-512/sign.c",
 ]
 
 [[patches]]
 id = "falcon-1024-local-adaptations"
 patch_file = "src/pq/patches/falcon-1024-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for Falcon-1024 clean implementation."
-reason = "Expose deterministic keygen, route RNG/fips202 includes to Tidecoin-local adapters, and require exact compressed signatures in strict verification."
+reason = "Expose deterministic keygen, route RNG/fips202 includes to Tidecoin-local adapters, require exact compressed signatures in strict verification, release signing SHAKE contexts on encoding failure, and clear key-generation/signing workspaces including sampler and PRNG temporaries."
 owner = "Tidecoin developers"
 consensus_impact = "direct"
 files = [
   "src/pq/falcon-1024/api.h",
   "src/pq/falcon-1024/inner.h",
   "src/pq/falcon-1024/pqclean.c",
+  "src/pq/falcon-1024/keygen.c",
+  "src/pq/falcon-1024/rng.c",
+  "src/pq/falcon-1024/sign.c",
 ]
 
 [[patches]]
 id = "ml-dsa-44-local-adaptations"
 patch_file = "src/pq/patches/ml-dsa-44-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for ML-DSA-44 clean implementation."
-reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear deterministic key-generation workspaces."
+reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear key-generation/signing workspaces and lower-level sampling, packing and multiplication temporaries."
 owner = "Tidecoin developers"
 consensus_impact = "indirect"
 files = [
   "src/pq/ml-dsa-44/api.h",
   "src/pq/ml-dsa-44/sign.c",
+  "src/pq/ml-dsa-44/poly.c",
+  "src/pq/ml-dsa-44/polyvec.c",
 ]
 
 [[patches]]
 id = "ml-dsa-65-local-adaptations"
 patch_file = "src/pq/patches/ml-dsa-65-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for ML-DSA-65 clean implementation."
-reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear deterministic key-generation workspaces."
+reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear key-generation/signing workspaces and lower-level sampling, packing and multiplication temporaries."
 owner = "Tidecoin developers"
 consensus_impact = "indirect"
 files = [
   "src/pq/ml-dsa-65/api.h",
   "src/pq/ml-dsa-65/sign.c",
+  "src/pq/ml-dsa-65/poly.c",
+  "src/pq/ml-dsa-65/polyvec.c",
 ]
 
 [[patches]]
 id = "ml-dsa-87-local-adaptations"
 patch_file = "src/pq/patches/ml-dsa-87-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for ML-DSA-87 clean implementation."
-reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear deterministic key-generation workspaces."
+reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear key-generation/signing workspaces and lower-level sampling, packing and multiplication temporaries."
 owner = "Tidecoin developers"
 consensus_impact = "indirect"
 files = [
   "src/pq/ml-dsa-87/api.h",
   "src/pq/ml-dsa-87/sign.c",
+  "src/pq/ml-dsa-87/poly.c",
+  "src/pq/ml-dsa-87/polyvec.c",
 ]
 
 [[patches]]
 id = "ml-kem-512-local-adaptations"
 patch_file = "src/pq/patches/ml-kem-512-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for ML-KEM-512 clean implementation."
-reason = "Route includes to Tidecoin-local adapters and expose C++-safe declarations used by local transport wrappers."
+reason = "Route includes to Tidecoin-local adapters and expose C++-safe declarations used by local transport wrappers; clear owned seed, key, noise and multiplication workspaces."
 owner = "Tidecoin developers"
 consensus_impact = "indirect"
 files = [
@@ -113,6 +125,9 @@ files = [
   "src/pq/ml-kem-512/kem.c",
   "src/pq/ml-kem-512/kem.h",
   "src/pq/ml-kem-512/verify.c",
+  "src/pq/ml-kem-512/poly.c",
+  "src/pq/ml-kem-512/polyvec.c",
+  "src/pq/ml-kem-512/symmetric-shake.c",
 ]
 
 [[components]]

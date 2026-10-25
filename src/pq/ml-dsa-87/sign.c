@@ -65,6 +65,13 @@ int PQCLEAN_MLDSA87_CLEAN_crypto_sign_keypair(uint8_t *pk, uint8_t *sk) {
     shake256(tr, TRBYTES, pk, PQCLEAN_MLDSA87_CLEAN_CRYPTO_PUBLICKEYBYTES);
     PQCLEAN_MLDSA87_CLEAN_pack_sk(sk, rho, tr, key, &t0, &s1, &s2);
 
+    pq_cleanse(&seedbuf, sizeof seedbuf);
+    pq_cleanse(&tr, sizeof tr);
+    pq_cleanse(&s1, sizeof s1);
+    pq_cleanse(&s1hat, sizeof s1hat);
+    pq_cleanse(&s2, sizeof s2);
+    pq_cleanse(&t0, sizeof t0);
+    pq_cleanse(&t1, sizeof t1);
     return 0;
 }
 
@@ -243,6 +250,16 @@ rej:
     /* Write signature */
     PQCLEAN_MLDSA87_CLEAN_pack_sig(sig, sig, &z, &h);
     *siglen = PQCLEAN_MLDSA87_CLEAN_CRYPTO_BYTES;
+    pq_cleanse(&seedbuf, sizeof seedbuf);
+    pq_cleanse(&s1, sizeof s1);
+    pq_cleanse(&y, sizeof y);
+    pq_cleanse(&z, sizeof z);
+    pq_cleanse(&t0, sizeof t0);
+    pq_cleanse(&s2, sizeof s2);
+    pq_cleanse(&w1, sizeof w1);
+    pq_cleanse(&w0, sizeof w0);
+    pq_cleanse(&h, sizeof h);
+    pq_cleanse(&cp, sizeof cp);
     return 0;
 }
 

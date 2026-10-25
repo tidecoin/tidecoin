@@ -28,6 +28,7 @@
 #include <protocol.h>
 #include <random.h>
 #include <scheduler.h>
+#include <support/cleanse.h>
 #include <util/fs.h>
 #include <util/sock.h>
 #include <util/strencodings.h>
@@ -1044,6 +1045,7 @@ void V2Transport::SetReceiveState(RecvState recv_state) noexcept
     case RecvState::KEY:
     case RecvState::CT:
         Assume(recv_state == RecvState::GARB_GARBTERM);
+        Assume(!m_kem_keypair.IsInitialized());
         break;
     case RecvState::GARB_GARBTERM:
         Assume(recv_state == RecvState::VERSION);
@@ -1162,6 +1164,7 @@ bool V2Transport::ProcessReceivedKeyBytes() noexcept
 
         std::array<uint8_t, KEM_CIPHERTEXT_LEN> ct{};
         std::array<uint8_t, pq::MLKEM512_SHARED_SECRET_BYTES> ss{};
+        const ScopedMemoryCleanse cleanse_ss{ss.data(), ss.size()};
         if (!pq::MLKEM512Encaps(m_recv_buffer, ct, ss)) {
             return false;
         }
@@ -1213,7 +1216,11 @@ bool V2Transport::ProcessReceivedCiphertextBytes() noexcept
         }
 
         std::array<uint8_t, pq::MLKEM512_SHARED_SECRET_BYTES> ss{};
-        if (!pq::MLKEM512Decaps(m_recv_buffer, m_kem_keypair.SecretKey(), ss)) {
+        const ScopedMemoryCleanse cleanse_ss{ss.data(), ss.size()};
+        const bool decapsulated = pq::MLKEM512Decaps(m_recv_buffer, m_kem_keypair.SecretKey(), ss);
+        // The public key is already in the send buffer; neither key is needed again.
+        m_kem_keypair.Clear();
+        if (!decapsulated) {
             return false;
         }
 

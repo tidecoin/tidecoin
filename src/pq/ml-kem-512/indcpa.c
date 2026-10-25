@@ -1,3 +1,4 @@
+#include "../cleanse.h"
 #include "indcpa.h"
 #include "ntt.h"
 #include "params.h"
@@ -232,6 +233,10 @@ void PQCLEAN_MLKEM512_CLEAN_indcpa_keypair_derand(uint8_t pk[KYBER_INDCPA_PUBLIC
 
     pack_sk(sk, &skpv);
     pack_pk(pk, &pkpv, publicseed);
+    pq_cleanse(&buf, sizeof buf);
+    pq_cleanse(&e, sizeof e);
+    pq_cleanse(&pkpv, sizeof pkpv);
+    pq_cleanse(&skpv, sizeof skpv);
 }
 
 
@@ -292,6 +297,12 @@ void PQCLEAN_MLKEM512_CLEAN_indcpa_enc(uint8_t c[KYBER_INDCPA_BYTES],
     PQCLEAN_MLKEM512_CLEAN_poly_reduce(&v);
 
     pack_ciphertext(c, &b, &v);
+    pq_cleanse(&sp, sizeof sp);
+    pq_cleanse(&ep, sizeof ep);
+    pq_cleanse(&b, sizeof b);
+    pq_cleanse(&v, sizeof v);
+    pq_cleanse(&k, sizeof k);
+    pq_cleanse(&epp, sizeof epp);
 }
 
 /*************************************************
@@ -324,4 +335,6 @@ void PQCLEAN_MLKEM512_CLEAN_indcpa_dec(uint8_t m[KYBER_INDCPA_MSGBYTES],
     PQCLEAN_MLKEM512_CLEAN_poly_reduce(&mp);
 
     PQCLEAN_MLKEM512_CLEAN_poly_tomsg(m, &mp);
+    pq_cleanse(&skpv, sizeof skpv);
+    pq_cleanse(&mp, sizeof mp);
 }

@@ -29,6 +29,7 @@
  * @author   Thomas Pornin <thomas.pornin@nccgroup.com>
  */
 
+#include "../cleanse.h"
 #include "inner.h"
 
 #define MKN(logn)   ((size_t)1 << (logn))
@@ -2196,7 +2197,7 @@ get_rng_u64(inner_shake256_context *rng) {
     uint8_t tmp[8];
 
     inner_shake256_extract(rng, tmp, sizeof tmp);
-    return (uint64_t)tmp[0]
+    uint64_t result = (uint64_t)tmp[0]
            | ((uint64_t)tmp[1] << 8)
            | ((uint64_t)tmp[2] << 16)
            | ((uint64_t)tmp[3] << 24)
@@ -2204,6 +2205,8 @@ get_rng_u64(inner_shake256_context *rng) {
            | ((uint64_t)tmp[5] << 40)
            | ((uint64_t)tmp[6] << 48)
            | ((uint64_t)tmp[7] << 56);
+    pq_cleanse(tmp, sizeof tmp);
+    return result;
 }
 
 /*

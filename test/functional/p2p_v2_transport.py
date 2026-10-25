@@ -158,6 +158,26 @@ class V2TransportTest(BitcoinTestFramework):
                 s.sendall(wrong_network_magic_prefix + b"somepayload")
                 self.wait_until(lambda: peer_id not in [p["id"] for p in self.nodes[0].getpeerinfo()])
 
+        # Refuse noncanonical ML-KEM public-key coefficients before sending a ciphertext.
+        # Test both packed positions, including the end of the coefficient region.
+        for index in (0, 1, 510, 511):
+            key = bytearray(800)
+            offset = (index // 2) * 3
+            if index % 2 == 0:
+                key[offset] = 3329 & 0xff
+                key[offset + 1] = 3329 >> 8
+            else:
+                key[offset + 1] = (3329 & 0xf) << 4
+                key[offset + 2] = 3329 >> 4
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(self.options.timeout_factor * 10)
+                with self.nodes[0].wait_for_new_peer():
+                    s.connect(("127.0.0.1", p2p_port(0)))
+                peer_id = self.nodes[0].getpeerinfo()[-1]["id"]
+                s.sendall(key)
+                self.wait_until(lambda: peer_id not in [p["id"] for p in self.nodes[0].getpeerinfo()])
+                assert_equal(s.recv(1), b"")
+
         # Check detection of missing garbage terminator (hits after fixed amount of data if terminator never matches garbage)
         MAX_KEY_GARB_AND_GARBTERM_LEN = 800 + 4095 + 16
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

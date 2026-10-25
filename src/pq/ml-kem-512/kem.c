@@ -1,3 +1,4 @@
+#include "../cleanse.h"
 #include "indcpa.h"
 #include "kem.h"
 #include "params.h"
@@ -51,6 +52,7 @@ int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(uint8_t *pk,
     uint8_t coins[2 * KYBER_SYMBYTES];
     randombytes(coins, 2 * KYBER_SYMBYTES);
     PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair_derand(pk, sk, coins);
+    pq_cleanse(&coins, sizeof coins);
     return 0;
 }
 
@@ -89,6 +91,8 @@ int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc_derand(uint8_t *ct,
     PQCLEAN_MLKEM512_CLEAN_indcpa_enc(ct, buf, pk, kr + KYBER_SYMBYTES);
 
     memcpy(ss, kr, KYBER_SYMBYTES);
+    pq_cleanse(&buf, sizeof buf);
+    pq_cleanse(&kr, sizeof kr);
     return 0;
 }
 
@@ -113,6 +117,7 @@ int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(uint8_t *ct,
     uint8_t coins[KYBER_SYMBYTES];
     randombytes(coins, KYBER_SYMBYTES);
     PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc_derand(ct, ss, pk, coins);
+    pq_cleanse(&coins, sizeof coins);
     return 0;
 }
 
@@ -160,5 +165,8 @@ int PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(uint8_t *ss,
     /* Copy true key to return buffer if fail is false */
     PQCLEAN_MLKEM512_CLEAN_cmov(ss, kr, KYBER_SYMBYTES, (uint8_t) (1 - fail));
 
+    pq_cleanse(&buf, sizeof buf);
+    pq_cleanse(&kr, sizeof kr);
+    pq_cleanse(&cmp, sizeof cmp);
     return 0;
 }

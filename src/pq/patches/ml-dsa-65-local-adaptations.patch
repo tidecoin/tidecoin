@@ -12,8 +12,82 @@ index 8752f56499b6f2bed54e6ae0706669f609df65ac..73f843e32f75de62dd8df4d64e200037
 
  int PQCLEAN_MLDSA65_CLEAN_crypto_sign_signature_ctx(uint8_t *sig, size_t *siglen,
          const uint8_t *m, size_t mlen,
+diff --git a/src/pq/ml-dsa-65/poly.c b/src/pq/ml-dsa-65/poly.c
+index a5a5e751375591c14b36d24523be7aa0d5e3667a..2a1aec0f79db1299c54f219bcd9a87c3edb60b29 100644
+--- a/src/pq/ml-dsa-65/poly.c
++++ b/src/pq/ml-dsa-65/poly.c
+@@ -1,3 +1,4 @@
++#include "../cleanse.h"
+ #include "ntt.h"
+ #include "params.h"
+ #include "poly.h"
+@@ -439,6 +440,7 @@ void PQCLEAN_MLDSA65_CLEAN_poly_uniform_eta(poly *a,
+         ctr += rej_eta(a->coeffs + ctr, N - ctr, buf, STREAM256_BLOCKBYTES);
+     }
+     stream256_release(&state);
++    pq_cleanse(&buf, sizeof buf);
+ }
+
+ /*************************************************
+@@ -463,6 +465,7 @@ void PQCLEAN_MLDSA65_CLEAN_poly_uniform_gamma1(poly *a,
+     stream256_squeezeblocks(buf, POLY_UNIFORM_GAMMA1_NBLOCKS, &state);
+     stream256_release(&state);
+     PQCLEAN_MLDSA65_CLEAN_polyz_unpack(a, buf);
++    pq_cleanse(&buf, sizeof buf);
+ }
+
+ /*************************************************
+@@ -510,6 +513,7 @@ void PQCLEAN_MLDSA65_CLEAN_poly_challenge(poly *c, const uint8_t seed[CTILDEBYTE
+         signs >>= 1;
+     }
+     shake256_inc_ctx_release(&state);
++    pq_cleanse(buf, sizeof buf);
+ }
+
+ /*************************************************
+@@ -533,6 +537,7 @@ void PQCLEAN_MLDSA65_CLEAN_polyeta_pack(uint8_t *r, const poly *a) {
+     }
+
+     DBENCH_STOP(*tpack);
++    pq_cleanse(&t, sizeof t);
+ }
+
+ /*************************************************
+@@ -652,6 +657,7 @@ void PQCLEAN_MLDSA65_CLEAN_polyt0_pack(uint8_t *r, const poly *a) {
+     }
+
+     DBENCH_STOP(*tpack);
++    pq_cleanse(&t, sizeof t);
+ }
+
+ /*************************************************
+@@ -744,6 +750,7 @@ void PQCLEAN_MLDSA65_CLEAN_polyz_pack(uint8_t *r, const poly *a) {
+     }
+
+     DBENCH_STOP(*tpack);
++    pq_cleanse(&t, sizeof t);
+ }
+
+ /*************************************************
+diff --git a/src/pq/ml-dsa-65/polyvec.c b/src/pq/ml-dsa-65/polyvec.c
+index 3ed1eafeb3c08a33239b82a0fefeaaab237c43aa..81c817a6c821a83a940c00df03fce3464e046e44 100644
+--- a/src/pq/ml-dsa-65/polyvec.c
++++ b/src/pq/ml-dsa-65/polyvec.c
+@@ -1,3 +1,4 @@
++#include "../cleanse.h"
+ #include "params.h"
+ #include "poly.h"
+ #include "polyvec.h"
+@@ -131,6 +132,7 @@ void PQCLEAN_MLDSA65_CLEAN_polyvecl_pointwise_acc_montgomery(poly *w,
+         PQCLEAN_MLDSA65_CLEAN_poly_pointwise_montgomery(&t, &u->vec[i], &v->vec[i]);
+         PQCLEAN_MLDSA65_CLEAN_poly_add(w, w, &t);
+     }
++    pq_cleanse(&t, sizeof t);
+ }
+
+ /*************************************************
 diff --git a/src/pq/ml-dsa-65/sign.c b/src/pq/ml-dsa-65/sign.c
-index cf85a9e306f1dc5821e4b49de088bbd5d5441f9b..d38e8c3dbb0e96de746c56f998c1b9fd575e712f 100644
+index cf85a9e306f1dc5821e4b49de088bbd5d5441f9b..6eb7a0a519edaf14dde55ef3c39fb2ce1d7409b7 100644
 --- a/src/pq/ml-dsa-65/sign.c
 +++ b/src/pq/ml-dsa-65/sign.c
 @@ -1,11 +1,13 @@
@@ -31,10 +105,20 @@ index cf85a9e306f1dc5821e4b49de088bbd5d5441f9b..d38e8c3dbb0e96de746c56f998c1b9fd
  #include <stdint.h>
 
  /*************************************************
-@@ -66,6 +68,56 @@ int PQCLEAN_MLDSA65_CLEAN_crypto_sign_keypair(uint8_t *pk, uint8_t *sk) {
-     return 0;
- }
+@@ -63,6 +65,63 @@ int PQCLEAN_MLDSA65_CLEAN_crypto_sign_keypair(uint8_t *pk, uint8_t *sk) {
+     shake256(tr, TRBYTES, pk, PQCLEAN_MLDSA65_CLEAN_CRYPTO_PUBLICKEYBYTES);
+     PQCLEAN_MLDSA65_CLEAN_pack_sk(sk, rho, tr, key, &t0, &s1, &s2);
 
++    pq_cleanse(&seedbuf, sizeof seedbuf);
++    pq_cleanse(&tr, sizeof tr);
++    pq_cleanse(&s1, sizeof s1);
++    pq_cleanse(&s1hat, sizeof s1hat);
++    pq_cleanse(&s2, sizeof s2);
++    pq_cleanse(&t0, sizeof t0);
++    pq_cleanse(&t1, sizeof t1);
++    return 0;
++}
++
 +int PQCLEAN_MLDSA65_CLEAN_crypto_sign_keypair_deterministic(uint8_t *pk, uint8_t *sk,
 +                                                           const uint8_t *seed, size_t seed_len)
 +{
@@ -82,9 +166,23 @@ index cf85a9e306f1dc5821e4b49de088bbd5d5441f9b..d38e8c3dbb0e96de746c56f998c1b9fd
 +    pq_cleanse(&s2, sizeof s2);
 +    pq_cleanse(&t0, sizeof t0);
 +    pq_cleanse(&t1, sizeof t1);
-+    return 0;
-+}
-+
- /*************************************************
- * Name:        crypto_sign_signature
- *
+     return 0;
+ }
+
+@@ -191,6 +250,16 @@ rej:
+     /* Write signature */
+     PQCLEAN_MLDSA65_CLEAN_pack_sig(sig, sig, &z, &h);
+     *siglen = PQCLEAN_MLDSA65_CLEAN_CRYPTO_BYTES;
++    pq_cleanse(&seedbuf, sizeof seedbuf);
++    pq_cleanse(&s1, sizeof s1);
++    pq_cleanse(&y, sizeof y);
++    pq_cleanse(&z, sizeof z);
++    pq_cleanse(&t0, sizeof t0);
++    pq_cleanse(&s2, sizeof s2);
++    pq_cleanse(&w1, sizeof w1);
++    pq_cleanse(&w0, sizeof w0);
++    pq_cleanse(&h, sizeof h);
++    pq_cleanse(&cp, sizeof cp);
+     return 0;
+ }
+

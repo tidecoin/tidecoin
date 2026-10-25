@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+#include <pq/cleanse.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -121,37 +123,38 @@ static int tidecoin_falcon512_do_sign_legacy(uint8_t* nonce, uint8_t* sigbuf,
     unsigned char seed[48];
     inner_shake256_context sc;
     size_t u, v;
+    int result = -1;
 
     if (sk[0] != 0x50 + 9) {
-        return -1;
+        goto cleanup;
     }
     u = 1;
     v = PQCLEAN_FALCON512_CLEAN_trim_i8_decode(
         f, 9, PQCLEAN_FALCON512_CLEAN_max_fg_bits[9],
         sk + u, PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES - u);
     if (v == 0) {
-        return -1;
+        goto cleanup;
     }
     u += v;
     v = PQCLEAN_FALCON512_CLEAN_trim_i8_decode(
         g, 9, PQCLEAN_FALCON512_CLEAN_max_fg_bits[9],
         sk + u, PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES - u);
     if (v == 0) {
-        return -1;
+        goto cleanup;
     }
     u += v;
     v = PQCLEAN_FALCON512_CLEAN_trim_i8_decode(
         F, 9, PQCLEAN_FALCON512_CLEAN_max_FG_bits[9],
         sk + u, PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES - u);
     if (v == 0) {
-        return -1;
+        goto cleanup;
     }
     u += v;
     if (u != PQCLEAN_FALCON512_CLEAN_CRYPTO_SECRETKEYBYTES) {
-        return -1;
+        goto cleanup;
     }
     if (!PQCLEAN_FALCON512_CLEAN_complete_private(G, f, g, F, 9, tmp.b)) {
-        return -1;
+        goto cleanup;
     }
 
     randombytes(nonce, TIDECOIN_FALCON512_NONCELEN);
@@ -173,9 +176,17 @@ static int tidecoin_falcon512_do_sign_legacy(uint8_t* nonce, uint8_t* sigbuf,
     inner_shake256_ctx_release(&sc);
     if (v != 0) {
         *sigbuflen = v;
-        return 0;
+        result = 0;
     }
-    return -1;
+cleanup:
+    pq_cleanse(&tmp, sizeof tmp);
+    pq_cleanse(&f, sizeof f);
+    pq_cleanse(&g, sizeof g);
+    pq_cleanse(&F, sizeof F);
+    pq_cleanse(&G, sizeof G);
+    pq_cleanse(&r, sizeof r);
+    pq_cleanse(&seed, sizeof seed);
+    return result;
 }
 
 /* One signing attempt; pq::SignFalcon handles retries and the local size bound. */
@@ -229,23 +240,24 @@ int tidecoin_falcon512_pubkey_from_sk(const uint8_t* sk, size_t sklen,
         uint16_t dummy_u16;
     } tmp;
 
+    int result = -1;
     size_t u = 1;
     size_t v = PQCLEAN_FALCON512_CLEAN_trim_i8_decode(
         f, 9, PQCLEAN_FALCON512_CLEAN_max_fg_bits[9],
         sk + u, sklen - u);
     if (v == 0) {
-        return -1;
+        goto cleanup;
     }
     u += v;
     v = PQCLEAN_FALCON512_CLEAN_trim_i8_decode(
         g, 9, PQCLEAN_FALCON512_CLEAN_max_fg_bits[9],
         sk + u, sklen - u);
     if (v == 0) {
-        return -1;
+        goto cleanup;
     }
 
     if (!PQCLEAN_FALCON512_CLEAN_compute_public(h, f, g, 9, tmp.b)) {
-        return -1;
+        goto cleanup;
     }
 
     pk[0] = 0x00 + 9;
@@ -253,8 +265,14 @@ int tidecoin_falcon512_pubkey_from_sk(const uint8_t* sk, size_t sklen,
         pk + 1, PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1,
         h, 9);
     if (v != PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES - 1) {
-        return -1;
+        goto cleanup;
     }
 
-    return 0;
+    result = 0;
+cleanup:
+    pq_cleanse(&f, sizeof f);
+    pq_cleanse(&g, sizeof g);
+    pq_cleanse(&h, sizeof h);
+    pq_cleanse(&tmp, sizeof tmp);
+    return result;
 }

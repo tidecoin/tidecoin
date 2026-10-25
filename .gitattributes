@@ -1,1 +1,3 @@
 src/clientversion.cpp export-subst
+# Generated diffs may end with a blank context line that must be preserved.
+src/pq/patches/*.patch whitespace=-blank-at-eof

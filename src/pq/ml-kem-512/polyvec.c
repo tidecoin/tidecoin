@@ -1,3 +1,4 @@
+#include "../cleanse.h"
 #include "params.h"
 #include "poly.h"
 #include "polyvec.h"
@@ -153,6 +154,7 @@ void PQCLEAN_MLKEM512_CLEAN_polyvec_basemul_acc_montgomery(poly *r, const polyve
     }
 
     PQCLEAN_MLKEM512_CLEAN_poly_reduce(r);
+    pq_cleanse(&t, sizeof t);
 }
 
 /*************************************************

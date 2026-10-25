@@ -4,10 +4,36 @@
 
 namespace pq {
 
+namespace {
+
+bool IsValidEncapsulationKey(std::span<const uint8_t> pk)
+{
+    if (pk.size() != MLKEM512_PUBLICKEY_BYTES) return false;
+
+    // FIPS 203, section 7.2: the first 768 bytes encode 512 coefficients,
+    // two per three bytes. The final 32-byte public seed is unrestricted.
+    constexpr size_t ENCODED_COEFFICIENT_BYTES{768};
+    static_assert(ENCODED_COEFFICIENT_BYTES + 32 == MLKEM512_PUBLICKEY_BYTES);
+    for (size_t i = 0; i < ENCODED_COEFFICIENT_BYTES; i += 3) {
+        const uint16_t a = pk[i] | ((pk[i + 1] & 0x0f) << 8);
+        const uint16_t b = (pk[i + 1] >> 4) | (pk[i + 2] << 4);
+        if (a >= 3329 || b >= 3329) return false;
+    }
+    return true;
+}
+
+} // namespace
+
 MLKEM512Keypair::~MLKEM512Keypair()
+{
+    Clear();
+}
+
+void MLKEM512Keypair::Clear() noexcept
 {
     memory_cleanse(m_pk.data(), m_pk.size());
     memory_cleanse(m_sk.data(), m_sk.size());
+    m_initialized = false;
 }
 
 bool MLKEM512Keypair::Generate()
@@ -46,7 +72,7 @@ bool MLKEM512Encaps(std::span<const uint8_t> pk,
                     std::span<uint8_t> ct,
                     std::span<uint8_t> ss)
 {
-    if (pk.size() != MLKEM512_PUBLICKEY_BYTES ||
+    if (!IsValidEncapsulationKey(pk) ||
         ct.size() != MLKEM512_CIPHERTEXT_BYTES ||
         ss.size() != MLKEM512_SHARED_SECRET_BYTES) {
         return false;
@@ -59,7 +85,7 @@ bool MLKEM512EncapsDeterministic(std::span<const uint8_t> pk,
                                  std::span<uint8_t> ct,
                                  std::span<uint8_t> ss)
 {
-    if (pk.size() != MLKEM512_PUBLICKEY_BYTES ||
+    if (!IsValidEncapsulationKey(pk) ||
         coins.size() != MLKEM512_SHARED_SECRET_BYTES ||
         ct.size() != MLKEM512_CIPHERTEXT_BYTES ||
         ss.size() != MLKEM512_SHARED_SECRET_BYTES) {

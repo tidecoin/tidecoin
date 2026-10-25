@@ -1,15 +1,38 @@
 #include <key.h>
+#include <pq/cleanse.h>
 #include <pq/pq_api.h>
 #include <pq/randombytes.h>
 
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
 
 BOOST_AUTO_TEST_SUITE(pq_random_key_tests)
+
+BOOST_AUTO_TEST_CASE(workspace_cleanse_bounds)
+{
+    pq_cleanse(nullptr, 0);
+    constexpr std::array<size_t, 20> lengths{
+        0, 1, 7, 8, 15, 16, 31, 32, 63, 64, 65, 127, 128, 129,
+        255, 256, 257, 1024, 8192, 73728,
+    };
+    for (const size_t length : lengths) {
+        for (const size_t offset : {0, 1, 7, 15, 63}) {
+            BOOST_TEST_CONTEXT("length=" << length << ", offset=" << offset) {
+                std::vector<unsigned char> buffer(offset + length + 16, 0xa5);
+                pq_cleanse(buffer.data() + offset, length);
+                const std::span<const unsigned char> bytes{buffer};
+                BOOST_CHECK(std::ranges::all_of(bytes.first(offset), [](auto b) { return b == 0xa5; }));
+                BOOST_CHECK(std::ranges::all_of(bytes.subspan(offset, length), [](auto b) { return b == 0; }));
+                BOOST_CHECK(std::ranges::all_of(bytes.subspan(offset + length), [](auto b) { return b == 0xa5; }));
+            }
+        }
+    }
+}
 
 BOOST_AUTO_TEST_CASE(generate_keypair_smoke_all_schemes)
 {

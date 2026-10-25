@@ -1,3 +1,4 @@
+#include "../cleanse.h"
 #include "fips202.h"
 #include "params.h"
 #include "symmetric.h"
@@ -46,6 +47,7 @@ void PQCLEAN_MLKEM512_CLEAN_kyber_shake256_prf(uint8_t *out, size_t outlen, cons
     extkey[KYBER_SYMBYTES] = nonce;
 
     shake256(out, outlen, extkey, sizeof(extkey));
+    pq_cleanse(&extkey, sizeof extkey);
 }
 
 /*************************************************

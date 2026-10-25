@@ -1,3 +1,4 @@
+#include "../cleanse.h"
 #include "ntt.h"
 #include "params.h"
 #include "poly.h"
@@ -441,6 +442,7 @@ void PQCLEAN_MLDSA44_CLEAN_poly_uniform_eta(poly *a,
         ctr += rej_eta(a->coeffs + ctr, N - ctr, buf, STREAM256_BLOCKBYTES);
     }
     stream256_release(&state);
+    pq_cleanse(&buf, sizeof buf);
 }
 
 /*************************************************
@@ -465,6 +467,7 @@ void PQCLEAN_MLDSA44_CLEAN_poly_uniform_gamma1(poly *a,
     stream256_squeezeblocks(buf, POLY_UNIFORM_GAMMA1_NBLOCKS, &state);
     stream256_release(&state);
     PQCLEAN_MLDSA44_CLEAN_polyz_unpack(a, buf);
+    pq_cleanse(&buf, sizeof buf);
 }
 
 /*************************************************
@@ -512,6 +515,7 @@ void PQCLEAN_MLDSA44_CLEAN_poly_challenge(poly *c, const uint8_t seed[CTILDEBYTE
         signs >>= 1;
     }
     shake256_inc_ctx_release(&state);
+    pq_cleanse(buf, sizeof buf);
 }
 
 /*************************************************
@@ -544,6 +548,7 @@ void PQCLEAN_MLDSA44_CLEAN_polyeta_pack(uint8_t *r, const poly *a) {
     }
 
     DBENCH_STOP(*tpack);
+    pq_cleanse(&t, sizeof t);
 }
 
 /*************************************************
@@ -676,6 +681,7 @@ void PQCLEAN_MLDSA44_CLEAN_polyt0_pack(uint8_t *r, const poly *a) {
     }
 
     DBENCH_STOP(*tpack);
+    pq_cleanse(&t, sizeof t);
 }
 
 /*************************************************
@@ -776,6 +782,7 @@ void PQCLEAN_MLDSA44_CLEAN_polyz_pack(uint8_t *r, const poly *a) {
     }
 
     DBENCH_STOP(*tpack);
+    pq_cleanse(&t, sizeof t);
 }
 
 /*************************************************

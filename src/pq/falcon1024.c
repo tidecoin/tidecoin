@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+#include <pq/cleanse.h>
+
 #include <stddef.h>
 
 #include <pq/falcon-1024/api.h>
@@ -23,23 +25,24 @@ int tidecoin_falcon1024_pubkey_from_sk(const uint8_t* sk, size_t sklen,
         uint16_t dummy_u16;
     } tmp;
 
+    int result = -1;
     size_t u = 1;
     size_t v = PQCLEAN_FALCON1024_CLEAN_trim_i8_decode(
         f, 10, PQCLEAN_FALCON1024_CLEAN_max_fg_bits[10],
         sk + u, sklen - u);
     if (v == 0) {
-        return -1;
+        goto cleanup;
     }
     u += v;
     v = PQCLEAN_FALCON1024_CLEAN_trim_i8_decode(
         g, 10, PQCLEAN_FALCON1024_CLEAN_max_fg_bits[10],
         sk + u, sklen - u);
     if (v == 0) {
-        return -1;
+        goto cleanup;
     }
 
     if (!PQCLEAN_FALCON1024_CLEAN_compute_public(h, f, g, 10, tmp.b)) {
-        return -1;
+        goto cleanup;
     }
 
     pk[0] = 0x00 + 10;
@@ -47,8 +50,14 @@ int tidecoin_falcon1024_pubkey_from_sk(const uint8_t* sk, size_t sklen,
         pk + 1, PQCLEAN_FALCON1024_CLEAN_CRYPTO_PUBLICKEYBYTES - 1,
         h, 10);
     if (v != PQCLEAN_FALCON1024_CLEAN_CRYPTO_PUBLICKEYBYTES - 1) {
-        return -1;
+        goto cleanup;
     }
 
-    return 0;
+    result = 0;
+cleanup:
+    pq_cleanse(&f, sizeof f);
+    pq_cleanse(&g, sizeof g);
+    pq_cleanse(&h, sizeof h);
+    pq_cleanse(&tmp, sizeof tmp);
+    return result;
 }

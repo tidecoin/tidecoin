@@ -378,6 +378,7 @@ static void keccak_absorb(uint64_t *s, uint32_t r, const uint8_t *m,
     for (i = 0; i < r / 8; ++i) {
         s[i] ^= load64(t + 8 * i);
     }
+    pq_cleanse(t, sizeof t);
 }
 
 /*************************************************
@@ -792,6 +793,7 @@ void sha3_256_inc_finalize(uint8_t *output, sha3_256incctx *state) {
     for (size_t i = 0; i < 32; i++) {
         output[i] = t[i];
     }
+    pq_cleanse(t, sizeof t);
 }
 
 /*************************************************
@@ -816,6 +818,8 @@ void sha3_256(uint8_t *output, const uint8_t *input, size_t inlen) {
     for (size_t i = 0; i < 32; i++) {
         output[i] = t[i];
     }
+    pq_cleanse(s, sizeof s);
+    pq_cleanse(t, sizeof t);
 }
 
 void sha3_384_inc_init(sha3_384incctx *state) {
@@ -855,6 +859,7 @@ void sha3_384_inc_finalize(uint8_t *output, sha3_384incctx *state) {
     for (size_t i = 0; i < 48; i++) {
         output[i] = t[i];
     }
+    pq_cleanse(t, sizeof t);
 }
 
 /*************************************************
@@ -879,6 +884,8 @@ void sha3_384(uint8_t *output, const uint8_t *input, size_t inlen) {
     for (size_t i = 0; i < 48; i++) {
         output[i] = t[i];
     }
+    pq_cleanse(s, sizeof s);
+    pq_cleanse(t, sizeof t);
 }
 
 void sha3_512_inc_init(sha3_512incctx *state) {
@@ -918,6 +925,7 @@ void sha3_512_inc_finalize(uint8_t *output, sha3_512incctx *state) {
     for (size_t i = 0; i < 64; i++) {
         output[i] = t[i];
     }
+    pq_cleanse(t, sizeof t);
 }
 
 /*************************************************
@@ -942,4 +950,6 @@ void sha3_512(uint8_t *output, const uint8_t *input, size_t inlen) {
     for (size_t i = 0; i < 64; i++) {
         output[i] = t[i];
     }
+    pq_cleanse(s, sizeof s);
+    pq_cleanse(t, sizeof t);
 }

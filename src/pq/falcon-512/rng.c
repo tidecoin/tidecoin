@@ -29,6 +29,7 @@
  * @author   Thomas Pornin <thomas.pornin@nccgroup.com>
  */
 
+#include "../cleanse.h"
 #include <assert.h>
 
 #include "inner.h"
@@ -61,6 +62,7 @@ PQCLEAN_FALCON512_CLEAN_prng_init(prng *p, inner_shake256_context *src) {
     tl = d32[48 / sizeof(uint32_t)];
     th = d32[52 / sizeof(uint32_t)];
     d64[48 / sizeof(uint64_t)] = tl + (th << 32);
+    pq_cleanse(tmp, sizeof tmp);
     PQCLEAN_FALCON512_CLEAN_prng_refill(p);
 }
 
@@ -158,6 +160,7 @@ PQCLEAN_FALCON512_CLEAN_prng_refill(prng *p) {
             p->buf.d[(u << 2) + (v << 5) + 3] =
                 (uint8_t)(state[v] >> 24);
         }
+        pq_cleanse(state, sizeof state);
     }
     *(uint64_t *)(p->state.d + 48) = cc;
 

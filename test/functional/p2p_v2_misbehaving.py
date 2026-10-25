@@ -10,7 +10,7 @@ from enum import Enum
 from test_framework.messages import MAGIC_BYTES
 from test_framework.p2p import P2PInterface
 from test_framework.test_framework import BitcoinTestFramework, SkipTest
-from test_framework.util import random_bitflip
+from test_framework.util import assert_equal, random_bitflip
 from test_framework import v2_p2p
 
 EncryptedP2PState = v2_p2p.EncryptedP2PState
@@ -20,8 +20,8 @@ MAX_GARBAGE_LEN = getattr(v2_p2p, "MAX_GARBAGE_LEN", None)
 class TestType(Enum):
     """ Scenarios to be tested:
 
-    1. EARLY_KEY_RESPONSE - The responder needs to wait until one byte is received which does not match the 16 bytes
-    consisting of network magic followed by "version\x00\x00\x00\x00\x00" before sending out its ML-KEM public key + garbage bytes
+    1. EARLY_KEY_RESPONSE - The responder must wait for a complete, canonical ML-KEM public key before responding.
+    A partial match with the v1 prefix must not trigger a response either.
     2. EXCESS_GARBAGE - Disconnection happens when > MAX_GARBAGE_LEN bytes garbage is sent
     3. WRONG_GARBAGE_TERMINATOR - Disconnection happens when incorrect garbage terminator is sent
     4. WRONG_GARBAGE - Disconnection happens when garbage bytes that is sent is different from what the peer receives
@@ -143,22 +143,29 @@ class EncryptedP2PMisbehaving(BitcoinTestFramework):
         self.test_v2disconnection()
 
     def test_earlykeyresponse(self):
-        self.log.info('Sending ML-KEM public key bytes in parts to ensure that response from responder is received only when')
-        self.log.info('ML-KEM public key bytes have a mismatch from the 16 bytes(network magic followed by "version\\x00\\x00\\x00\\x00\\x00")')
+        self.log.info('Sending a canonical ML-KEM public key in parts, initially matching the v1 prefix')
         node0 = self.nodes[0]
         node0.setmocktime(int(time.time()))
-        self.log.info('Sending first 4 bytes of ML-KEM public key which match network magic')
+        self.log.info('Sending the first byte, which matches network magic')
         self.log.info('If a response is received, assertion failure would happen in our custom data_received() function')
         with node0.wait_for_new_peer():
             peer1 = node0.add_p2p_connection(MisbehavingV2Peer(TestType.EARLY_KEY_RESPONSE), wait_for_verack=False, send_version=False, supports_v2_p2p=True, wait_for_v2_handshake=False)
-        peer1.send_raw_message(MAGIC_BYTES['regtest'])
-        self.log.info('Sending remaining ML-KEM public key and garbage which are different from V1_PREFIX. Since a response is')
-        self.log.info('expected now, our custom data_received() function wouldn\'t result in assertion failure')
-        peer1.v2_state.can_data_be_received = True
         self.wait_until(lambda: peer1.v2_state.ellswift_ours)
-        peer1.send_raw_message(peer1.v2_state.ellswift_ours[4:] + peer1.v2_state.sent_garbage)
-        # Ensure that the bytes sent after 4 bytes network magic are actually received.
-        self.wait_until(lambda: node0.getpeerinfo()[-1]["bytesrecv"] > 4)
+        key = bytearray(peer1.v2_state.ellswift_ours)
+        # The full regtest magic is not a canonical coefficient encoding. Match
+        # just its first byte and keep the first coefficient below 256.
+        key[0] = MAGIC_BYTES['regtest'][0]
+        key[1] &= 0xf0
+        peer1.send_raw_message(key[:1])
+        self.wait_until(lambda: node0.getpeerinfo()[-1]["bytesrecv"] == 1)
+        assert_equal(node0.getpeerinfo()[-1]["bytessent"], 0)
+        # A mismatch alone is insufficient: the responder still needs the full key.
+        peer1.send_raw_message(key[1:-1])
+        self.wait_until(lambda: node0.getpeerinfo()[-1]["bytesrecv"] == len(key) - 1)
+        assert_equal(node0.getpeerinfo()[-1]["bytessent"], 0)
+        peer1.v2_state.can_data_be_received = True
+        peer1.send_raw_message(key[-1:] + peer1.v2_state.sent_garbage)
+        self.wait_until(lambda: node0.getpeerinfo()[-1]["bytesrecv"] >= len(key))
         self.wait_until(lambda: node0.getpeerinfo()[-1]["bytessent"] > 0)
         with node0.assert_debug_log(['V2 handshake timeout, disconnecting peer=0']):
             node0.bumpmocktime(4)  # `InactivityCheck()` triggers now

@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+#include <pq/cleanse.h>
+
 #include <stddef.h>
 
 #include <pq/ml-dsa-87/packing.h>
@@ -37,5 +39,13 @@ int tidecoin_mldsa87_pubkey_from_sk(const uint8_t* sk, size_t sklen,
     PQCLEAN_MLDSA87_CLEAN_polyveck_caddq(&t1);
     PQCLEAN_MLDSA87_CLEAN_polyveck_power2round(&t1, &t0, &t1);
     PQCLEAN_MLDSA87_CLEAN_pack_pk(pk, rho, &t1);
+    pq_cleanse(&rho, sizeof rho);
+    pq_cleanse(&tr, sizeof tr);
+    pq_cleanse(&key, sizeof key);
+    pq_cleanse(&s1, sizeof s1);
+    pq_cleanse(&s1hat, sizeof s1hat);
+    pq_cleanse(&s2, sizeof s2);
+    pq_cleanse(&t0, sizeof t0);
+    pq_cleanse(&t1, sizeof t1);
     return 0;
 }

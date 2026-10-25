@@ -1,3 +1,4 @@
+#include "../cleanse.h"
 #include "params.h"
 #include "poly.h"
 #include "polyvec.h"
@@ -131,6 +132,7 @@ void PQCLEAN_MLDSA44_CLEAN_polyvecl_pointwise_acc_montgomery(poly *w,
         PQCLEAN_MLDSA44_CLEAN_poly_pointwise_montgomery(&t, &u->vec[i], &v->vec[i]);
         PQCLEAN_MLDSA44_CLEAN_poly_add(w, w, &t);
     }
+    pq_cleanse(&t, sizeof t);
 }
 
 /*************************************************

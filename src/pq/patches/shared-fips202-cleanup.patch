@@ -1,5 +1,5 @@
 diff --git a/src/pq/fips202.c b/src/pq/fips202.c
-index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..21edb61e2a50393f09236d692c6e0d1f3d265c50 100644
+index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..01412a3e0dca7e181300f81ce4a2b0f90c45fa15 100644
 --- a/src/pq/fips202.c
 +++ b/src/pq/fips202.c
 @@ -11,6 +11,7 @@
@@ -10,7 +10,15 @@ index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..21edb61e2a50393f09236d692c6e0d1f
 
  #define NROUNDS 24
  #define ROL(a, offset) (((a) << (offset)) ^ ((a) >> (64 - (offset))))
-@@ -551,7 +552,9 @@ void shake128_inc_ctx_clone(shake128incctx *dest, const shake128incctx *src) {
+@@ -377,6 +378,7 @@ static void keccak_absorb(uint64_t *s, uint32_t r, const uint8_t *m,
+     for (i = 0; i < r / 8; ++i) {
+         s[i] ^= load64(t + 8 * i);
+     }
++    pq_cleanse(t, sizeof t);
+ }
+
+ /*************************************************
+@@ -551,7 +553,9 @@ void shake128_inc_ctx_clone(shake128incctx *dest, const shake128incctx *src) {
  }
 
  void shake128_inc_ctx_release(shake128incctx *state) {
@@ -20,7 +28,7 @@ index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..21edb61e2a50393f09236d692c6e0d1f
  }
 
  void shake256_inc_init(shake256incctx *state) {
-@@ -583,7 +586,9 @@ void shake256_inc_ctx_clone(shake256incctx *dest, const shake256incctx *src) {
+@@ -583,7 +587,9 @@ void shake256_inc_ctx_clone(shake256incctx *dest, const shake256incctx *src) {
  }
 
  void shake256_inc_ctx_release(shake256incctx *state) {
@@ -30,7 +38,7 @@ index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..21edb61e2a50393f09236d692c6e0d1f
  }
 
  /*************************************************
-@@ -631,7 +636,9 @@ void shake128_ctx_clone(shake128ctx *dest, const shake128ctx *src) {
+@@ -631,7 +637,9 @@ void shake128_ctx_clone(shake128ctx *dest, const shake128ctx *src) {
 
  /** Release the allocated state. Call only once. */
  void shake128_ctx_release(shake128ctx *state) {
@@ -40,7 +48,7 @@ index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..21edb61e2a50393f09236d692c6e0d1f
  }
 
  /*************************************************
-@@ -679,7 +686,9 @@ void shake256_ctx_clone(shake256ctx *dest, const shake256ctx *src) {
+@@ -679,7 +687,9 @@ void shake256_ctx_clone(shake256ctx *dest, const shake256ctx *src) {
 
  /** Release the allocated state. Call only once. */
  void shake256_ctx_release(shake256ctx *state) {
@@ -50,7 +58,7 @@ index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..21edb61e2a50393f09236d692c6e0d1f
  }
 
  /*************************************************
-@@ -711,6 +720,7 @@ void shake128(uint8_t *output, size_t outlen,
+@@ -711,6 +721,7 @@ void shake128(uint8_t *output, size_t outlen,
          }
      }
      shake128_ctx_release(&s);
@@ -58,7 +66,7 @@ index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..21edb61e2a50393f09236d692c6e0d1f
  }
 
  /*************************************************
-@@ -742,6 +752,7 @@ void shake256(uint8_t *output, size_t outlen,
+@@ -742,6 +753,7 @@ void shake256(uint8_t *output, size_t outlen,
          }
      }
      shake256_ctx_release(&s);
@@ -66,7 +74,7 @@ index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..21edb61e2a50393f09236d692c6e0d1f
  }
 
  void sha3_256_inc_init(sha3_256incctx *state) {
-@@ -761,7 +772,9 @@ void sha3_256_inc_ctx_clone(sha3_256incctx *dest, const sha3_256incctx *src) {
+@@ -761,7 +773,9 @@ void sha3_256_inc_ctx_clone(sha3_256incctx *dest, const sha3_256incctx *src) {
  }
 
  void sha3_256_inc_ctx_release(sha3_256incctx *state) {
@@ -76,7 +84,24 @@ index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..21edb61e2a50393f09236d692c6e0d1f
  }
 
  void sha3_256_inc_absorb(sha3_256incctx *state, const uint8_t *input, size_t inlen) {
-@@ -826,7 +839,9 @@ void sha3_384_inc_absorb(sha3_384incctx *state, const uint8_t *input, size_t inl
+@@ -779,6 +793,7 @@ void sha3_256_inc_finalize(uint8_t *output, sha3_256incctx *state) {
+     for (size_t i = 0; i < 32; i++) {
+         output[i] = t[i];
+     }
++    pq_cleanse(t, sizeof t);
+ }
+
+ /*************************************************
+@@ -803,6 +818,8 @@ void sha3_256(uint8_t *output, const uint8_t *input, size_t inlen) {
+     for (size_t i = 0; i < 32; i++) {
+         output[i] = t[i];
+     }
++    pq_cleanse(s, sizeof s);
++    pq_cleanse(t, sizeof t);
+ }
+
+ void sha3_384_inc_init(sha3_384incctx *state) {
+@@ -826,7 +843,9 @@ void sha3_384_inc_absorb(sha3_384incctx *state, const uint8_t *input, size_t inl
  }
 
  void sha3_384_inc_ctx_release(sha3_384incctx *state) {
@@ -86,7 +111,24 @@ index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..21edb61e2a50393f09236d692c6e0d1f
  }
 
  void sha3_384_inc_finalize(uint8_t *output, sha3_384incctx *state) {
-@@ -887,7 +902,9 @@ void sha3_512_inc_absorb(sha3_512incctx *state, const uint8_t *input, size_t inl
+@@ -840,6 +859,7 @@ void sha3_384_inc_finalize(uint8_t *output, sha3_384incctx *state) {
+     for (size_t i = 0; i < 48; i++) {
+         output[i] = t[i];
+     }
++    pq_cleanse(t, sizeof t);
+ }
+
+ /*************************************************
+@@ -864,6 +884,8 @@ void sha3_384(uint8_t *output, const uint8_t *input, size_t inlen) {
+     for (size_t i = 0; i < 48; i++) {
+         output[i] = t[i];
+     }
++    pq_cleanse(s, sizeof s);
++    pq_cleanse(t, sizeof t);
+ }
+
+ void sha3_512_inc_init(sha3_512incctx *state) {
+@@ -887,7 +909,9 @@ void sha3_512_inc_absorb(sha3_512incctx *state, const uint8_t *input, size_t inl
  }
 
  void sha3_512_inc_ctx_release(sha3_512incctx *state) {
@@ -96,3 +138,18 @@ index a18d1db1f976a16894ac08bac8ccd8baac1dc3ea..21edb61e2a50393f09236d692c6e0d1f
  }
 
  void sha3_512_inc_finalize(uint8_t *output, sha3_512incctx *state) {
+@@ -901,6 +925,7 @@ void sha3_512_inc_finalize(uint8_t *output, sha3_512incctx *state) {
+     for (size_t i = 0; i < 64; i++) {
+         output[i] = t[i];
+     }
++    pq_cleanse(t, sizeof t);
+ }
+
+ /*************************************************
+@@ -925,4 +950,6 @@ void sha3_512(uint8_t *output, const uint8_t *input, size_t inlen) {
+     for (size_t i = 0; i < 64; i++) {
+         output[i] = t[i];
+     }
++    pq_cleanse(s, sizeof s);
++    pq_cleanse(t, sizeof t);
+ }

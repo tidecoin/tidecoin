@@ -1,3 +1,4 @@
+#include "../cleanse.h"
 #include "cbd.h"
 #include "ntt.h"
 #include "params.h"
@@ -170,6 +171,7 @@ void PQCLEAN_MLKEM512_CLEAN_poly_getnoise_eta1(poly *r, const uint8_t seed[KYBER
     uint8_t buf[KYBER_ETA1 * KYBER_N / 4];
     prf(buf, sizeof(buf), seed, nonce);
     PQCLEAN_MLKEM512_CLEAN_poly_cbd_eta1(r, buf);
+    pq_cleanse(&buf, sizeof buf);
 }
 
 /*************************************************
@@ -188,6 +190,7 @@ void PQCLEAN_MLKEM512_CLEAN_poly_getnoise_eta2(poly *r, const uint8_t seed[KYBER
     uint8_t buf[KYBER_ETA2 * KYBER_N / 4];
     prf(buf, sizeof(buf), seed, nonce);
     PQCLEAN_MLKEM512_CLEAN_poly_cbd_eta2(r, buf);
+    pq_cleanse(&buf, sizeof buf);
 }
 
 

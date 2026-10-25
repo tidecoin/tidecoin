@@ -439,7 +439,7 @@ The derivation chain from master seed to leaf key is:
    - Falcon: Uses first 48 bytes as deterministic seed
    - ML-DSA: Uses first 32 bytes as deterministic seed
 
-**Memory safety:** All secret material is cleansed via `memory_cleanse()` after use. RAII destructors ensure cleanup even on early returns. Secure allocators are used for private key storage.
+**Key handling:** The implementation limits the lifetime of temporary private-key and signing material in memory.
 
 ### 5.4 Wallet Integration
 
@@ -935,7 +935,7 @@ The transition from YespowerTIDE to scrypt merged mining trades the Phase 1 adva
 
 The PQ implementation applies defense-in-depth memory safety practices:
 
-- `memory_cleanse()` on all secret material after use
+- Limited lifetime of temporary key material
 - `secure_allocator<>` for private key storage
 - RAII destructors with mandatory cleanup (including ML-KEM keypairs)
 - Move-only or deleted copy constructors for sensitive objects

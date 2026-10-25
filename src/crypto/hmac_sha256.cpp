@@ -3,17 +3,21 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <crypto/hmac_sha256.h>
+#include <support/cleanse.h>
 
 #include <cstring>
 
 CHMAC_SHA256::CHMAC_SHA256(const unsigned char* key, size_t keylen)
 {
     unsigned char rkey[64];
+    const ScopedMemoryCleanse cleanse_rkey{rkey, sizeof rkey};
     if (keylen <= 64) {
         memcpy(rkey, key, keylen);
         memset(rkey + keylen, 0, 64 - keylen);
     } else {
-        CSHA256().Write(key, keylen).Finalize(rkey);
+        CSHA256 hash;
+        const ScopedMemoryCleanse cleanse_hash{&hash, sizeof hash};
+        hash.Write(key, keylen).Finalize(rkey);
         memset(rkey + 32, 0, 32);
     }
 
@@ -29,6 +33,7 @@ CHMAC_SHA256::CHMAC_SHA256(const unsigned char* key, size_t keylen)
 void CHMAC_SHA256::Finalize(unsigned char hash[OUTPUT_SIZE])
 {
     unsigned char temp[32];
+    const ScopedMemoryCleanse cleanse_temp{temp, sizeof temp};
     inner.Finalize(temp);
     outer.Write(temp, 32).Finalize(hash);
 }

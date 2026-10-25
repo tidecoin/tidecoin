@@ -111,6 +111,9 @@ public:
     bool GenerateDeterministic(std::span<const uint8_t> coins);
     bool Set(std::span<const uint8_t> pk, std::span<const uint8_t> sk);
 
+    /** Erase the keypair and return to the uninitialized state. */
+    void Clear() noexcept;
+
     bool IsInitialized() const noexcept { return m_initialized; }
     std::span<const uint8_t> PublicKey() const noexcept { return m_pk; }
     std::span<const uint8_t> SecretKey() const noexcept { return m_sk; }

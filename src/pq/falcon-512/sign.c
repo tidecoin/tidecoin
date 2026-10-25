@@ -29,6 +29,7 @@
  * @author   Thomas Pornin <thomas.pornin@nccgroup.com>
  */
 
+#include "../cleanse.h"
 #include "inner.h"
 
 /* =================================================================== */
@@ -1197,8 +1198,10 @@ PQCLEAN_FALCON512_CLEAN_sign_tree(int16_t *sig, inner_shake256_context *rng,
         /*
          * Do the actual signature.
          */
-        if (do_sign_tree(samp, samp_ctx, sig,
-                         expanded_key, hm, logn, ftmp)) {
+        int accepted = do_sign_tree(samp, samp_ctx, sig,
+                                    expanded_key, hm, logn, ftmp);
+        pq_cleanse(&spc, sizeof spc);
+        if (accepted) {
             break;
         }
     }
@@ -1240,8 +1243,10 @@ PQCLEAN_FALCON512_CLEAN_sign_dyn(int16_t *sig, inner_shake256_context *rng,
         /*
          * Do the actual signature.
          */
-        if (do_sign_dyn(samp, samp_ctx, sig,
-                        f, g, F, G, hm, logn, ftmp)) {
+        int accepted = do_sign_dyn(samp, samp_ctx, sig,
+                                   f, g, F, G, hm, logn, ftmp);
+        pq_cleanse(&spc, sizeof spc);
+        if (accepted) {
             break;
         }
     }

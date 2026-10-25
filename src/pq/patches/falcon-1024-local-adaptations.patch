@@ -34,8 +34,38 @@ index df3550697e1b92c0c9c38e5fba8cd09b7e6bd0de..c8cfebc25d8da6833274d5b507e96d16
 
  #define inner_shake256_context                shake256incctx
  #define inner_shake256_init(sc)               shake256_inc_init(sc)
+diff --git a/src/pq/falcon-1024/keygen.c b/src/pq/falcon-1024/keygen.c
+index 8b7740cfcffa74b259b8f2cc019d4837f3fc07ad..4ae4d3748a04841b645f27b6d4acb044ab9e52f7 100644
+--- a/src/pq/falcon-1024/keygen.c
++++ b/src/pq/falcon-1024/keygen.c
+@@ -29,6 +29,7 @@
+  * @author   Thomas Pornin <thomas.pornin@nccgroup.com>
+  */
+
++#include "../cleanse.h"
+ #include "inner.h"
+
+ #define MKN(logn)   ((size_t)1 << (logn))
+@@ -2196,7 +2197,7 @@ get_rng_u64(inner_shake256_context *rng) {
+     uint8_t tmp[8];
+
+     inner_shake256_extract(rng, tmp, sizeof tmp);
+-    return (uint64_t)tmp[0]
++    uint64_t result = (uint64_t)tmp[0]
+            | ((uint64_t)tmp[1] << 8)
+            | ((uint64_t)tmp[2] << 16)
+            | ((uint64_t)tmp[3] << 24)
+@@ -2204,6 +2205,8 @@ get_rng_u64(inner_shake256_context *rng) {
+            | ((uint64_t)tmp[5] << 40)
+            | ((uint64_t)tmp[6] << 48)
+            | ((uint64_t)tmp[7] << 56);
++    pq_cleanse(tmp, sizeof tmp);
++    return result;
+ }
+
+ /*
 diff --git a/src/pq/falcon-1024/pqclean.c b/src/pq/falcon-1024/pqclean.c
-index 086d249ef2d224f5ff818662742d9f0b2af480ca..b634c7d9ff3ee3a50767e25030b3713b2dfc8b7c 100644
+index 086d249ef2d224f5ff818662742d9f0b2af480ca..1ccc5827fd732b51e8ea9ef880ecb25b530b37fc 100644
 --- a/src/pq/falcon-1024/pqclean.c
 +++ b/src/pq/falcon-1024/pqclean.c
 @@ -1,3 +1,4 @@
@@ -52,9 +82,11 @@ index 086d249ef2d224f5ff818662742d9f0b2af480ca..b634c7d9ff3ee3a50767e25030b3713b
 
  /*
   * Encoding formats (nnnn = log of degree, 9 for Falcon-512, 10 for Falcon-1024)
-@@ -54,9 +55,6 @@ PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair(
+@@ -53,10 +54,8 @@ PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair(
+     unsigned char seed[48];
      inner_shake256_context rng;
      size_t u, v;
++    int result = -1;
 
 -    /*
 -     * Generate key pair.
@@ -62,7 +94,7 @@ index 086d249ef2d224f5ff818662742d9f0b2af480ca..b634c7d9ff3ee3a50767e25030b3713b
      randombytes(seed, sizeof seed);
      inner_shake256_init(&rng);
      inner_shake256_inject(&rng, seed, sizeof seed);
-@@ -64,9 +62,6 @@ PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair(
+@@ -64,48 +63,123 @@ PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair(
      PQCLEAN_FALCON1024_CLEAN_keygen(&rng, f, g, F, NULL, h, 10, tmp.b);
      inner_shake256_ctx_release(&rng);
 
@@ -72,8 +104,32 @@ index 086d249ef2d224f5ff818662742d9f0b2af480ca..b634c7d9ff3ee3a50767e25030b3713b
      sk[0] = 0x50 + 10;
      u = 1;
      v = PQCLEAN_FALCON1024_CLEAN_trim_i8_encode(
-@@ -94,9 +89,6 @@ PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair(
-         return -1;
+             sk + u, PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES - u,
+             f, 10, PQCLEAN_FALCON1024_CLEAN_max_fg_bits[10]);
+     if (v == 0) {
+-        return -1;
++        goto cleanup;
+     }
+     u += v;
+     v = PQCLEAN_FALCON1024_CLEAN_trim_i8_encode(
+             sk + u, PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES - u,
+             g, 10, PQCLEAN_FALCON1024_CLEAN_max_fg_bits[10]);
+     if (v == 0) {
+-        return -1;
++        goto cleanup;
+     }
+     u += v;
+     v = PQCLEAN_FALCON1024_CLEAN_trim_i8_encode(
+             sk + u, PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES - u,
+             F, 10, PQCLEAN_FALCON1024_CLEAN_max_FG_bits[10]);
+     if (v == 0) {
+-        return -1;
++        goto cleanup;
+     }
+     u += v;
+     if (u != PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES) {
+-        return -1;
++        goto cleanup;
      }
 
 -    /*
@@ -82,17 +138,29 @@ index 086d249ef2d224f5ff818662742d9f0b2af480ca..b634c7d9ff3ee3a50767e25030b3713b
      pk[0] = 0x00 + 10;
      v = PQCLEAN_FALCON1024_CLEAN_modq_encode(
              pk + 1, PQCLEAN_FALCON1024_CLEAN_CRYPTO_PUBLICKEYBYTES - 1,
-@@ -108,6 +100,79 @@ PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair(
-     return 0;
- }
-
+             h, 10);
+     if (v != PQCLEAN_FALCON1024_CLEAN_CRYPTO_PUBLICKEYBYTES - 1) {
++        goto cleanup;
++    }
++
++    result = 0;
++cleanup:
++    pq_cleanse(&tmp, sizeof tmp);
++    pq_cleanse(&f, sizeof f);
++    pq_cleanse(&g, sizeof g);
++    pq_cleanse(&F, sizeof F);
++    pq_cleanse(&h, sizeof h);
++    pq_cleanse(&seed, sizeof seed);
++    return result;
++}
++
 +int
 +PQCLEAN_FALCON1024_CLEAN_crypto_sign_keypair_deterministic(
 +    uint8_t *pk, uint8_t *sk,
 +    const uint8_t *seed, size_t seed_len) {
 +    if (seed_len != 48) {
-+        return -1;
-+    }
+         return -1;
+     }
 +    union {
 +        uint8_t b[FALCON_KEYGEN_TEMP_10];
 +        uint64_t dummy_u64;
@@ -103,7 +171,8 @@ index 086d249ef2d224f5ff818662742d9f0b2af480ca..b634c7d9ff3ee3a50767e25030b3713b
 +    inner_shake256_context rng;
 +    size_t u, v;
 +    int result = -1;
-+
+
+-    return 0;
 +    inner_shake256_init(&rng);
 +    inner_shake256_inject(&rng, seed, seed_len);
 +    inner_shake256_flip(&rng);
@@ -157,12 +226,82 @@ index 086d249ef2d224f5ff818662742d9f0b2af480ca..b634c7d9ff3ee3a50767e25030b3713b
 +        pq_cleanse(pk, PQCLEAN_FALCON1024_CLEAN_CRYPTO_PUBLICKEYBYTES);
 +    }
 +    return result;
-+}
-+
+ }
+
  /*
-  * Compute the signature. nonce[] receives the nonce and must have length
-  * NONCELEN bytes. sigbuf[] receives the signature value (without nonce
-@@ -247,20 +312,10 @@ do_verify(
+@@ -135,40 +209,41 @@ do_sign(uint8_t *nonce, uint8_t *sigbuf, size_t *sigbuflen,
+     unsigned char seed[48];
+     inner_shake256_context sc;
+     size_t u, v;
++    int result = -1;
+
+     /*
+      * Decode the private key.
+      */
+     if (sk[0] != 0x50 + 10) {
+-        return -1;
++        goto cleanup;
+     }
+     u = 1;
+     v = PQCLEAN_FALCON1024_CLEAN_trim_i8_decode(
+             f, 10, PQCLEAN_FALCON1024_CLEAN_max_fg_bits[10],
+             sk + u, PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES - u);
+     if (v == 0) {
+-        return -1;
++        goto cleanup;
+     }
+     u += v;
+     v = PQCLEAN_FALCON1024_CLEAN_trim_i8_decode(
+             g, 10, PQCLEAN_FALCON1024_CLEAN_max_fg_bits[10],
+             sk + u, PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES - u);
+     if (v == 0) {
+-        return -1;
++        goto cleanup;
+     }
+     u += v;
+     v = PQCLEAN_FALCON1024_CLEAN_trim_i8_decode(
+             F, 10, PQCLEAN_FALCON1024_CLEAN_max_FG_bits[10],
+             sk + u, PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES - u);
+     if (v == 0) {
+-        return -1;
++        goto cleanup;
+     }
+     u += v;
+     if (u != PQCLEAN_FALCON1024_CLEAN_CRYPTO_SECRETKEYBYTES) {
+-        return -1;
++        goto cleanup;
+     }
+     if (!PQCLEAN_FALCON1024_CLEAN_complete_private(G, f, g, F, 10, tmp.b)) {
+-        return -1;
++        goto cleanup;
+     }
+
+     /*
+@@ -199,12 +274,20 @@ do_sign(uint8_t *nonce, uint8_t *sigbuf, size_t *sigbuflen,
+      */
+     PQCLEAN_FALCON1024_CLEAN_sign_dyn(r.sig, &sc, f, g, F, G, r.hm, 10, tmp.b);
+     v = PQCLEAN_FALCON1024_CLEAN_comp_encode(sigbuf, *sigbuflen, r.sig, 10);
++    inner_shake256_ctx_release(&sc);
+     if (v != 0) {
+-        inner_shake256_ctx_release(&sc);
+         *sigbuflen = v;
+-        return 0;
++        result = 0;
+     }
+-    return -1;
++cleanup:
++    pq_cleanse(&tmp, sizeof tmp);
++    pq_cleanse(&f, sizeof f);
++    pq_cleanse(&g, sizeof g);
++    pq_cleanse(&F, sizeof F);
++    pq_cleanse(&G, sizeof G);
++    pq_cleanse(&r, sizeof r);
++    pq_cleanse(&seed, sizeof seed);
++    return result;
+ }
+
+ /*
+@@ -247,20 +330,10 @@ do_verify(
      }
 
      v = PQCLEAN_FALCON1024_CLEAN_comp_decode(sig, 10, sigbuf, sigbuflen);
@@ -185,3 +324,69 @@ index 086d249ef2d224f5ff818662742d9f0b2af480ca..b634c7d9ff3ee3a50767e25030b3713b
 
      /*
       * Hash nonce + message into a vector.
+diff --git a/src/pq/falcon-1024/rng.c b/src/pq/falcon-1024/rng.c
+index 78a1d60439d103ad92d77adc03af51364420fe8d..aa18c0b17f119f6bd12c0fcb845cd6367777f5b1 100644
+--- a/src/pq/falcon-1024/rng.c
++++ b/src/pq/falcon-1024/rng.c
+@@ -29,6 +29,7 @@
+  * @author   Thomas Pornin <thomas.pornin@nccgroup.com>
+  */
+
++#include "../cleanse.h"
+ #include <assert.h>
+
+ #include "inner.h"
+@@ -61,6 +62,7 @@ PQCLEAN_FALCON1024_CLEAN_prng_init(prng *p, inner_shake256_context *src) {
+     tl = d32[48 / sizeof(uint32_t)];
+     th = d32[52 / sizeof(uint32_t)];
+     d64[48 / sizeof(uint64_t)] = tl + (th << 32);
++    pq_cleanse(tmp, sizeof tmp);
+     PQCLEAN_FALCON1024_CLEAN_prng_refill(p);
+ }
+
+@@ -158,6 +160,7 @@ PQCLEAN_FALCON1024_CLEAN_prng_refill(prng *p) {
+             p->buf.d[(u << 2) + (v << 5) + 3] =
+                 (uint8_t)(state[v] >> 24);
+         }
++        pq_cleanse(state, sizeof state);
+     }
+     *(uint64_t *)(p->state.d + 48) = cc;
+
+diff --git a/src/pq/falcon-1024/sign.c b/src/pq/falcon-1024/sign.c
+index b547d0f2bc1fe089dbd44521af6c7403954f077d..5f977a4325c5868c5d2cb3c718747db94b84ce0c 100644
+--- a/src/pq/falcon-1024/sign.c
++++ b/src/pq/falcon-1024/sign.c
+@@ -29,6 +29,7 @@
+  * @author   Thomas Pornin <thomas.pornin@nccgroup.com>
+  */
+
++#include "../cleanse.h"
+ #include "inner.h"
+
+ /* =================================================================== */
+@@ -1197,8 +1198,10 @@ PQCLEAN_FALCON1024_CLEAN_sign_tree(int16_t *sig, inner_shake256_context *rng,
+         /*
+          * Do the actual signature.
+          */
+-        if (do_sign_tree(samp, samp_ctx, sig,
+-                         expanded_key, hm, logn, ftmp)) {
++        int accepted = do_sign_tree(samp, samp_ctx, sig,
++                                    expanded_key, hm, logn, ftmp);
++        pq_cleanse(&spc, sizeof spc);
++        if (accepted) {
+             break;
+         }
+     }
+@@ -1240,8 +1243,10 @@ PQCLEAN_FALCON1024_CLEAN_sign_dyn(int16_t *sig, inner_shake256_context *rng,
+         /*
+          * Do the actual signature.
+          */
+-        if (do_sign_dyn(samp, samp_ctx, sig,
+-                        f, g, F, G, hm, logn, ftmp)) {
++        int accepted = do_sign_dyn(samp, samp_ctx, sig,
++                                   f, g, F, G, hm, logn, ftmp);
++        pq_cleanse(&spc, sizeof spc);
++        if (accepted) {
+             break;
+         }
+     }
