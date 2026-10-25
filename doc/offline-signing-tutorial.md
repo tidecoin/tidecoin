@@ -22,6 +22,41 @@ Tidecoin wallets derive their keys from a seed using hardened-only post-quantum 
 ### Requirements
 - [jq](https://jqlang.github.io/jq/) installation - This tutorial uses jq to process certain fields from JSON RPC responses, but this convenience is optional.
 
+### Choose the destination rules
+
+The offline node's height does not describe the destination chain. Choose
+`pre-auxpow` or `post-auxpow` using the online node's next-block rules and the
+activation configuration for the release/network you intend to use. In this
+release mainnet activation is disabled; testnet activates at height 1,000, so a
+validated testnet tip of 999 already selects post rules. Check the destination's
+current height with `getblockcount`; a chain rollback can change the next-block
+era. Do not change network activation settings to configure offline signing.
+
+Record the choice with your transaction workflow, outside the PSBT. For example,
+for testnet whose next block is at or beyond activation, set this on the offline
+host and use it for every analysis, signing and finalization call below:
+
+```sh
+[offline]$ RULES=post-auxpow
+```
+
+Use `RULES=pre-auxpow` for a destination still before activation. RPC omission or
+JSON `null` uses the local next-block era; a genesis-only offline host normally
+selects pre rules. An explicit post choice there produces a `warnings` notice,
+which is expected. The returned `rules` field records what was actually used.
+The standalone `tidecoin-tx` utility uses the same names but requires `-rules`
+for signing and verification, with no default.
+
+This tutorial provisions Falcon-512 native-v0 receive and change addresses,
+which work without an activated local chain. The processing option does not
+create a missing native-v1 descriptor or enable `getnewaddress` or
+`getrawchangeaddress` before activation. To provision newer receiving formats,
+prepare the offline wallet using an offline copy of the chain validated through
+activation, then issue and export its fixed public descriptors. Alternatively,
+use keys and descriptors already provisioned on the offline side. This tutorial
+does not claim a chainless default-address provisioning route for newer formats.
+Keep seeds and private keys on the offline host.
+
 ### Create and Prepare the `offline_wallet`
 
 1. On the offline machine create a wallet named `offline_wallet` secured by a wallet `passphrase`. This wallet will contain private keys and must remain unconnected to any networks at all times.
@@ -44,8 +79,8 @@ Tidecoin wallets derive their keys from a seed using hardened-only post-quantum 
 2. Issue a receive address and a change address from the `offline_wallet`.
 
 ```sh
-[offline]$ RECEIVE=$(./build/bin/tidecoin-cli -testnet -rpcwallet="offline_wallet" getnewaddress)
-[offline]$ CHANGE=$(./build/bin/tidecoin-cli -testnet -rpcwallet="offline_wallet" getrawchangeaddress)
+[offline]$ RECEIVE=$(./build/bin/tidecoin-cli -testnet -rpcwallet="offline_wallet" getnewaddress "" bech32)
+[offline]$ CHANGE=$(./build/bin/tidecoin-cli -testnet -rpcwallet="offline_wallet" getrawchangeaddress bech32)
 [offline]$ echo "$RECEIVE $CHANGE"
 
 ttbc1qtar8ynfvqdcvfdspvt7x7u83htlej05l0luvj6 ttbc1qymvagxfujwzuwmn04nttjv6ewyutrwuw80xd5p
@@ -166,7 +201,8 @@ Decode and analyze the unsigned PSBT on the `offline_wallet` using the `funded_p
     ...
 }
 
-[offline]$ ./build/bin/tidecoin-cli -testnet analyzepsbt $(cat /path/to/funded_psbt.txt)
+[offline]$ ./build/bin/tidecoin-cli -testnet -named analyzepsbt \
+                psbt="$(cat /path/to/funded_psbt.txt)" rules="$RULES"
 
 {
   "inputs": [
@@ -181,6 +217,8 @@ Decode and analyze the unsigned PSBT on the `offline_wallet` using the `funded_p
       }
     }
   ],
+  "rules": "post-auxpow",
+  "warnings": ["Explicit post-auxpow script rules differ from the local next-block rules (pre-auxpow). Completion is evaluated using post-auxpow; acceptance must be checked on the destination node."],
   "fee": 0.00005280,
   "next": "updater"
 }
@@ -198,23 +236,53 @@ Use the walletpassphrase command to unlock the `offline_wallet` with the passphr
 [offline]$ ./build/bin/tidecoin-cli -testnet -rpcwallet="offline_wallet" walletpassphrase "** enter passphrase **" 60
 ```
 
-2. Process, sign and finalize the PSBT on the `offline_wallet` using the `walletprocesspsbt` command, saving the output to a file `final_psbt.txt`.
-
- ```sh
-[offline]$ ./build/bin/tidecoin-cli -testnet -rpcwallet="offline_wallet" walletprocesspsbt \
-                $(cat /path/to/funded_psbt.txt) \
-                | jq -r .hex \
-                >> /path/to/final_psbt.txt
- ```
-
-### Broadcast the Signed and Finalized PSBT
-Broadcast the funded, signed and finalized PSBT `final_psbt.txt` using `sendrawtransaction` with an online node:
+2. Process, sign and finalize with the recorded destination rules. Save the
+whole response before extracting hex, so incomplete results and notices can be
+reviewed:
 
 ```sh
-[online]$ ./build/bin/tidecoin-cli -testnet sendrawtransaction $(cat /path/to/final_psbt.txt)
-
-65329f0fefb8d7edc338a597cc644b1e957368f2db291b5dbbb32071e5ca6fbb
+[offline]$ ./build/bin/tidecoin-cli -testnet -rpcwallet="offline_wallet" -named walletprocesspsbt \
+                psbt="$(cat /path/to/funded_psbt.txt)" rules="$RULES" \
+                > /path/to/signing_result.json
+[offline]$ jq '{rules, warnings, complete}' /path/to/signing_result.json
+[offline]$ jq -er --arg rules "$RULES" \
+                'select(.rules == $rules and .complete == true) | .hex // error("No completed transaction")' \
+                /path/to/signing_result.json > /path/to/final_tx.txt
 ```
+
+If processing is incomplete, inspect the PSBT and resolve missing scripts, keys
+or previous-output data before proceeding. A legacy input requires the full
+previous transaction, including when its final fields are already present.
+If finalizing separately, use the same era:
+
+```sh
+[offline]$ ./build/bin/tidecoin-cli -testnet -named finalizepsbt \
+                psbt="$(jq -r .psbt /path/to/signing_result.json)" rules="$RULES"
+```
+
+`complete: true` means the input scripts verify under the selected rules using
+the required input data. It does not establish that outputs exist or remain
+unspent, or that finality, maturity and fee requirements are met. Existing
+partials are checked under these same rules: an owned partial that fails can be
+replaced when signing, while an invalid supplied final stays incomplete.
+
+### Check and Broadcast the Signed Transaction
+
+Transfer `final_tx.txt` to the online host. Check it against the destination
+node's actual rules before broadcasting; these RPCs have no rule override:
+
+```sh
+[online]$ ./build/bin/tidecoin-cli -testnet testmempoolaccept \
+               "$(jq -Rn --arg tx "$(cat /path/to/final_tx.txt)" '[$tx]')"
+```
+
+Review `allowed` and any rejection reason. If accepted, broadcast:
+
+```sh
+[online]$ ./build/bin/tidecoin-cli -testnet sendrawtransaction "$(cat /path/to/final_tx.txt)"
+```
+
+A later chain or mempool change can still affect broadcast acceptance.
 
 ### Confirm Wallet Balance
 

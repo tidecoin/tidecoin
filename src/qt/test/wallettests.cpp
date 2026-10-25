@@ -32,6 +32,7 @@
 #include <qt/transactionview.h>
 #include <qt/walletmodel.h>
 #include <script/solver.h>
+#include <test/util/mining.h>
 #include <test/util/setup_common.h>
 #include <validation.h>
 #include <wallet/test/util.h>
@@ -411,8 +412,10 @@ void TestPSBTAmountRendering(WalletModel& walletModel, ClientModel* client_model
     }
     // Exercise the actual dialog rendering with and without a loaded wallet.
     for (WalletModel* model : {&walletModel, static_cast<WalletModel*>(nullptr)}) {
+        CMutableTransaction previous;
+        previous.vout.emplace_back(1000, CScript{} << OP_TRUE);
         CMutableTransaction tx;
-        tx.vin.emplace_back(Txid::FromUint256(uint256::ONE), 0);
+        tx.vin.emplace_back(previous.GetHash(), 0);
         tx.vout.emplace_back(1000, CScript{} << OP_TRUE);
         PartiallySignedTransaction psbt(tx);
         PSBTOperationsDialog dialog(nullptr, model, client_model);
@@ -421,6 +424,10 @@ void TestPSBTAmountRendering(WalletModel& walletModel, ClientModel* client_model
         QVERIFY(description);
         QVERIFY(description->toPlainText().contains("Unable to calculate"));
         psbt.inputs[0].witness_utxo = CTxOut(1000, CScript{} << OP_TRUE);
+        dialog.openWithPSBT(psbt);
+        // An output summary alone does not establish this legacy amount.
+        QVERIFY(description->toPlainText().contains("Unable to calculate"));
+        psbt.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
         dialog.openWithPSBT(psbt);
         QVERIFY(description->toPlainText().contains("Pays transaction fee:"));
         QVERIFY(!description->toPlainText().contains("Unable to calculate"));
@@ -436,11 +443,13 @@ void TestPSBTAmountRendering(WalletModel& walletModel, ClientModel* client_model
         }
         for (CAmount value : {std::numeric_limits<CAmount>::min(), std::numeric_limits<CAmount>::max()}) {
             auto invalid = psbt;
+            invalid.inputs[0].non_witness_utxo.reset(); // Exercise the amount bounds, not record mismatch.
             invalid.inputs[0].witness_utxo.nValue = value;
             dialog.openWithPSBT(invalid);
             QVERIFY(description->toPlainText().contains("Invalid transaction", Qt::CaseInsensitive));
         }
         auto nondefault = psbt;
+        nondefault.inputs[0].non_witness_utxo.reset(); // Witness-only control has a different output script.
         CKey key;
         key.MakeNewKey(pq::SchemeId::FALCON_512);
         const auto pubkey = key.GetPubKey();
@@ -869,6 +878,99 @@ void TestGUI(interfaces::Node& node)
 #endif
 }
 
+void TestGUITransactionRules(interfaces::Node& node)
+{
+    TestingSetup test{ChainType::REGTEST, {.extra_args = {"-auxpowactivationheight=3"}}};
+    node::BlockAssembler::Options block_options;
+    block_options.coinbase_output_script = CScript{} << OP_TRUE;
+    MineBlock(test.m_node, block_options);
+    auto wallet_loader = interfaces::MakeWalletLoader(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.wallet_loader = wallet_loader.get();
+    node.setContext(&test.m_node);
+
+    auto wallet = std::make_shared<CWallet>(test.m_node.chain.get(), "gui-rules", CreateMockableWalletDatabase());
+    QVERIFY(wallet->LoadWallet() == wallet::DBErrors::LOAD_OK);
+    WITH_LOCK(wallet->cs_wallet, wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS | wallet::WALLET_FLAG_BLANK_WALLET));
+    QVERIFY(wallet->EncryptWallet(SecureString{"passphrase"}));
+    QVERIFY(wallet->Unlock(SecureString{"passphrase"}));
+    const CKey key = GenerateRandomKey(pq::SchemeId::FALCON_1024);
+    FlatSigningProvider provider;
+    std::string error;
+    auto descriptors = Parse("wsh512(pk(" + EncodeSecret(key) + "))", provider, error, false);
+    QVERIFY(!descriptors.empty());
+    WalletDescriptor descriptor(std::move(descriptors[0]), 0, 0, 1, 1);
+    QVERIFY(WITH_LOCK(wallet->cs_wallet, return bool(wallet->AddWalletDescriptor(descriptor, provider, "", false))));
+    QVERIFY(wallet->Lock());
+
+    std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
+    MiniGUI gui(node, style.get());
+    gui.initModelForWallet(node, wallet, style.get());
+    QCOMPARE(gui.clientModel->getNumBlocks(), 1);
+    // Keep the display's cached height behind the node to check that processing
+    // uses the chain directly, including when no wallet is loaded.
+    gui.clientModel->stop();
+    MineBlock(test.m_node, block_options);
+    CBlockIndex* boundary{WITH_LOCK(cs_main, return test.m_node.chainman->ActiveTip())};
+    QCOMPARE(boundary->nHeight, 2);
+    QCOMPARE(gui.clientModel->getNumBlocks(), 1);
+    const auto rules = gui.walletModel->wallet().getTransactionRules();
+    QVERIFY(rules.effective == common::ScriptRuleEra::POST_AUXPOW);
+
+    CMutableTransaction previous;
+    const CScript witness_script = GetScriptForRawPubKey(key.GetPubKey());
+    previous.vout.emplace_back(COIN, GetScriptForDestination(WitnessV1ScriptHash512{witness_script}));
+    CMutableTransaction tx;
+    tx.vin.emplace_back(previous.GetHash(), 0);
+    tx.vout.emplace_back(COIN - 100000, CScript{} << OP_TRUE);
+    PartiallySignedTransaction request(tx);
+    request.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+
+    PSBTOperationsDialog dialog(nullptr, gui.walletModel.get(), gui.clientModel.get());
+    dialog.openWithPSBT(request);
+    bool unlocked{false};
+    const auto unlock_connection = QObject::connect(gui.walletModel.get(), &WalletModel::requireUnlock, [&] {
+        // The sign action has already selected post-activation rules. Change
+        // the chain before FillPSBT, without changing the requested operation.
+        BlockValidationState state;
+        QVERIFY(test.m_node.chainman->ActiveChainstate().InvalidateBlock(state, boundary));
+        QCOMPARE(node.getNumBlocks(), 1);
+        QVERIFY(wallet->Unlock(SecureString{"passphrase"}));
+        unlocked = true;
+    });
+    dialog.signTransaction();
+    QObject::disconnect(unlock_connection);
+    QVERIFY(unlocked);
+    QVERIFY(wallet->IsLocked());
+    QVERIFY(dialog.findChild<QPushButton*>("broadcastTransactionButton")->isEnabled());
+    QVERIFY(dialog.findChild<QLabel*>("statusBar")->text().contains("ready for broadcast"));
+    dialog.copyToClipboard();
+    PartiallySignedTransaction signed_psbt;
+    QVERIFY(DecodeBase64PSBT(signed_psbt, QApplication::clipboard()->text().toStdString(), error));
+    CMutableTransaction extracted;
+    QVERIFY(FinalizeAndExtractPSBT(signed_psbt, extracted, rules.flags));
+    const auto current_rules = gui.walletModel->wallet().getTransactionRules();
+    QVERIFY(current_rules.effective == common::ScriptRuleEra::PRE_AUXPOW);
+    QVERIFY(!FinalizeAndExtractPSBT(signed_psbt, extracted, current_rules.flags));
+
+    // Broadcast is a separate action and must select the current rules again.
+    dialog.broadcastTransaction();
+    QVERIFY(dialog.findChild<QLabel*>("statusBar")->text().contains("Unknown error processing transaction"));
+
+    {
+        LOCK(cs_main);
+        test.m_node.chainman->ActiveChainstate().ResetBlockFailureFlags(boundary);
+        test.m_node.chainman->RecalculateBestHeader();
+    }
+    BlockValidationState state;
+    QVERIFY(test.m_node.chainman->ActiveChainstate().ActivateBestChain(state));
+    QCOMPARE(node.getNumBlocks(), 2);
+    QCOMPARE(gui.clientModel->getNumBlocks(), 1);
+    PSBTOperationsDialog without_wallet(nullptr, nullptr, gui.clientModel.get());
+    without_wallet.openWithPSBT(signed_psbt);
+    QVERIFY(without_wallet.findChild<QPushButton*>("broadcastTransactionButton")->isEnabled());
+    QVERIFY(without_wallet.findChild<QLabel*>("statusBar")->text().contains("ready for broadcast"));
+}
+
 } // namespace
 
 void WalletTests::walletTests()
@@ -885,4 +987,5 @@ void WalletTests::walletTests()
     }
 #endif
     TestGUI(m_node);
+    TestGUITransactionRules(m_node);
 }

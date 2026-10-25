@@ -55,18 +55,13 @@ using node::PSBTAnalysis;
 
 static constexpr decltype(CTransaction::version) DEFAULT_RAWTX_VERSION{CTransaction::CURRENT_VERSION};
 
-static unsigned int GetCurrentScriptVerifyFlags(const std::any& context)
+static common::TransactionRules GetTransactionRules(const std::any& context, const UniValue& value)
 {
-    unsigned int script_verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
+    const auto requested{ParseTransactionRules(value)};
     NodeContext& node = EnsureAnyNodeContext(context);
     ChainstateManager& chainman = EnsureChainman(node);
-    const int next_height{WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight() + 1)};
-    if (next_height >= chainman.GetConsensus().nAuxpowStartHeight) {
-        script_verify_flags |= SCRIPT_VERIFY_PQ_STRICT;
-        script_verify_flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-        script_verify_flags |= SCRIPT_VERIFY_SHA512;
-    }
-    return script_verify_flags;
+    const int tip_height{WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight())};
+    return {common::LocalScriptRuleEra(tip_height, chainman.GetConsensus().nAuxpowStartHeight), requested};
 }
 
 static void TxToJSON(const CTransaction& tx, const uint256 hashBlock, UniValue& entry,
@@ -643,6 +638,7 @@ static RPCHelpMan combinerawtransaction()
                             {"hexstring", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "A hex-encoded raw transaction"},
                         },
                         },
+                    TransactionRulesArg(/*string_result=*/true),
                 },
                 RPCResult{
                     RPCResult::Type::STR, "", "The hex-encoded raw transaction with signature(s)"
@@ -652,6 +648,7 @@ static RPCHelpMan combinerawtransaction()
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
+    const auto rules{GetTransactionRules(request.context, request.params[1])};
 
     UniValue txs = request.params[0].get_array();
     std::vector<CMutableTransaction> txVariants(txs.size());
@@ -689,7 +686,7 @@ static RPCHelpMan combinerawtransaction()
         view.SetBackend(viewDummy); // switch back to avoid locking mempool for too long
     }
 
-    const unsigned int script_verify_flags = GetCurrentScriptVerifyFlags(request.context);
+    const unsigned int script_verify_flags{rules.flags};
     const bool allow_legacy = !(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT);
 
     // Each variant must be checked against its own transaction and inputs.
@@ -771,10 +768,13 @@ static RPCHelpMan signrawtransactionwithkey()
             "       \"NONE|ANYONECANPAY\"\n"
             "       \"SINGLE|ANYONECANPAY\"\n"
                     },
+                    TransactionRulesArg(),
                 },
                 RPCResult{
                     RPCResult::Type::OBJ, "", "",
                     {
+                    TransactionRulesResult(),
+                    TransactionRulesWarningsResult(),
                         {RPCResult::Type::STR_HEX, "hex", "The hex-encoded raw transaction with signature(s)"},
                         {RPCResult::Type::BOOL, "complete", "If the transaction has a complete set of signatures"},
                         {RPCResult::Type::ARR, "errors", /*optional=*/true, "Script verification errors (if there are any)",
@@ -800,6 +800,7 @@ static RPCHelpMan signrawtransactionwithkey()
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
+    const auto rules{GetTransactionRules(request.context, request.params[4])};
     CMutableTransaction mtx;
     if (!DecodeHexTx(mtx, request.params[0].get_str())) {
         throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "TX decode failed. Make sure the tx has at least one input.");
@@ -832,7 +833,8 @@ static RPCHelpMan signrawtransactionwithkey()
     const auto missing_amounts = ParsePrevouts(request.params[2], &keystore, coins);
 
     UniValue result(UniValue::VOBJ);
-    SignTransaction(mtx, &keystore, coins, request.params[3], result, GetCurrentScriptVerifyFlags(request.context), &missing_amounts);
+    SignTransaction(mtx, &keystore, coins, request.params[3], result, rules.flags, &missing_amounts);
+    AddTransactionRulesToResult(result, rules);
     return result;
 },
     };
@@ -1004,7 +1006,7 @@ static RPCHelpMan decodepsbt()
                         }},
                         decodepsbt_inputs,
                         decodepsbt_outputs,
-                        {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "The transaction fee paid if all UTXOs slots in the PSBT have been filled."},
+                        {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "Fee calculated from supplied UTXO records, without verifying input amounts or transaction validity. Shown if all UTXO slots have been filled."},
                     }
                 },
                 RPCExamples{
@@ -1350,10 +1352,13 @@ static RPCHelpMan finalizepsbt()
                     {"psbt", RPCArg::Type::STR, RPCArg::Optional::NO, "A base64 string of a PSBT"},
                     {"extract", RPCArg::Type::BOOL, RPCArg::Default{true}, "If true and the transaction is complete,\n"
             "                             extract and return the complete transaction in normal network serialization instead of the PSBT."},
+                    TransactionRulesArg(),
                 },
                 RPCResult{
                     RPCResult::Type::OBJ, "", "",
                     {
+                    TransactionRulesResult(),
+                    TransactionRulesWarningsResult(),
                         {RPCResult::Type::STR, "psbt", /*optional=*/true, "The base64-encoded partially signed transaction if not extracted"},
                         {RPCResult::Type::STR_HEX, "hex", /*optional=*/true, "The hex-encoded network transaction if extracted"},
                         {RPCResult::Type::BOOL, "complete", "If the transaction has a complete set of signatures"},
@@ -1364,6 +1369,7 @@ static RPCHelpMan finalizepsbt()
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
+    const auto rules{GetTransactionRules(request.context, request.params[2])};
     // Unserialize the transactions
     PartiallySignedTransaction psbtx;
     std::string error;
@@ -1373,7 +1379,7 @@ static RPCHelpMan finalizepsbt()
 
     bool extract = request.params[1].isNull() || (!request.params[1].isNull() && request.params[1].get_bool());
 
-    const unsigned int script_verify_flags = GetCurrentScriptVerifyFlags(request.context);
+    const unsigned int script_verify_flags{rules.flags};
 
     CMutableTransaction mtx;
     bool complete = FinalizeAndExtractPSBT(psbtx, mtx, script_verify_flags);
@@ -1393,6 +1399,7 @@ static RPCHelpMan finalizepsbt()
     }
     result.pushKV("complete", complete);
 
+    AddTransactionRulesToResult(result, rules);
     return result;
 },
     };
@@ -1524,6 +1531,7 @@ static RPCHelpMan utxoupdatepsbt()
                          {"range", RPCArg::Type::RANGE, RPCArg::Default{1000}, "Up to what index HD chains should be explored (either end or [begin,end])"},
                     }},
                 }},
+                TransactionRulesArg(/*string_result=*/true),
             },
             RPCResult {
                     RPCResult::Type::STR, "", "The base64-encoded partially signed transaction with inputs updated"
@@ -1533,6 +1541,7 @@ static RPCHelpMan utxoupdatepsbt()
             },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
+    const auto rules{GetTransactionRules(request.context, request.params[2])};
     // Parse descriptors, if any.
     FlatSigningProvider provider;
     RPCDescriptorResolver resolver{request};
@@ -1552,7 +1561,7 @@ static RPCHelpMan utxoupdatepsbt()
         HidingSigningProvider(&provider, /*hide_secret=*/true),
         /*sighash_type=*/std::nullopt,
         /*finalize=*/false,
-        GetCurrentScriptVerifyFlags(request.context), PSBTInputIntent::INSPECT);
+        rules.flags, PSBTInputIntent::INSPECT);
 
     DataStream ssTx{};
     ssTx << psbtx;
@@ -1662,11 +1671,14 @@ static RPCHelpMan analyzepsbt()
         "analyzepsbt",
         "Analyzes and provides information about the current status of a PSBT and its inputs\n",
             {
-                {"psbt", RPCArg::Type::STR, RPCArg::Optional::NO, "A base64 string of a PSBT"}
+                {"psbt", RPCArg::Type::STR, RPCArg::Optional::NO, "A base64 string of a PSBT"},
+                TransactionRulesArg(),
             },
             RPCResult {
                 RPCResult::Type::OBJ, "", "",
                 {
+                    TransactionRulesResult(),
+                    TransactionRulesWarningsResult(),
                     {RPCResult::Type::ARR, "inputs", /*optional=*/true, "",
                     {
                         {RPCResult::Type::OBJ, "", "",
@@ -1692,8 +1704,8 @@ static RPCHelpMan analyzepsbt()
                         }},
                     }},
                     {RPCResult::Type::NUM, "estimated_vsize", /*optional=*/true, "Estimated vsize of the final signed transaction"},
-                    {RPCResult::Type::STR_AMOUNT, "estimated_feerate", /*optional=*/true, "Estimated feerate of the final signed transaction in " + CURRENCY_UNIT + "/kvB. Shown only if all UTXO slots in the PSBT have been filled"},
-                    {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "The transaction fee paid. Shown only if all UTXO slots in the PSBT have been filled"},
+                    {RPCResult::Type::STR_AMOUNT, "estimated_feerate", /*optional=*/true, "Estimated feerate of the final signed transaction in " + CURRENCY_UNIT + "/kvB. Requires sufficient previous-output data and size estimation"},
+                    {RPCResult::Type::STR_AMOUNT, "fee", /*optional=*/true, "Fee calculated from supplied previous-output data. Requires the full previous transaction for legacy inputs; witness amounts are not independently checked against the chain"},
                     {RPCResult::Type::STR, "next", "Role of the next person that this psbt needs to go to"},
                     {RPCResult::Type::STR, "error", /*optional=*/true, "Error message (if there is one)"},
                 }
@@ -1703,6 +1715,7 @@ static RPCHelpMan analyzepsbt()
             },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
+    const auto rules{GetTransactionRules(request.context, request.params[1])};
     // Unserialize the transaction
     PartiallySignedTransaction psbtx;
     std::string error;
@@ -1710,7 +1723,7 @@ static RPCHelpMan analyzepsbt()
         throw JSONRPCError(RPC_DESERIALIZATION_ERROR, strprintf("TX decode failed %s", error));
     }
 
-    const unsigned int script_verify_flags = GetCurrentScriptVerifyFlags(request.context);
+    const unsigned int script_verify_flags{rules.flags};
     PSBTAnalysis psbta = AnalyzePSBT(psbtx, script_verify_flags);
 
     UniValue result(UniValue::VOBJ);
@@ -1770,6 +1783,7 @@ static RPCHelpMan analyzepsbt()
         result.pushKV("error", psbta.error);
     }
 
+    AddTransactionRulesToResult(result, rules);
     return result;
 },
     };
@@ -1801,10 +1815,13 @@ RPCHelpMan descriptorprocesspsbt()
             "       \"NONE|ANYONECANPAY\"\n"
             "       \"SINGLE|ANYONECANPAY\""},
                     {"finalize", RPCArg::Type::BOOL, RPCArg::Default{true}, "Also finalize inputs if possible"},
+                    TransactionRulesArg(),
                 },
                 RPCResult{
                     RPCResult::Type::OBJ, "", "",
                     {
+                    TransactionRulesResult(),
+                    TransactionRulesWarningsResult(),
                         {RPCResult::Type::STR, "psbt", "The base64-encoded partially signed transaction"},
                         {RPCResult::Type::BOOL, "complete", "If the transaction has a complete set of signatures"},
                         {RPCResult::Type::STR_HEX, "hex", /*optional=*/true, "The hex-encoded network transaction if complete"},
@@ -1816,6 +1833,7 @@ RPCHelpMan descriptorprocesspsbt()
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
+    const auto rules{GetTransactionRules(request.context, request.params[4])};
     // Add descriptor information to a signing provider
     FlatSigningProvider provider;
     RPCDescriptorResolver resolver{request};
@@ -1836,11 +1854,11 @@ RPCHelpMan descriptorprocesspsbt()
         HidingSigningProvider(&provider, /*hide_secret=*/false),
         sighash_type,
         finalize,
-        GetCurrentScriptVerifyFlags(request.context), PSBTInputIntent::SIGN);
+        rules.flags, PSBTInputIntent::SIGN);
 
     // Presence of final fields is not proof that their scripts/signatures verify.
     const auto txdata = PrecomputePSBTData(psbtx);
-    const unsigned int script_verify_flags = GetCurrentScriptVerifyFlags(request.context);
+    const unsigned int script_verify_flags{rules.flags};
     bool complete = true;
     for (size_t i = 0; i < psbtx.inputs.size(); ++i) {
         complete &= PSBTInputSignedAndVerified(psbtx, i, &txdata, script_verify_flags);
@@ -1861,6 +1879,7 @@ RPCHelpMan descriptorprocesspsbt()
         ssTx_final << TX_WITH_WITNESS(mtx);
         result.pushKV("hex", HexStr(ssTx_final));
     }
+    AddTransactionRulesToResult(result, rules);
     return result;
 },
     };

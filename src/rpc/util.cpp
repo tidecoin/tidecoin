@@ -45,6 +45,50 @@ using util::SplitString;
 using util::TrimString;
 
 const std::string UNIX_EPOCH_TIME = "UNIX epoch time";
+
+std::optional<common::ScriptRuleEra> ParseTransactionRules(const UniValue& value)
+{
+    if (value.isNull()) return std::nullopt;
+    const auto era{common::ParseScriptRuleEra(value.get_str())};
+    if (!era) throw JSONRPCError(RPC_INVALID_PARAMETER, "rules must be pre-auxpow or post-auxpow");
+    return era;
+}
+
+void AddTransactionRulesToResult(UniValue& result, const common::TransactionRules& rules)
+{
+    const std::string effective{common::ScriptRuleEraName(rules.effective)};
+    result.pushKV("rules", effective);
+    if (rules.explicit_selection && rules.effective != rules.local) {
+        UniValue warnings{result.exists("warnings") ? result["warnings"] : UniValue{UniValue::VARR}};
+        warnings.push_back(strprintf("Explicit %s script rules differ from the local next-block rules (%s). Completion is evaluated using %s; acceptance must be checked on the destination node.",
+                                    effective, common::ScriptRuleEraName(rules.local), effective));
+        result.pushKV("warnings", std::move(warnings));
+    }
+}
+
+RPCArg TransactionRulesArg(bool string_result)
+{
+    return {"rules", RPCArg::Type::STR, RPCArg::Optional::OMITTED,
+            "Script rules: pre-auxpow or post-auxpow. Omitted or null uses the local next-block rules. "
+            "An explicit choice overrides the local era for this request only; it does not change network activation or address issuance. "
+            "Completion checks scripts with the supplied input data, not destination-chain availability, finality, maturity, fees or admission. "
+            "Unlike these RPCs, tidecoin-tx requires an explicit -rules choice for signing and verification. " +
+            std::string{string_result
+                ? "The result remains a string, without rule metadata or mismatch warnings; use analyzepsbt with the same rules for annotated analysis."
+                : "The result reports the effective rules and warns if an explicit choice differs from the local next-block rules."}};
+}
+
+RPCResult TransactionRulesResult()
+{
+    return {RPCResult::Type::STR, "rules", "Script rules used for this request: pre-auxpow or post-auxpow"};
+}
+
+RPCResult TransactionRulesWarningsResult()
+{
+    return {RPCResult::Type::ARR, "warnings", /*optional=*/true, "Notices, including an explicit rule choice that differs from the local next-block rules", {
+        {RPCResult::Type::STR, "", "Notice"},
+    }};
+}
 const std::string EXAMPLE_ADDRESS[2] = {"bc1q09vm5lfy0j5reeulh4x5752q25uqqvz34hufdl", "bc1q02ad21edsxd23d32dfgqqsz4vv4nmtfzuklhy3"};
 
 std::string GetAllOutputTypes()

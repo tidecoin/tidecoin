@@ -7,10 +7,12 @@
 #include <script/script.h>
 #include <addresstype.h>
 #include <consensus/consensus.h>
+#include <policy/policy.h>
 #include <pq/pq_scheme.h>
 #include <pq/pqhd_params.h>
 #include <key.h>
 #include <key_io.h>
+#include <script/sign.h>
 #include <test/util/setup_common.h>
 #include <tinyformat.h>
 #include <util/strencodings.h>
@@ -312,6 +314,76 @@ BOOST_AUTO_TEST_CASE(wsh512_inference_checks_full_commitment)
     BOOST_REQUIRE(parsed[0]->Expand(0, parsed_provider, scripts, expanded));
     BOOST_REQUIRE_EQUAL(scripts.size(), 1U);
     BOOST_CHECK(scripts[0] == output);
+}
+
+BOOST_AUTO_TEST_CASE(p2sh_satisfaction_weight)
+{
+    constexpr unsigned flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT};
+    const auto check = [&](const std::string& inner, bool fixed_signature_size) {
+        FlatSigningProvider provider;
+        std::string error;
+        auto bare = Parse(inner, provider, error);
+        BOOST_REQUIRE_MESSAGE(bare.size() == 1, error);
+        auto wrapped = Parse("sh(" + inner + ")", provider, error);
+        BOOST_REQUIRE_MESSAGE(wrapped.size() == 1, error);
+        std::vector<CScript> redeem, output;
+        FlatSigningProvider expanded;
+        BOOST_REQUIRE(bare[0]->Expand(0, provider, redeem, expanded));
+        BOOST_REQUIRE(wrapped[0]->Expand(0, provider, output, expanded));
+        provider.Merge(std::move(expanded));
+
+        // Compare the estimate with the actual push serialization, independently
+        // of signature length, for both local and external signing bounds.
+        const CScript push{CScript{} << ToByteVector(redeem[0])};
+        for (bool use_max_sig : {false, true}) {
+            const auto bare_weight = bare[0]->MaxSatisfactionWeight(use_max_sig);
+            const auto wrapped_weight = wrapped[0]->MaxSatisfactionWeight(use_max_sig);
+            BOOST_REQUIRE(bare_weight && wrapped_weight);
+            BOOST_CHECK_EQUAL(*wrapped_weight - *bare_weight, push.size() * WITNESS_SCALE_FACTOR);
+        }
+
+        CMutableTransaction tx;
+        tx.vin.emplace_back(Txid::FromUint256(uint256::ONE), 0);
+        tx.vout.emplace_back(COIN, CScript{} << OP_TRUE);
+        const CAmount amount{2 * COIN};
+        const MutableTransactionSignatureCreator creator(tx, 0, amount, SIGHASH_ALL, /*allow_legacy=*/false);
+        SignatureData sigdata;
+        BOOST_REQUIRE(ProduceSignature(provider, creator, output[0], sigdata, flags));
+        UpdateInput(tx.vin[0], sigdata);
+        BOOST_REQUIRE(VerifyScript(tx.vin[0].scriptSig, output[0], &tx.vin[0].scriptWitness, flags, creator.Checker()));
+        const auto& input = tx.vin[0];
+        int64_t actual = input.scriptSig.size() * WITNESS_SCALE_FACTOR;
+        if (!input.scriptWitness.IsNull()) {
+            // Satisfaction weight excludes the count of witness stack items.
+            actual += GetSerializeSize(input.scriptWitness.stack) - GetSizeOfCompactSize(input.scriptWitness.stack.size());
+        }
+        for (bool use_max_sig : {false, true}) {
+            const auto estimate = wrapped[0]->MaxSatisfactionWeight(use_max_sig);
+            BOOST_REQUIRE(estimate);
+            BOOST_CHECK_GE(*estimate, actual);
+            if (fixed_signature_size) BOOST_CHECK_EQUAL(*estimate, actual);
+        }
+    };
+
+    std::vector<std::string> keys;
+    for (const auto* scheme : pq::kKnownSchemes) {
+        CKey key = GenerateRandomKey(scheme->id);
+        keys.push_back(EncodeSecret(key));
+        const std::string& secret = keys.back();
+        const bool fixed{scheme->id != pq::SchemeId::FALCON_512 && scheme->id != pq::SchemeId::FALCON_1024};
+        BOOST_TEST_CONTEXT(scheme->name) {
+            // PQ pk/multi redeem scripts exceed 255 bytes. The shorter pkh
+            // script and wrapped-v0 programs still use a one-byte push header.
+            check("pk(" + secret + ")", fixed);
+            check("multi(1," + secret + ")", fixed);
+            check("pkh(" + secret + ")", fixed);
+            check("wpkh(" + secret + ")", fixed);
+            check("wsh(pk(" + secret + "))", fixed);
+        }
+    }
+    // Both fixed-size mixed schemes and a variable-length Falcon participant.
+    check("multi(2," + keys[2] + "," + keys[3] + ")", true);
+    check("multi(2," + keys[0] + "," + keys[2] + ")", false);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -8,6 +8,7 @@
 #include <clientversion.h>
 #include <coins.h>
 #include <common/args.h>
+#include <common/transaction_rules.h>
 #include <common/system.h>
 #include <compat/compat.h>
 #include <consensus/amount.h>
@@ -628,17 +629,11 @@ static std::set<COutPoint> AddPrevTxsToView(CCoinsViewCache& view, const UniValu
 
 static unsigned int GetScriptVerifyFlags()
 {
-    const std::string rules{gArgs.GetArg("-rules", "")};
-    if (rules != "pre-auxpow" && rules != "post-auxpow") {
+    const auto era{common::ParseScriptRuleEra(gArgs.GetArg("-rules", ""))};
+    if (!era) {
         throw std::runtime_error("Specify -rules=pre-auxpow or -rules=post-auxpow for signing and verification");
     }
-    unsigned int script_verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
-    if (rules == "post-auxpow") {
-        script_verify_flags |= SCRIPT_VERIFY_PQ_STRICT;
-        script_verify_flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-        script_verify_flags |= SCRIPT_VERIFY_SHA512;
-    }
-    return script_verify_flags;
+    return common::ScriptFlagsForEra(*era);
 }
 
 // Match the script forms accepted by signrawtransactionwithkey. Missing scripts

@@ -106,6 +106,7 @@ add_library(tidecoin_common STATIC EXCLUDE_FROM_ALL
   common/settings.cpp
   common/signmessage.cpp
   common/system.cpp
+  common/transaction_rules.cpp
   common/url.cpp
   compressor.cpp
   core_read.cpp

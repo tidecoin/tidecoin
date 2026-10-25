@@ -110,14 +110,35 @@ selection.
 
 ## Signing responses and completion
 
+`walletprocesspsbt` accepts `rules=pre-auxpow` or `rules=post-auxpow` for host
+processing. Omission uses the host's local next-block rules. The host retains one
+selection through preflight, enrolled-key checks, cached signatures, device-result
+verification and extraction, even if its chain changes during the device call.
+An enrolled partial that cannot verify under those rules is removed before the
+request so a valid device replacement can merge. An invalid returned partial or
+final cannot establish completion, regardless of the device's `complete` field.
+
+This option is not a device protocol extension. The subprocess still receives
+`signtx <base64 PSBT>`, without an era argument or a proprietary PSBT rule field.
+Device signing capabilities must be checked separately; the host selection does
+not make a device support an additional scheme or era. Object results report the
+host's effective `rules` and warn about an explicit mismatch with its local chain.
+Completion does not establish destination-chain admission. See
+[rule selection](psbt.md#selecting-script-rules).
+
 Before any device signing request, the wallet checks all enrolled signing
 targets. An unfinished legacy input, including a legacy P2SH input, requires
 the full previous transaction (`non_witness_utxo`). Its transaction ID, output
 index and any separate output summary must agree. Native witness inputs and
 P2SH-wrapped v0 inputs may use an output summary under their applicable rules. Missing legacy
 transaction data is reported with a request to supply `non_witness_utxo` before
-any signing device is contacted; unchanged
-verified finals and unrelated inputs do not acquire a new signing requirement.
+any signing device is contacted. Existing legacy finals also require the full
+previous transaction to count as verified, including when merging an unchanged
+device response; final fields alone do not establish the previous amount or script.
+The wallet fills the full record from known transactions when available.
+Verified existing finals retain their modes, and unrelated partial signatures
+do not acquire a new signing requirement. Finalized wrapped-v0 inputs can still
+use output summaries: their redeem program is read from the final scriptSig.
 This check does not independently establish every other input amount used in a
 displayed fee.
 

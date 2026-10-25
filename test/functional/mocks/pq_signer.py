@@ -4,6 +4,7 @@
 """PQ-only process fixture. Holds public descriptors and prepared PSBT replies, never seeds."""
 import argparse
 import json
+import socket
 import sys
 from pathlib import Path
 
@@ -32,6 +33,13 @@ elif command == 'getdescriptors':
 elif command == 'displayaddress':
     result = {'address': state.get('display_override', state['addresses'].get(args.desc, 'unknown'))}
 elif command == 'signtx':
+    # The test driver can change the chain while this request is in flight.
+    # Synchronize explicitly rather than relying on signing speed or sleeps.
+    if 'pause_port' in state:
+        with socket.create_connection(('127.0.0.1', state['pause_port']), timeout=30) as connection:
+            connection.sendall(b'R')
+            assert connection.recv(1) == b'C'
+        state = json.loads(Path(args.state).read_text())
     result = state.get('response', {'psbt': psbt, 'complete': True})
 else:
     result = {'error': 'Unknown command'}

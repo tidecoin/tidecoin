@@ -59,6 +59,30 @@ transaction is eligible for mining. Without `-verify`, signing may still return
 a partially signed transaction. These utility changes require no reindex or
 chain restart.
 
+Transaction-processing rule selection
+-------------------------------------
+
+`walletprocesspsbt`, `descriptorprocesspsbt`, `finalizepsbt`, `analyzepsbt`,
+`signrawtransactionwithkey`, `signrawtransactionwithwallet`, `utxoupdatepsbt` and
+`combinerawtransaction` accept an optional final `rules` argument: `pre-auxpow` or
+`post-auxpow`. Existing calls and JSON `null` use the local next-block rules. An
+explicit choice supports offline processing for the destination era and applies
+to cached signatures, new signing, verification and extraction throughout the
+request. The six object results include `rules` and, for explicit local-era
+mismatches, `warnings`. The two string results retain their format.
+
+These arguments do not change consensus, activation, address issuance, ordinary
+sending, or admission. Completion checks scripts with the required input data;
+it does not promise destination acceptance. No PSBT format or external-device
+protocol change is introduced. `tidecoin-tx` continues to require its explicit
+`-rules` setting. See [PSBT processing](psbt.md#selecting-script-rules) and the
+[offline-signing tutorial](offline-signing-tutorial.md).
+
+External-signer fee bumps and GUI signing retain one local rule selection
+through processing and extraction if the chain crosses activation while the
+operation is running. GUI PSBT analysis uses the same selection as signing;
+a later Broadcast action checks the current rules again.
+
 Regtest activation setting
 --------------------------
 
@@ -145,6 +169,13 @@ the BIP-32 HD wallet for post-quantum key derivation:
   of different types are not linkable through a shared key
 - **Separate test-network keys** — testnet and regtest use coin type 1; mainnet
   uses 6868
+
+`setpqhdpolicy` and `setpqhdseed` reapply policy defaults to both receive and
+change descriptor bindings, including when the selected values are unchanged.
+This can replace imported active descriptors as the source of new addresses;
+older descriptors and their funds remain tracked. An encrypted wallet must be
+unlocked when missing policy descriptors need to be created. The RPC help and
+PQHD RPC documentation describe these effects.
 
 Wallet encryption saves the encrypted existing keys and seeds before setting up
 a new seed and descriptors. If that setup fails, its changes are rolled back and
@@ -400,6 +431,11 @@ Wallet and GUI
 - Legacy BDB wallets require migration to descriptor wallets using `migratewallet`.
   See [wallet migration instructions](managing-wallets.md).
 - The wallet supports TRUC transactions.
+- Fee estimates include the full redeem-script push header for P2SH inputs,
+  including larger PQ single-key and multisignature scripts.
+- `sendall` rejects the unsupported `solving_data` option, including when nested
+  inside `options`, instead of silently ignoring it. `send`, `fundrawtransaction`
+  and `walletcreatefundedpsbt` continue to support externally supplied solving data.
 - `bumpfee` and `psbtbumpfee` estimate signatures on inputs from outside the
   wallet at the maximum size for their signature scheme. They previously assumed
   72-byte ECDSA signatures, so a replacement spending such inputs could pay
@@ -522,8 +558,16 @@ are refused before contacting the signing device, with an explicit request to
 supply `non_witness_utxo`. GUI per-input errors show mode details only for
 signing-mode refusals. Native witness inputs and P2SH-wrapped v0
 inputs retain their existing data requirements, and unchanged verified finals
-remain usable. Newly returned legacy partial signatures and finals enforce the
-same previous-transaction requirement. This does not independently authenticate
+remain usable with sufficient previous-output data. Existing legacy finals also
+require the matching full previous transaction; an output summary alone is not
+enough to report completion or extract the transaction. Wallet processing fills
+that record from known transactions when available. PSBT analysis omits fee and
+size estimates when required previous-transaction data is missing. Finalized
+wrapped-v0 inputs remain usable with output summaries, using the redeem program
+in the final scriptSig. `decodepsbt` remains a diagnostic dump whose fee is
+calculated from supplied records without verifying them.
+Newly returned legacy partial signatures and finals enforce the
+same previous-transaction requirement. This does not independently establish
 every other input amount used in a displayed fee.
 
 PSBT analysis retains missing public-key and script details alongside signing-mode

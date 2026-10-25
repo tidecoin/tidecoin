@@ -91,9 +91,11 @@ private:
      * @param[in,out] mtx needed to attempt to finalize
      * @param[in,out] complete whether the PSBT is complete (a successfully signed multisig transaction may not be complete)
      *
+     * @param[in] script_verify_flags rules selected before filling the PSBT
+     *
      * @returns false if any failure occurred, which may include the user rejection of a transaction on the device.
      */
-    bool signWithExternalSigner(PartiallySignedTransaction& psbt, CMutableTransaction& mtx, bool& complete);
+    bool signWithExternalSigner(PartiallySignedTransaction& psbt, CMutableTransaction& mtx, bool& complete, unsigned int script_verify_flags);
     void updateFeeMinimizedLabel();
     void updateCoinControlState();
     void updateChangeSchemeOverride();

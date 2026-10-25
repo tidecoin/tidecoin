@@ -395,15 +395,20 @@ public:
         }
         return {};
     }
+    common::TransactionRules getTransactionRules() override
+    {
+        return m_wallet->GetTransactionRules();
+    }
     std::optional<PSBTError> fillPSBT(std::optional<int> sighash_type,
         bool sign,
         size_t* n_signed,
         PartiallySignedTransaction& psbtx,
         bool& complete,
-        bool include_pqhd_origins, std::vector<common::PSBTInputError>* input_errors) override
+        bool include_pqhd_origins, std::vector<common::PSBTInputError>* input_errors,
+        std::optional<unsigned int> script_verify_flags) override
     {
         return m_wallet->FillPSBT(psbtx, complete, sighash_type, sign, n_signed,
-                                  /*finalize=*/true, include_pqhd_origins, input_errors);
+                                  /*finalize=*/true, include_pqhd_origins, input_errors, script_verify_flags);
     }
     WalletBalances getBalances() override
     {

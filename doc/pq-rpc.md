@@ -108,6 +108,20 @@ Accepted scheme inputs:
 
 Returns selected scheme ids and names.
 
+At least one scheme must be supplied. An omitted scheme keeps its current value,
+but the command reapplies policy defaults to **both receive and change descriptor
+bindings**, even when the supplied scheme is already selected. This can replace
+custom active bindings, including imported descriptors, as the source of new
+addresses. Previously registered descriptors remain in the wallet, and their
+funds remain tracked and spendable with the existing keys. No coins are moved.
+To use a custom descriptor for new addresses again, reactivate it with
+`importdescriptors` after setting the policy.
+
+The command can succeed while locked if all required policy descriptors already
+exist. Creating missing descriptors requires unlocking an encrypted wallet;
+otherwise the call fails with `RPC_WALLET_UNLOCK_NEEDED` (`-13`). A failed update
+leaves the previous policy and active bindings in place.
+
 ### `listpqhdseeds`
 
 List PQHD seeds known to the wallet.
@@ -178,6 +192,19 @@ tidecoin-cli -rpcwallet="<wallet>" setpqhdseed "<receive_seed_id>" "<change_seed
 ```
 
 If `change_seed_id` is omitted, receive seed id is used for both.
+
+The command reapplies policy defaults to **both receive and change descriptor
+bindings**, even when the supplied seed ids are already selected. This can
+replace custom active bindings, including imported descriptors, as the source of
+new addresses. Older seeds and descriptors remain in the wallet, and their funds
+remain tracked and spendable with the existing keys. No coins are moved. To use
+a custom descriptor for new addresses again, reactivate it with
+`importdescriptors` after selecting the policy seeds.
+
+The command can succeed while locked if all required policy descriptors already
+exist. Creating missing descriptors requires unlocking an encrypted wallet;
+otherwise the call fails with `RPC_WALLET_UNLOCK_NEEDED` (`-13`). A failed update
+leaves the previous policy and active bindings in place.
 
 ### `removepqhdseed`
 

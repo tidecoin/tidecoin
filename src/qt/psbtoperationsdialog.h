@@ -45,11 +45,12 @@ private:
         ERR
     };
 
-    size_t couldSignInputs(const PartiallySignedTransaction &psbtx);
-    void updateTransactionDisplay();
-    QString renderTransaction(const PartiallySignedTransaction &psbtx);
+    common::TransactionRules getTransactionRules() const;
+    size_t couldSignInputs(const PartiallySignedTransaction &psbtx, unsigned int flags);
+    void updateTransactionDisplay(unsigned int flags);
+    QString renderTransaction(const PartiallySignedTransaction &psbtx, unsigned int flags);
     void showStatus(const QString &msg, StatusLevel level);
-    void showTransactionStatus(const PartiallySignedTransaction &psbtx);
+    void showTransactionStatus(const PartiallySignedTransaction &psbtx, unsigned int flags);
 };
 
 #endif // BITCOIN_QT_PSBTOPERATIONSDIALOG_H

@@ -2689,6 +2689,11 @@ void MaybeResendWalletTxs(WalletContext& context)
 }
 
 
+common::TransactionRules CWallet::GetTransactionRules(std::optional<common::ScriptRuleEra> requested) const
+{
+    return {common::LocalScriptRuleEra(chain().getHeight(), Params().GetConsensus().nAuxpowStartHeight), requested};
+}
+
 bool CWallet::SignTransaction(CMutableTransaction& tx) const
 {
     AssertLockHeld(cs_wallet);
@@ -2708,16 +2713,9 @@ bool CWallet::SignTransaction(CMutableTransaction& tx) const
     return SignTransaction(tx, coins, SIGHASH_ALL, input_errors);
 }
 
-bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, const std::set<COutPoint>* missing_amounts) const
+bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, const std::set<COutPoint>* missing_amounts, std::optional<unsigned int> requested_flags) const
 {
-    const std::optional<int> tip_height = chain().getHeight();
-    const int next_height = tip_height ? *tip_height + 1 : 0;
-    unsigned int script_verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
-    if (next_height >= Params().GetConsensus().nAuxpowStartHeight) {
-        script_verify_flags |= SCRIPT_VERIFY_PQ_STRICT;
-        script_verify_flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-        script_verify_flags |= SCRIPT_VERIFY_SHA512;
-    }
+    const unsigned int script_verify_flags{requested_flags ? *requested_flags : GetTransactionRules().flags};
     // Try to sign with all ScriptPubKeyMans
     for (ScriptPubKeyMan* spk_man : GetAllScriptPubKeyMans()) {
         // spk_man->SignTransaction will return true if the transaction is complete,
@@ -2731,8 +2729,9 @@ bool CWallet::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint,
     return false;
 }
 
-std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, bool& complete, std::optional<int> sighash_type, bool sign, size_t * n_signed, bool finalize, bool include_pqhd_origins, std::vector<common::PSBTInputError>* input_errors) const
+std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, bool& complete, std::optional<int> sighash_type, bool sign, size_t * n_signed, bool finalize, bool include_pqhd_origins, std::vector<common::PSBTInputError>* input_errors, std::optional<unsigned int> requested_flags) const
 {
+    const unsigned int script_verify_flags{requested_flags ? *requested_flags : GetTransactionRules().flags};
     // Publish only a successful update; metadata/signing errors leave the caller intact.
     auto psbtx = psbt;
     complete = false;
@@ -2753,11 +2752,8 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, boo
         const CTxIn& txin = psbtx.tx->vin[i];
         PSBTInput& input = psbtx.inputs.at(i);
 
-        if (PSBTInputSigned(input)) {
-            continue;
-        }
-
-        // If we have no utxo, grab it from the wallet.
+        // Final fields and a supplied output summary must not prevent checking
+        // a known previous transaction, even if the summary claims to be witness.
         if (!input.non_witness_utxo) {
             const Txid& txhash = txin.prevout.hash;
             const auto it = mapWallet.find(txhash);
@@ -2774,15 +2770,6 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, boo
     }
 
     const PrecomputedTransactionData txdata = PrecomputePSBTData(psbtx);
-    const std::optional<int> tip_height = chain().getHeight();
-    const int next_height = tip_height ? *tip_height + 1 : 0;
-    unsigned int script_verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
-    if (next_height >= Params().GetConsensus().nAuxpowStartHeight) {
-        script_verify_flags |= SCRIPT_VERIFY_PQ_STRICT;
-        script_verify_flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-        script_verify_flags |= SCRIPT_VERIFY_SHA512;
-    }
-
     // Prepare all enrolled input/output solving data before any external device
     // sees the request. Manager iteration order must not omit change metadata.
     if (sign && IsWalletFlagSet(WALLET_FLAG_EXTERNAL_SIGNER)) {

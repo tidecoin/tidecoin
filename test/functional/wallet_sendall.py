@@ -5,8 +5,12 @@
 """Test the sendall RPC command."""
 
 from decimal import Decimal, getcontext
+from hashlib import sha512
 
+from test_framework.address import script_to_p2sh
+from test_framework.descriptors import descsum_create
 from test_framework.messages import SEQUENCE_FINAL
+from test_framework.script import CScript, OP_1, OP_CHECKSIG
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
@@ -14,6 +18,7 @@ from test_framework.util import (
     assert_greater_than_or_equal,
     assert_raises_rpc_error,
 )
+from test_framework.wallet_util import generate_keypair
 
 # Decorator to reset activewallet to zero utxos
 def cleanup(func):
@@ -78,6 +83,56 @@ class SendallTest(BitcoinTestFramework):
         assert_equal(0, self.wallet.getbalances()["mine"]["trusted"]) # wallet is empty
 
     # Actual tests
+    @cleanup
+    def sendall_rejects_solving_data(self):
+        self.log.info("Test sendall rejects solving_data in nested and named forms")
+        self.add_utxos([1])
+        _, pubkey = generate_keypair()
+        witness_script = CScript([pubkey, OP_CHECKSIG])
+        redeem_script = CScript([OP_1, sha512(witness_script).digest()])
+        wrapped_address = script_to_p2sh(redeem_script)
+        assert not self.wallet.getaddressinfo(wrapped_address)['solvable']
+
+        balance = self.wallet.getbalances()
+        unspent = self.wallet.listunspent()
+        transactions = self.wallet.getwalletinfo()['txcount']
+        mempool = self.nodes[0].getrawmempool()
+        values = [None, {}, [], 'unused',
+                  {'pubkeys': [pubkey.hex()]},
+                  {'scripts': [redeem_script.hex()]},
+                  {'descriptors': [descsum_create(f'wsh512(pk({pubkey.hex()}))')]}]
+        for recipient in (self.remainder_target, wrapped_address):
+            for solving_data in values:
+                options = {'solving_data': solving_data, 'add_to_wallet': False}
+                # Named options object and positional options object must both
+                # refuse the key, even when its value is null or empty.
+                assert_raises_rpc_error(-8, 'sendall does not support solving_data',
+                                        self.wallet.sendall, recipients=[recipient], options=options)
+                assert_raises_rpc_error(-8, 'sendall does not support solving_data',
+                                        self.wallet.sendall, [recipient], None, 'unset', None, options)
+                # Removing its help declaration also removes the top-level
+                # named argument. It must not be silently forwarded or ignored.
+                # The CLI test adapter omits named arguments with value None;
+                # explicit JSON null is covered by the direct RPC run.
+                if solving_data is not None or not self.options.usecli:
+                    assert_raises_rpc_error(-8, 'Unknown named parameter solving_data',
+                                            self.wallet.sendall, recipients=[recipient],
+                                            solving_data=solving_data, add_to_wallet=False)
+
+        assert_equal(self.wallet.getbalances(), balance)
+        assert_equal(self.wallet.listunspent(), unspent)
+        assert_equal(self.wallet.getwalletinfo()['txcount'], transactions)
+        assert_equal(self.wallet.listlockunspent(), [])
+        assert_equal(self.nodes[0].getrawmempool(), mempool)
+        assert 'solving_data' not in self.wallet.help('sendall')
+        for rpc in ('send', 'fundrawtransaction', 'walletcreatefundedpsbt'):
+            assert 'solving_data' in self.wallet.help(rpc)
+
+        # An ordinary request still produces a complete, relayable transaction.
+        result = self.wallet.sendall([self.remainder_target], options={'add_to_wallet': False})
+        assert result['complete']
+        assert self.nodes[0].testmempoolaccept([result['hex']])[0]['allowed']
+
     @cleanup
     def sendall_two_utxos(self):
         self.log.info("Testing basic sendall case without specific amounts")
@@ -491,6 +546,8 @@ class SendallTest(BitcoinTestFramework):
         self.recipient = self.def_wallet.getnewaddress() # payee for a specific amount
         self.remainder_target = self.def_wallet.getnewaddress() # address that receives everything left after payments and fees
         self.split_target = self.def_wallet.getnewaddress() # 2nd target when splitting rest
+
+        self.sendall_rejects_solving_data()
 
         # Test cleanup
         self.test_cleanup()

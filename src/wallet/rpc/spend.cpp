@@ -114,25 +114,19 @@ static UniValue FinishTransaction(const std::shared_ptr<CWallet> pwallet, const 
     PartiallySignedTransaction psbtx(rawTx);
     const bool include_pqhd_origins = options.isObject() && options.exists("include_pqhd_origins") ? options["include_pqhd_origins"].get_bool() : false;
 
+    const auto rules{pwallet->GetTransactionRules()};
+
     // First fill transaction with our data without signing,
     // so external signers are not asked to sign more than once.
     bool complete;
-    pwallet->FillPSBT(psbtx, complete, std::nullopt, /*sign=*/false, /*n_signed=*/nullptr, /*finalize=*/true, include_pqhd_origins);
-    const auto err{pwallet->FillPSBT(psbtx, complete, std::nullopt, /*sign=*/true, /*n_signed=*/nullptr, /*finalize=*/true, include_pqhd_origins)};
+    pwallet->FillPSBT(psbtx, complete, std::nullopt, /*sign=*/false, /*n_signed=*/nullptr, /*finalize=*/true, include_pqhd_origins, /*input_errors=*/nullptr, rules.flags);
+    const auto err{pwallet->FillPSBT(psbtx, complete, std::nullopt, /*sign=*/true, /*n_signed=*/nullptr, /*finalize=*/true, include_pqhd_origins, /*input_errors=*/nullptr, rules.flags)};
     if (err) {
         throw JSONRPCPSBTError(*err);
     }
 
     CMutableTransaction mtx;
-    unsigned int script_verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
-    const std::optional<int> tip_height = pwallet->chain().getHeight();
-    const int next_height = tip_height ? *tip_height + 1 : 0;
-    if (next_height >= Params().GetConsensus().nAuxpowStartHeight) {
-        script_verify_flags |= SCRIPT_VERIFY_PQ_STRICT;
-        script_verify_flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-        script_verify_flags |= SCRIPT_VERIFY_SHA512;
-    }
-    complete = FinalizeAndExtractPSBT(psbtx, mtx, script_verify_flags);
+    complete = FinalizeAndExtractPSBT(psbtx, mtx, rules.flags);
 
     UniValue result(UniValue::VOBJ);
 
@@ -962,10 +956,13 @@ RPCHelpMan signrawtransactionwithwallet()
             "       \"ALL|ANYONECANPAY\"\n"
             "       \"NONE|ANYONECANPAY\"\n"
             "       \"SINGLE|ANYONECANPAY\""},
+                    TransactionRulesArg(),
                 },
                 RPCResult{
                     RPCResult::Type::OBJ, "", "",
                     {
+                        TransactionRulesResult(),
+                        TransactionRulesWarningsResult(),
                         {RPCResult::Type::STR_HEX, "hex", "The hex-encoded raw transaction with signature(s)"},
                         {RPCResult::Type::BOOL, "complete", "If the transaction has a complete set of signatures"},
                         {RPCResult::Type::ARR, "errors", /*optional=*/true, "Script verification errors (if there are any)",
@@ -993,6 +990,7 @@ RPCHelpMan signrawtransactionwithwallet()
 {
     const std::shared_ptr<const CWallet> pwallet = GetWalletForJSONRPCRequest(request);
     if (!pwallet) return UniValue::VNULL;
+    const auto rules{pwallet->GetTransactionRules(ParseTransactionRules(request.params[3]))};
 
     CMutableTransaction mtx;
     if (!DecodeHexTx(mtx, request.params[0].get_str())) {
@@ -1021,9 +1019,10 @@ RPCHelpMan signrawtransactionwithwallet()
     // Script verification errors
     std::map<int, bilingual_str> input_errors;
 
-    bool complete = pwallet->SignTransaction(mtx, coins, *nHashType, input_errors, &missing_amounts);
+    bool complete = pwallet->SignTransaction(mtx, coins, *nHashType, input_errors, &missing_amounts, rules.flags);
     UniValue result(UniValue::VOBJ);
     SignTransactionResultToJSON(mtx, complete, coins, input_errors, result);
+    AddTransactionRulesToResult(result, rules);
     return result;
 },
     };
@@ -1439,7 +1438,7 @@ RPCHelpMan sendall()
                         {"maxconf", RPCArg::Type::NUM, RPCArg::Optional::OMITTED, "Require inputs with at most this many confirmations."},
                         {"version", RPCArg::Type::NUM, RPCArg::Default{DEFAULT_WALLET_TX_VERSION}, "Transaction version"},
                     },
-                    FundTxDoc()
+                    FundTxDoc(/*solving_data=*/false)
                 ),
                 RPCArgOptions{.oneline_description="options"}
             },
@@ -1477,6 +1476,11 @@ RPCHelpMan sendall()
             InterpretFeeEstimationInstructions(/*conf_target=*/request.params[1], /*estimate_mode=*/request.params[2], /*fee_rate=*/request.params[3], options);
             PreventOutdatedOptions(options);
 
+            // Named arguments are checked against the help schema, but keys
+            // inside the options object need an explicit check.
+            if (options.exists("solving_data")) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, "sendall does not support solving_data.");
+            }
 
             std::set<std::string> addresses_without_amount;
             UniValue recipient_key_value_pairs(UniValue::VARR);
@@ -1727,10 +1731,13 @@ RPCHelpMan walletprocesspsbt()
             "       \"SINGLE|ANYONECANPAY\""},
                     {"finalize", RPCArg::Type::BOOL, RPCArg::Default{true}, "Also finalize inputs if possible"},
                     {"include_pqhd_origins", RPCArg::Type::BOOL, RPCArg::Default{false}, "Include Tidecoin PQHD origin proprietary metadata in PSBT inputs/outputs"},
+                    TransactionRulesArg(),
                 },
                 RPCResult{
                     RPCResult::Type::OBJ, "", "",
                     {
+                        TransactionRulesResult(),
+                        TransactionRulesWarningsResult(),
                         {RPCResult::Type::STR, "psbt", "The base64-encoded partially signed transaction"},
                         {RPCResult::Type::BOOL, "complete", "If the transaction has a complete set of signatures"},
                         {RPCResult::Type::STR_HEX, "hex", /*optional=*/true, "The hex-encoded network transaction if complete"},
@@ -1748,6 +1755,7 @@ RPCHelpMan walletprocesspsbt()
     // Make sure the results are valid at least up to the most recent block
     // the user could have gotten from another RPC command prior to now
     wallet.BlockUntilSyncedToCurrentChain();
+    const auto rules{pwallet->GetTransactionRules(ParseTransactionRules(request.params[5]))};
 
     // Unserialize the transaction
     PartiallySignedTransaction psbtx;
@@ -1767,7 +1775,7 @@ RPCHelpMan walletprocesspsbt()
 
     if (sign) EnsureWalletIsUnlocked(*pwallet);
 
-    const auto err{wallet.FillPSBT(psbtx, complete, nHashType, sign, nullptr, finalize, include_pqhd_origins)};
+    const auto err{wallet.FillPSBT(psbtx, complete, nHashType, sign, nullptr, finalize, include_pqhd_origins, /*input_errors=*/nullptr, rules.flags)};
     if (err) {
         throw JSONRPCPSBTError(*err);
     }
@@ -1778,22 +1786,15 @@ RPCHelpMan walletprocesspsbt()
     result.pushKV("psbt", EncodeBase64(ssTx.str()));
     result.pushKV("complete", complete);
     if (complete) {
-        unsigned int script_verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
-        const std::optional<int> tip_height = wallet.chain().getHeight();
-        const int next_height = tip_height ? *tip_height + 1 : 0;
-        if (next_height >= Params().GetConsensus().nAuxpowStartHeight) {
-            script_verify_flags |= SCRIPT_VERIFY_PQ_STRICT;
-            script_verify_flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-            script_verify_flags |= SCRIPT_VERIFY_SHA512;
-        }
         CMutableTransaction mtx;
         // Returns true if complete, which we already think it is.
-        CHECK_NONFATAL(FinalizeAndExtractPSBT(psbtx, mtx, script_verify_flags));
+        CHECK_NONFATAL(FinalizeAndExtractPSBT(psbtx, mtx, rules.flags));
         DataStream ssTx_final;
         ssTx_final << TX_WITH_WITNESS(mtx);
         result.pushKV("hex", HexStr(ssTx_final));
     }
 
+    AddTransactionRulesToResult(result, rules);
     return result;
 },
     };

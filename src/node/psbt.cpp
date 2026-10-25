@@ -48,6 +48,9 @@ PSBTAnalysis AnalyzePSBT(PartiallySignedTransaction psbtx, unsigned int script_v
             }
             in_amt += utxo.nValue;
             input_analysis.has_utxo = true;
+            // Presence alone does not establish a legacy output's amount or
+            // script. Withhold fee information until its full transaction is supplied.
+            if (!PSBTInputHasSigningUTXO(psbtx, i, script_verify_flags)) calc_fee = false;
         } else {
             if (input.non_witness_utxo && psbtx.tx->vin[i].prevout.n >= input.non_witness_utxo->vout.size()) {
                 result.SetInvalid(strprintf("PSBT is not valid. Input %u specifies invalid prevout", i));

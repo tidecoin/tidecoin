@@ -7,6 +7,7 @@
 
 #include <addresstype.h>
 #include <common/signmessage.h>
+#include <common/transaction_rules.h>
 #include <consensus/amount.h>
 #include <interfaces/chain.h>
 #include <primitives/transaction_identifier.h>
@@ -216,13 +217,17 @@ public:
         bool& in_mempool,
         int& num_blocks) = 0;
 
-    //! Fill PSBT.
+    //! Select local transaction rules once for a processing operation.
+    virtual common::TransactionRules getTransactionRules() = 0;
+
+    //! Fill PSBT, optionally retaining rules selected by the caller.
     virtual std::optional<common::PSBTError> fillPSBT(std::optional<int> sighash_type,
         bool sign,
         size_t* n_signed,
         PartiallySignedTransaction& psbtx,
         bool& complete,
-        bool include_pqhd_origins = false, std::vector<common::PSBTInputError>* input_errors = nullptr) = 0;
+        bool include_pqhd_origins = false, std::vector<common::PSBTInputError>* input_errors = nullptr,
+        std::optional<unsigned int> script_verify_flags = std::nullopt) = 0;
 
     //! Get balances.
     virtual WalletBalances getBalances() = 0;

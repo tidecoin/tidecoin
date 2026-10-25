@@ -896,9 +896,11 @@ PrecomputedTransactionData PrecomputePSBTData(const PartiallySignedTransaction& 
 /** Checks whether a PSBTInput is already signed by checking for non-null finalized fields. */
 bool PSBTInputSigned(const PSBTInput& input);
 
-/** Check previous-output data for new signing: legacy requires a full previous
- * transaction; supported witness inputs may use an output summary. This does
- * not establish confirmation, unspentness, or other inputs' amounts. */
+/** Check previous-output data for signing or final verification: legacy requires
+ * a full previous transaction; supported witness inputs may use an output summary.
+ * For a finalized P2SH input, recover the redeem program from final_script_sig,
+ * not the redeem_script metadata removed by finalization. This does not verify
+ * signatures or establish confirmation, unspentness, or other inputs' amounts. */
 bool PSBTInputHasSigningUTXO(const PartiallySignedTransaction& psbt, size_t index, unsigned int flags);
 
 /** Keys of an unfinished input's partial signatures that provably cannot
@@ -911,9 +913,9 @@ std::set<CKeyID> InvalidPSBTPartialSignatures(const PartiallySignedTransaction& 
 bool VerifyPSBTPartialSignature(const PartiallySignedTransaction& psbt, size_t index, const SigPair& signature,
                                 const PrecomputedTransactionData& txdata, unsigned int flags);
 
-/** Checks whether a PSBTInput is already signed by doing script verification using final fields. */
+/** Verify final fields with sufficient previous-output data (see PSBTInputHasSigningUTXO). */
 bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned int input_index, const PrecomputedTransactionData* txdata, unsigned int script_verify_flags);
-/** Checks whether a PSBTInput is already signed by doing script verification using final fields. */
+/** Verify final fields with sufficient previous-output data using standard flags. */
 bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned int input_index, const PrecomputedTransactionData* txdata);
 
 /** Signs a PSBTInput, verifying that all provided data matches what is being signed.

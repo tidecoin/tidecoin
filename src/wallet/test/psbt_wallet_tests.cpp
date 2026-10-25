@@ -30,6 +30,53 @@ using namespace util::hex_literals;
 namespace wallet {
 BOOST_FIXTURE_TEST_SUITE(psbt_wallet_tests, WalletTestingSetup)
 
+BOOST_AUTO_TEST_CASE(explicit_transaction_rules)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    LOCK(m_wallet.cs_wallet);
+    m_wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
+    const auto automatic{m_wallet.GetTransactionRules()};
+    BOOST_REQUIRE(automatic.effective == common::ScriptRuleEra::PRE_AUXPOW);
+    const auto rules{m_wallet.GetTransactionRules(common::ScriptRuleEra::POST_AUXPOW)};
+    const CKey key{GenerateRandomKey(pq::SchemeId::FALCON_1024)};
+    FlatSigningProvider provider;
+    std::string error;
+    auto descriptors{Parse("wsh512(pk(" + EncodeSecret(key) + "))", provider, error, false)};
+    BOOST_REQUIRE_EQUAL(descriptors.size(), 1U);
+    WalletDescriptor descriptor{std::move(descriptors[0]), 0, 0, 1, 1};
+    BOOST_REQUIRE(m_wallet.AddWalletDescriptor(descriptor, provider, "", false));
+    const CScript witness_script{GetScriptForRawPubKey(key.GetPubKey())};
+    const CTxOut utxo{COIN, GetScriptForDestination(WitnessV1ScriptHash512(witness_script))};
+    CMutableTransaction tx;
+    tx.vin.emplace_back(Txid::FromUint256(uint256::ONE), 0);
+    tx.vout.emplace_back(COIN - 10000, CScript{} << OP_TRUE);
+    PartiallySignedTransaction original{tx};
+    original.inputs[0].witness_utxo = utxo;
+    original.inputs[0].witness_script = witness_script;
+    bool complete{true};
+    auto pre{original};
+    BOOST_REQUIRE(!m_wallet.FillPSBT(pre, complete));
+    BOOST_CHECK(!complete);
+    auto post{original};
+    // Like FinishTransaction, fill without signing, then sign and extract with
+    // the retained flags. An explicit choice must reach every manager and check.
+    BOOST_REQUIRE(!m_wallet.FillPSBT(post, complete, std::nullopt, false, nullptr, true, false, nullptr, rules.flags));
+    BOOST_CHECK(!complete);
+    BOOST_REQUIRE(!m_wallet.FillPSBT(post, complete, std::nullopt, true, nullptr, true, false, nullptr, rules.flags));
+    BOOST_REQUIRE(complete);
+    CMutableTransaction extracted;
+    BOOST_CHECK(FinalizeAndExtractPSBT(post, extracted, rules.flags));
+    auto final{post};
+    BOOST_REQUIRE(!m_wallet.FillPSBT(final, complete));
+    BOOST_CHECK(!complete);
+    BOOST_CHECK(!FinalizeAndExtractPSBT(final, extracted, automatic.flags));
+    BOOST_CHECK(m_wallet.GetTransactionRules().effective == automatic.effective);
+    const std::map<COutPoint, Coin> coins{{tx.vin[0].prevout, Coin{utxo, 1, false}}};
+    std::map<int, bilingual_str> errors;
+    BOOST_CHECK(m_wallet.SignTransaction(tx, coins, SIGHASH_ALL, errors, nullptr, rules.flags));
+    BOOST_CHECK(!m_wallet.SignTransaction(tx, coins, SIGHASH_ALL, errors));
+}
+
 BOOST_AUTO_TEST_CASE(psbt_updater_test)
 {
     REQUIRE_WALLET_TESTS_ENABLED();

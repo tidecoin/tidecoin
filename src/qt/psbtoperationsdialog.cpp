@@ -12,7 +12,6 @@
 #include <key_io.h>
 #include <node/psbt.h>
 #include <node/types.h>
-#include <policy/policy.h>
 #include <qt/tidecoinunits.h>
 #include <qt/forms/ui_psbtoperationsdialog.h>
 #include <qt/guiutil.h>
@@ -29,24 +28,6 @@ using node::AnalyzePSBT;
 using node::DEFAULT_MAX_RAW_TX_FEE_RATE;
 using node::PSBTAnalysis;
 using node::TransactionError;
-
-namespace {
-unsigned int GetPSBTAnalysisFlags(const ClientModel* client_model)
-{
-    unsigned int flags = STANDARD_SCRIPT_VERIFY_FLAGS;
-    if (!client_model) {
-        return flags;
-    }
-    const int tip_height = client_model->getNumBlocks();
-    const int next_height = tip_height >= 0 ? tip_height + 1 : 0;
-    if (next_height >= Params().GetConsensus().nAuxpowStartHeight) {
-        flags |= SCRIPT_VERIFY_PQ_STRICT;
-        flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-        flags |= SCRIPT_VERIFY_SHA512;
-    }
-    return flags;
-}
-} // namespace
 
 PSBTOperationsDialog::PSBTOperationsDialog(
     QWidget* parent, WalletModel* wallet_model, ClientModel* client_model) : QDialog(parent, GUIUtil::dialog_flags),
@@ -72,17 +53,25 @@ PSBTOperationsDialog::~PSBTOperationsDialog()
     delete m_ui;
 }
 
+common::TransactionRules PSBTOperationsDialog::getTransactionRules() const
+{
+    if (m_wallet_model) return m_wallet_model->wallet().getTransactionRules();
+    const int height = m_client_model ? m_client_model->node().getNumBlocks() : -1;
+    const std::optional<int> tip_height = height >= 0 ? std::optional{height} : std::nullopt;
+    return {common::LocalScriptRuleEra(tip_height, Params().GetConsensus().nAuxpowStartHeight)};
+}
+
 void PSBTOperationsDialog::openWithPSBT(PartiallySignedTransaction psbtx)
 {
     m_transaction_data = psbtx;
 
-    const unsigned int flags = GetPSBTAnalysisFlags(m_client_model);
+    const unsigned int flags = getTransactionRules().flags;
     bool complete = FinalizePSBT(psbtx, flags); // Make sure all existing signatures are fully combined before checking for completeness.
     if (m_wallet_model) {
         size_t n_could_sign;
         const auto err{m_wallet_model->wallet().fillPSBT(std::nullopt, /*sign=*/false,
                                                          &n_could_sign, m_transaction_data, complete,
-                                                         /*include_pqhd_origins=*/false)};
+                                                         /*include_pqhd_origins=*/false, /*input_errors=*/nullptr, flags)};
         if (err) {
             showStatus(tr("Failed to load transaction: %1")
                            .arg(QString::fromStdString(PSBTErrorString(*err).translated)),
@@ -96,15 +85,16 @@ void PSBTOperationsDialog::openWithPSBT(PartiallySignedTransaction psbtx)
 
     m_ui->broadcastTransactionButton->setEnabled(complete);
 
-    updateTransactionDisplay();
+    updateTransactionDisplay(flags);
 }
 
 void PSBTOperationsDialog::signTransaction()
 {
+    const unsigned int flags = getTransactionRules().flags;
     // Recheck here as well as disabling the button: the slot can be invoked
     // directly, and invalid amounts must never reach signing.
-    if (!m_wallet_model || !AnalyzePSBT(m_transaction_data, GetPSBTAnalysisFlags(m_client_model)).error.empty()) {
-        updateTransactionDisplay();
+    if (!m_wallet_model || !AnalyzePSBT(m_transaction_data, flags).error.empty()) {
+        updateTransactionDisplay(flags);
         return;
     }
     bool complete;
@@ -115,7 +105,7 @@ void PSBTOperationsDialog::signTransaction()
 
     const auto err{m_wallet_model->wallet().fillPSBT(std::nullopt, /*sign=*/true,
                                                      &n_signed, m_transaction_data, complete,
-                                                     /*include_pqhd_origins=*/false, &input_errors)};
+                                                     /*include_pqhd_origins=*/false, &input_errors, flags)};
 
     if (err) {
         QString message = tr("Failed to sign transaction: %1").arg(QString::fromStdString(PSBTErrorString(*err).translated));
@@ -136,9 +126,9 @@ void PSBTOperationsDialog::signTransaction()
         return;
     }
 
-    updateTransactionDisplay();
+    updateTransactionDisplay(flags);
 
-    const auto analysis = AnalyzePSBT(m_transaction_data, GetPSBTAnalysisFlags(m_client_model));
+    const auto analysis = AnalyzePSBT(m_transaction_data, flags);
     if (!analysis.error.empty()) return;
 
     if (!complete && !ctx.isValid()) {
@@ -154,7 +144,7 @@ void PSBTOperationsDialog::signTransaction()
     // Preserve the role and per-input issues alongside the signing result.
     if (!complete) {
         const auto signing_status = m_ui->statusBar->text();
-        showTransactionStatus(m_transaction_data);
+        showTransactionStatus(m_transaction_data, flags);
         m_ui->statusBar->setText(signing_status + " " + m_ui->statusBar->text());
     }
 }
@@ -162,10 +152,10 @@ void PSBTOperationsDialog::signTransaction()
 void PSBTOperationsDialog::broadcastTransaction()
 {
     CMutableTransaction mtx;
-    const unsigned int flags = GetPSBTAnalysisFlags(m_client_model);
+    const unsigned int flags = getTransactionRules().flags;
     if (!FinalizeAndExtractPSBT(m_transaction_data, mtx, flags)) {
-        // This is never expected to fail unless we were given a malformed PSBT
-        // (e.g. with an invalid signature.)
+        // A chain transition since signing can change which scripts verify,
+        // even if the PSBT was previously complete.
         showStatus(tr("Unknown error processing transaction."), StatusLevel::ERR);
         return;
     }
@@ -223,14 +213,14 @@ void PSBTOperationsDialog::saveTransaction() {
     showStatus(tr("PSBT saved to disk."), StatusLevel::INFO);
 }
 
-void PSBTOperationsDialog::updateTransactionDisplay() {
-    m_ui->transactionDescription->setText(renderTransaction(m_transaction_data));
-    showTransactionStatus(m_transaction_data);
+void PSBTOperationsDialog::updateTransactionDisplay(unsigned int flags) {
+    m_ui->transactionDescription->setText(renderTransaction(m_transaction_data, flags));
+    showTransactionStatus(m_transaction_data, flags);
 }
 
-QString PSBTOperationsDialog::renderTransaction(const PartiallySignedTransaction &psbtx)
+QString PSBTOperationsDialog::renderTransaction(const PartiallySignedTransaction &psbtx, unsigned int flags)
 {
-    const PSBTAnalysis analysis = AnalyzePSBT(psbtx, GetPSBTAnalysisFlags(m_client_model));
+    const PSBTAnalysis analysis = AnalyzePSBT(psbtx, flags);
     if (!analysis.error.empty()) return tr("Invalid transaction: %1").arg(QString::fromStdString(analysis.error).toHtmlEscaped());
     QString tx_description;
     QLatin1String bullet_point(" * ");
@@ -302,7 +292,7 @@ void PSBTOperationsDialog::showStatus(const QString &msg, StatusLevel level) {
     m_ui->statusBar->show();
 }
 
-size_t PSBTOperationsDialog::couldSignInputs(const PartiallySignedTransaction &psbtx) {
+size_t PSBTOperationsDialog::couldSignInputs(const PartiallySignedTransaction &psbtx, unsigned int flags) {
     if (!m_wallet_model) {
         return 0;
     }
@@ -311,7 +301,7 @@ size_t PSBTOperationsDialog::couldSignInputs(const PartiallySignedTransaction &p
     bool complete;
     const auto err{m_wallet_model->wallet().fillPSBT(std::nullopt, /*sign=*/false,
                                                      &n_signed, m_transaction_data, complete,
-                                                     /*include_pqhd_origins=*/false)};
+                                                     /*include_pqhd_origins=*/false, /*input_errors=*/nullptr, flags)};
 
     if (err) {
         return 0;
@@ -319,8 +309,8 @@ size_t PSBTOperationsDialog::couldSignInputs(const PartiallySignedTransaction &p
     return n_signed;
 }
 
-void PSBTOperationsDialog::showTransactionStatus(const PartiallySignedTransaction &psbtx) {
-    PSBTAnalysis analysis = AnalyzePSBT(psbtx, GetPSBTAnalysisFlags(m_client_model));
+void PSBTOperationsDialog::showTransactionStatus(const PartiallySignedTransaction &psbtx, unsigned int flags) {
+    PSBTAnalysis analysis = AnalyzePSBT(psbtx, flags);
     if (!analysis.error.empty()) {
         showStatus(QString::fromStdString(analysis.error), StatusLevel::ERR);
         m_ui->signTransactionButton->setEnabled(false);
@@ -331,7 +321,7 @@ void PSBTOperationsDialog::showTransactionStatus(const PartiallySignedTransactio
     for (size_t i = 0; i < analysis.inputs.size(); ++i) {
         if (analysis.inputs[i].issue) issues.append(tr("Input %1: %2").arg(i).arg(QString::fromStdString(analysis.inputs[i].issue_message)));
     }
-    size_t n_could_sign = couldSignInputs(psbtx);
+    size_t n_could_sign = couldSignInputs(psbtx, flags);
 
     switch (analysis.next) {
         case PSBTRole::UPDATER: {

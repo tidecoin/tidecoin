@@ -359,10 +359,13 @@ static RPCHelpMan setpqhdpolicy()
 {
     return RPCHelpMan{
         "setpqhdpolicy",
-        "Set default PQ scheme policy for new receive/change addresses.\n",
+        "Set default PQ scheme policy for new receive/change addresses. At least one scheme must be provided.\n"
+        "Reapply policy defaults to both receive and change descriptor bindings, even when a scheme is omitted or unchanged.\n"
+        "This can replace custom active bindings, including imported descriptors. Previously known descriptors and their funds remain tracked.\n"
+        "An encrypted wallet must be unlocked if new policy descriptors need to be created.\n",
         {
-            {"receive_scheme", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Default PQ scheme for receive addresses (name or numeric prefix)."},
-            {"change_scheme", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Default PQ scheme for change outputs (name or numeric prefix)."},
+            {"receive_scheme", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Default PQ scheme for receive addresses (name or numeric prefix); unchanged if omitted."},
+            {"change_scheme", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "Default PQ scheme for change outputs (name or numeric prefix); unchanged if omitted."},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -542,7 +545,10 @@ static RPCHelpMan setpqhdseed()
 {
     return RPCHelpMan{
         "setpqhdseed",
-        "Set default PQHD seed ids used for receive/change derivation policy.\n",
+        "Set default PQHD seed ids used for receive/change derivation policy.\n"
+        "Reapply policy defaults to both receive and change descriptor bindings, even when the selected seed ids are unchanged.\n"
+        "This can replace custom active bindings, including imported descriptors. Previously known descriptors and their funds remain tracked.\n"
+        "An encrypted wallet must be unlocked if new policy descriptors need to be created.\n",
         {
             {"receive_seed_id", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "SeedID32 used for receive policy"},
             {"change_seed_id", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "SeedID32 used for change policy (defaults to receive_seed_id)"},

@@ -2,7 +2,6 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <chainparams.h>
 #include <common/system.h>
 #include <consensus/validation.h>
 #include <interfaces/chain.h>
@@ -210,14 +209,7 @@ Result CreateRateBumpTransaction(CWallet& wallet, const Txid& txid, const CCoinC
     // Figure out if we need to compute the input weight, and do so if necessary
     PrecomputedTransactionData txdata;
     txdata.Init(*wtx.tx, std::move(spent_outputs), /* force=*/ true);
-    const std::optional<int> tip_height = wallet.chain().getHeight();
-    const int next_height = tip_height ? *tip_height + 1 : 0;
-    unsigned int script_verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
-    if (next_height >= Params().GetConsensus().nAuxpowStartHeight) {
-        script_verify_flags |= SCRIPT_VERIFY_PQ_STRICT;
-        script_verify_flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-        script_verify_flags |= SCRIPT_VERIFY_SHA512;
-    }
+    const unsigned int script_verify_flags{wallet.GetTransactionRules().flags};
     const bool allow_legacy = !(script_verify_flags & SCRIPT_VERIFY_PQ_STRICT);
     for (unsigned int i = 0; i < wtx.tx->vin.size(); ++i) {
         const CTxIn& txin = wtx.tx->vin.at(i);
@@ -341,26 +333,19 @@ bool SignTransaction(CWallet& wallet, CMutableTransaction& mtx) {
     LOCK(wallet.cs_wallet);
 
     if (wallet.IsWalletFlagSet(WALLET_FLAG_EXTERNAL_SIGNER)) {
+        const auto rules = wallet.GetTransactionRules();
         // Make a blank psbt
         PartiallySignedTransaction psbtx(mtx);
 
         // First fill transaction with our data without signing,
         // so external signers are not asked to sign more than once.
         bool complete;
-        wallet.FillPSBT(psbtx, complete, std::nullopt, /*sign=*/false, /*n_signed=*/nullptr,
-                        /*finalize=*/true, /*include_pqhd_origins=*/false);
+        if (wallet.FillPSBT(psbtx, complete, std::nullopt, /*sign=*/false, /*n_signed=*/nullptr,
+                            /*finalize=*/true, /*include_pqhd_origins=*/false, /*input_errors=*/nullptr, rules.flags)) return false;
         auto err{wallet.FillPSBT(psbtx, complete, std::nullopt, /*sign=*/true, /*n_signed=*/nullptr,
-                                 /*finalize=*/true, /*include_pqhd_origins=*/false)};
+                                 /*finalize=*/true, /*include_pqhd_origins=*/false, /*input_errors=*/nullptr, rules.flags)};
         if (err) return false;
-        unsigned int script_verify_flags = STANDARD_SCRIPT_VERIFY_FLAGS;
-        const std::optional<int> tip_height = wallet.chain().getHeight();
-        const int next_height = tip_height ? *tip_height + 1 : 0;
-        if (next_height >= Params().GetConsensus().nAuxpowStartHeight) {
-            script_verify_flags |= SCRIPT_VERIFY_PQ_STRICT;
-            script_verify_flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-            script_verify_flags |= SCRIPT_VERIFY_SHA512;
-        }
-        complete = FinalizeAndExtractPSBT(psbtx, mtx, script_verify_flags);
+        complete = FinalizeAndExtractPSBT(psbtx, mtx, rules.flags);
         return complete;
     } else {
         return wallet.SignTransaction(mtx);

@@ -7,6 +7,7 @@
 #define BITCOIN_WALLET_WALLET_H
 
 #include <addresstype.h>
+#include <common/transaction_rules.h>
 #include <consensus/amount.h>
 #include <interfaces/chain.h>
 #include <interfaces/handler.h>
@@ -774,10 +775,13 @@ public:
 
     OutputType TransactionChangeType(const std::optional<OutputType>& change_type, const std::vector<CRecipient>& vecSend) const;
 
+    /** Snapshot local next-block rules once; an explicit era applies only to local processing. */
+    common::TransactionRules GetTransactionRules(std::optional<common::ScriptRuleEra> requested = std::nullopt) const;
+
     /** Fetch the inputs and sign with SIGHASH_ALL. */
     bool SignTransaction(CMutableTransaction& tx) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
     /** Sign the tx given the input coins and sighash. */
-    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, const std::set<COutPoint>* missing_amounts = nullptr) const;
+    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors, const std::set<COutPoint>* missing_amounts = nullptr, std::optional<unsigned int> script_verify_flags = std::nullopt) const;
     SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const;
 
     /**
@@ -793,6 +797,7 @@ public:
      * @param[out] n_signed the number of inputs signed by this wallet
      * @param[in] finalize whether to create the final scriptSig or scriptWitness if possible
      * @param[in] include_pqhd_origins whether to attach Tidecoin PQHD origin proprietary records to PSBT inputs/outputs
+     * @param[in] script_verify_flags resolved request flags, or select local rules once if omitted
      * return error
      */
     std::optional<common::PSBTError> FillPSBT(PartiallySignedTransaction& psbtx,
@@ -801,7 +806,8 @@ public:
                   bool sign = true,
                   size_t* n_signed = nullptr,
                   bool finalize = true,
-                  bool include_pqhd_origins = false, std::vector<common::PSBTInputError>* input_errors = nullptr) const;
+                  bool include_pqhd_origins = false, std::vector<common::PSBTInputError>* input_errors = nullptr,
+                  std::optional<unsigned int> script_verify_flags = std::nullopt) const;
 
     /**
      * Submit the transaction to the node's mempool and then relay to peers.

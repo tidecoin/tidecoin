@@ -940,13 +940,21 @@ class PSBTTest(BitcoinTestFramework):
 
         # Finalizer test
         for finalizer in finalizers:
-            finalized = self.nodes[2].finalizepsbt(finalizer['finalize'], False)['psbt']
-            assert_equal(finalized, finalizer['result'])
+            finalized = self.nodes[2].finalizepsbt(finalizer['finalize'], False)
+            assert finalized['complete']
+            assert_equal(finalized['psbt'], finalizer['result'])
 
         # Extractor test
         for extractor in extractors:
             extracted = self.nodes[2].finalizepsbt(extractor['extract'], True)['hex']
             assert_equal(extracted, extractor['result'])
+            # Even a signatureless legacy output needs its matching transaction;
+            # an output summary alone does not establish the script or amount.
+            summary = PSBT.from_base64(extractor['extract'])
+            del summary.i[0].map[PSBT_IN_NON_WITNESS_UTXO]
+            result = self.nodes[2].finalizepsbt(summary.to_base64(), True)
+            assert not result['complete'] and 'hex' not in result
+            assert 'fee' not in self.nodes[2].analyzepsbt(summary.to_base64())
 
         # Unload extra wallets
         for wallet_name in loaded_signer_wallets:
@@ -1249,15 +1257,20 @@ class PSBTTest(BitcoinTestFramework):
 
         self.log.info("Test that PSBT inputs are being checked via script execution")
         acs_prevout = CTxOut(nValue=0, scriptPubKey=CScript([OP_TRUE]))
+        previous = CTransaction()
+        previous.vin = [CTxIn(outpoint=COutPoint(hash=int('dd' * 32, 16), n=0))]
+        previous.vout = [acs_prevout]
         tx = CTransaction()
-        tx.vin = [CTxIn(outpoint=COutPoint(hash=int('dd' * 32, 16), n=0), scriptSig=b"")]
+        tx.vin = [CTxIn(outpoint=COutPoint(hash=previous.txid_int, n=0), scriptSig=b"")]
         tx.vout = [CTxOut(nValue=0, scriptPubKey=b"")]
         psbt = PSBT()
         psbt.g = PSBTMap({PSBT_GLOBAL_UNSIGNED_TX: tx.serialize()})
         psbt.i = [PSBTMap({bytes([PSBT_IN_WITNESS_UTXO]) : acs_prevout.serialize()})]
         psbt.o = [PSBTMap()]
+        assert not self.nodes[0].finalizepsbt(psbt.to_base64())['complete']
+        psbt.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = previous.serialize()
         assert_equal(self.nodes[0].finalizepsbt(psbt.to_base64()),
-            {'hex': '0200000001dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd0000000000000000000100000000000000000000000000', 'complete': True})
+            {'hex': tx.serialize().hex(), 'complete': True, 'rules': 'post-auxpow'})
 
         self.log.info("Test we don't crash when making a 0-value funded transaction at 0 fee without forcing an input selection")
         assert_raises_rpc_error(-4, "Transaction requires one destination of non-zero value, a non-zero feerate, or a pre-selected input", self.nodes[0].walletcreatefundedpsbt, [], [{"data": "deadbeef"}], 0, {"fee_rate": "0"})

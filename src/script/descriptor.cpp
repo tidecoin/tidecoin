@@ -1062,7 +1062,7 @@ public:
         if (const auto sat_size = m_subdescriptor_args[0]->MaxSatSize(use_max_sig)) {
             if (const auto subscript_size = m_subdescriptor_args[0]->ScriptSize()) {
                 // The subscript is never witness data.
-                const auto subscript_weight = (1 + *subscript_size) * WITNESS_SCALE_FACTOR;
+                const auto subscript_weight = DataElemSize(*subscript_size) * WITNESS_SCALE_FACTOR;
                 // The weight depends on whether the inner descriptor is satisfied using the witness stack.
                 if (IsSegwit()) return subscript_weight + *sat_size;
                 return subscript_weight + *sat_size * WITNESS_SCALE_FACTOR;

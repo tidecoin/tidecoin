@@ -3,7 +3,10 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <addresstype.h>
+#include <common/transaction_rules.h>
+#include <consensus/params.h>
 #include <core_io.h>
+#include <policy/policy.h>
 #include <interfaces/chain.h>
 #include <interfaces/mining.h>
 #include <key.h>
@@ -98,6 +101,51 @@ UniValue RPCTestingSetup::CallRPC(std::string args)
 
 
 BOOST_FIXTURE_TEST_SUITE(rpc_tests, RPCTestingSetup)
+
+BOOST_AUTO_TEST_CASE(transaction_script_rules)
+{
+    using common::ScriptRuleEra;
+    constexpr auto pre{ScriptRuleEra::PRE_AUXPOW};
+    constexpr auto post{ScriptRuleEra::POST_AUXPOW};
+    BOOST_CHECK(common::ParseScriptRuleEra("pre-auxpow") == pre);
+    BOOST_CHECK(common::ParseScriptRuleEra("post-auxpow") == post);
+    for (const auto name : {"", "auto", "POST-AUXPOW", "post-auxpow ", "never"}) {
+        BOOST_CHECK(!common::ParseScriptRuleEra(name));
+        BOOST_CHECK_THROW(ParseTransactionRules(UniValue{name}), UniValue);
+    }
+    BOOST_CHECK(!ParseTransactionRules(UniValue{}));
+    for (const auto json : {"0", "true", "[]", "{}"}) {
+        BOOST_CHECK_THROW(ParseTransactionRules(JSON(json)), std::runtime_error);
+    }
+    BOOST_CHECK_EQUAL(common::ScriptFlagsForEra(pre), STANDARD_SCRIPT_VERIFY_FLAGS);
+    BOOST_CHECK_EQUAL(common::ScriptFlagsForEra(post), STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_SHA512);
+    BOOST_CHECK(common::LocalScriptRuleEra(std::nullopt, 110) == pre);
+    BOOST_CHECK(common::LocalScriptRuleEra(std::nullopt, 0) == post);
+    for (int height : {108, 109, 110}) {
+        BOOST_CHECK(common::LocalScriptRuleEra(height, 110) == (height < 109 ? pre : post));
+    }
+    for (int height : {0, 109, INT32_MAX}) {
+        BOOST_CHECK(common::LocalScriptRuleEra(height, Consensus::AUXPOW_DISABLED) == pre);
+    }
+    for (auto local : {pre, post}) {
+        for (auto requested : {std::optional<ScriptRuleEra>{}, std::optional{pre}, std::optional{post}}) {
+            const common::TransactionRules rules{local, requested};
+            BOOST_CHECK(rules.effective == requested.value_or(local));
+            BOOST_CHECK_EQUAL(rules.flags, common::ScriptFlagsForEra(rules.effective));
+            UniValue result{UniValue::VOBJ};
+            AddTransactionRulesToResult(result, rules);
+            BOOST_CHECK_EQUAL(result["rules"].get_str(), common::ScriptRuleEraName(rules.effective));
+            BOOST_CHECK_EQUAL(result.exists("warnings"), requested && *requested != local);
+            // An unrelated warning is retained when appending the mismatch notice.
+            UniValue warnings{UniValue::VARR};
+            warnings.push_back("existing notice");
+            result.pushKV("warnings", warnings);
+            AddTransactionRulesToResult(result, rules);
+            BOOST_CHECK_EQUAL(result["warnings"][0].get_str(), "existing notice");
+            BOOST_CHECK_EQUAL(result["warnings"].size(), requested && *requested != local ? 2U : 1U);
+        }
+    }
+}
 
 BOOST_AUTO_TEST_CASE(descriptor_range_boundaries)
 {

@@ -392,13 +392,20 @@ class WalletSignerTest(BitcoinTestFramework):
                 assert count_signs() > before
                 if final:
                     assert result['complete']
-                    # Existing verified legacy finals need not reacquire full
-                    # transactions, and must not cause another signing request.
+                    # Existing finals must have enough previous-output data,
+                    # and verified finals must not cause another device request.
                     existing = PSBT.from_base64(result['psbt'])
                     for i, entry in enumerate(existing.i):
                         entry.map.pop(PSBT_IN_NON_WITNESS_UTXO, None)
                         entry.map[PSBT_IN_WITNESS_UTXO] = previous.vout[i].serialize()
                     before = count_signs()
+                    if legacy:
+                        assert_raises_rpc_error(-25, 'Full previous transaction required', wallet.walletprocesspsbt, existing.to_base64())
+                        assert_equal(count_signs(), before)
+                        assert not wallet.walletprocesspsbt(existing.to_base64(), False)['complete']
+                        assert_equal(count_signs(), before)
+                        for entry in existing.i:
+                            entry.map[PSBT_IN_NON_WITNESS_UTXO] = previous.serialize()
                     assert wallet.walletprocesspsbt(existing.to_base64())['complete']
                     assert_equal(count_signs(), before)
                 else:

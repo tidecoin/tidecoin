@@ -36,12 +36,14 @@ class WalletDescriptorExpansionTest(BitcoinTestFramework):
         node.createwallet('expand', passphrase='test expansion passphrase')
         wallet = node.get_wallet_rpc('expand')
         self.log.info('Scan and funding help describe cached public operations while locked after reload')
-        for method in ['scantxoutset', 'scanblocks', 'fundrawtransaction', 'walletcreatefundedpsbt', 'send', 'sendall']:
+        for method in ['scantxoutset', 'scanblocks', 'fundrawtransaction', 'walletcreatefundedpsbt', 'send']:
             help_text = wallet.help(method)
             assert 'cached public keys work while locked, including after reload' in help_text, method
             assert 'Fresh PQHD derivation requires an unlocked wallet with the seed' in help_text, method
             assert 'unlock once after reload' not in help_text, method
             assert 'require verified cached keys' not in help_text, method
+        # sendall refuses solving_data; it no longer offers descriptor expansion.
+        assert 'solving_data' not in wallet.help('sendall')
         node.createwallet('other', blank=True, disable_private_keys=True)
         other = node.get_wallet_rpc('other')
         entries = wallet.listdescriptors()['descriptors']

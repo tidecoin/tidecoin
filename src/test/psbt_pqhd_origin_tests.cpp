@@ -189,7 +189,113 @@ BOOST_AUTO_TEST_CASE(psbt_analysis_missing_data_with_partial_issue)
             BOOST_CHECK(input.missing_witness_script == control.missing_witness_script);
             BOOST_CHECK(input.missing_sigs.empty());
             BOOST_CHECK(analysis.next == (single ? PSBTRole::CREATOR : PSBTRole::UPDATER));
-            BOOST_CHECK(analysis.fee == (single ? 1000 : 999));
+            if (kind < 2) BOOST_CHECK(!analysis.fee); // Legacy/P2SH needs its full previous transaction.
+            else BOOST_CHECK(analysis.fee == (single ? 1000 : 999));
+        }
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(psbt_final_previous_transaction, BasicTestingSetup)
+{
+    constexpr unsigned flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512};
+    const CKey key = GenerateRandomKey(pq::SchemeId::FALCON_512);
+    const auto pubkey = key.GetPubKey();
+    FlatSigningProvider provider;
+    provider.keys.emplace(pubkey.GetID(), key);
+    provider.pubkeys.emplace(pubkey.GetID(), pubkey);
+    const CScript pk = CScript{} << ToByteVector(pubkey) << OP_CHECKSIG;
+    const CScript wpkh = GetScriptForDestination(WitnessV0KeyHash(pubkey));
+    const CScript wsh = GetScriptForDestination(WitnessV0ScriptHash(pk));
+    struct Case {
+        const char* name;
+        CScript output, redeem, witness;
+        bool witness_only;
+    };
+    const std::array<Case, 8> cases{{
+        {"pk", pk, {}, {}, false},
+        {"pkh", GetScriptForDestination(PKHash(pubkey)), {}, {}, false},
+        {"sh(pk)", GetScriptForDestination(ScriptHash(pk)), pk, {}, false},
+        {"wpkh", wpkh, {}, {}, true},
+        {"sh(wpkh)", GetScriptForDestination(ScriptHash(wpkh)), wpkh, {}, true},
+        {"wsh(pk)", wsh, {}, pk, true},
+        {"sh(wsh(pk))", GetScriptForDestination(ScriptHash(wsh)), wsh, pk, true},
+        {"wsh512(pk)", GetScriptForDestination(WitnessV1ScriptHash512(pk)), {}, pk, true},
+    }};
+    for (const auto& test : cases) {
+        BOOST_TEST_CONTEXT(test.name) {
+            CMutableTransaction previous;
+            previous.vout.emplace_back(1000, test.output);
+            auto full = MakeMinimalPSBT();
+            full.tx->vin[0].prevout = COutPoint(previous.GetHash(), 0);
+            full.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+            full.inputs[0].witness_utxo = previous.vout[0];
+            full.inputs[0].redeem_script = test.redeem;
+            full.inputs[0].witness_script = test.witness;
+            const auto data = PrecomputePSBTData(full);
+            BOOST_REQUIRE(SignPSBTInput(provider, full, 0, &data, SIGHASH_ALL, nullptr, true, flags) == common::PSBTError::OK);
+            BOOST_REQUIRE(PSBTInputSigned(full.inputs[0]));
+            BOOST_CHECK(full.inputs[0].redeem_script.empty());
+            BOOST_CHECK(full.inputs[0].witness_script.empty());
+            BOOST_REQUIRE(PSBTInputSignedAndVerified(full, 0, &data, flags));
+            BOOST_REQUIRE(FinalizePSBT(full, flags));
+            BOOST_CHECK(node::AnalyzePSBT(full, flags).fee == 999);
+
+            auto summary = full;
+            summary.inputs[0].non_witness_utxo.reset();
+            const auto summary_data = PrecomputePSBTData(summary);
+            BOOST_CHECK_EQUAL(PSBTInputHasSigningUTXO(summary, 0, flags), test.witness_only);
+            BOOST_CHECK_EQUAL(PSBTInputSignedAndVerified(summary, 0, &summary_data, flags), test.witness_only);
+            BOOST_CHECK_EQUAL(FinalizePSBT(summary, flags), test.witness_only);
+            CMutableTransaction extracted;
+            BOOST_CHECK_EQUAL(FinalizeAndExtractPSBT(summary, extracted, flags), test.witness_only);
+            const auto analysis = node::AnalyzePSBT(summary, flags);
+            BOOST_REQUIRE_EQUAL(analysis.inputs.size(), 1U);
+            BOOST_CHECK(analysis.inputs[0].has_utxo); // A summary exists, but may be insufficient.
+            BOOST_CHECK_EQUAL(analysis.inputs[0].is_final, test.witness_only);
+            BOOST_CHECK(analysis.next == (test.witness_only ? PSBTRole::EXTRACTOR : PSBTRole::UPDATER));
+            BOOST_CHECK_EQUAL(analysis.fee.has_value(), test.witness_only);
+            BOOST_CHECK_EQUAL(analysis.estimated_vsize.has_value(), test.witness_only);
+            BOOST_CHECK_EQUAL(analysis.estimated_feerate.has_value(), test.witness_only);
+
+            // Wrong amounts fail even when the data structure is otherwise sufficient.
+            auto changed = summary;
+            ++changed.inputs[0].witness_utxo.nValue;
+            auto changed_data = PrecomputePSBTData(changed);
+            BOOST_CHECK(!PSBTInputSignedAndVerified(changed, 0, &changed_data, flags));
+            if (!test.witness_only) BOOST_CHECK(!node::AnalyzePSBT(changed, flags).fee);
+            changed.inputs[0].non_witness_utxo = full.inputs[0].non_witness_utxo;
+            BOOST_CHECK(!PSBTInputHasSigningUTXO(changed, 0, flags));
+            BOOST_CHECK(!FinalizePSBT(changed, flags));
+
+            changed = summary;
+            changed.inputs[0].witness_utxo.scriptPubKey = CScript{} << OP_TRUE;
+            BOOST_CHECK(!PSBTInputSignedAndVerified(changed, 0, &summary_data, flags));
+            BOOST_CHECK(!node::AnalyzePSBT(changed, flags).fee);
+            changed.inputs[0].witness_utxo.SetNull();
+            BOOST_CHECK(!FinalizePSBT(changed, flags));
+            BOOST_CHECK(!node::AnalyzePSBT(changed, flags).fee);
+
+            changed = full;
+            ++previous.vout[0].nValue; // Does not match the requested transaction ID.
+            changed.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+            BOOST_CHECK(!FinalizePSBT(changed, flags));
+            changed = full;
+            changed.tx->vin[0].prevout.n = 1;
+            BOOST_CHECK(!FinalizePSBT(changed, flags));
+
+            if (test.witness_only && !test.redeem.empty()) {
+                // Final bytes, not stale metadata, determine the wrapped program.
+                changed = summary;
+                changed.inputs[0].redeem_script = CScript{} << OP_FALSE;
+                BOOST_CHECK(PSBTInputHasSigningUTXO(changed, 0, flags));
+                BOOST_CHECK(FinalizePSBT(changed, flags));
+                changed.inputs[0].final_script_sig = CScript{} << ToByteVector(wpkh) << ToByteVector(test.redeem);
+                BOOST_CHECK(!PSBTInputHasSigningUTXO(changed, 0, flags));
+                BOOST_CHECK(!FinalizePSBT(changed, flags));
+                changed.inputs[0].final_script_sig = CScript{} << ToByteVector(CScript{} << OP_TRUE);
+                BOOST_CHECK(!PSBTInputHasSigningUTXO(changed, 0, flags));
+                BOOST_CHECK(!FinalizePSBT(changed, flags));
+            }
         }
     }
 }

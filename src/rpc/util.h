@@ -6,6 +6,7 @@
 #define BITCOIN_RPC_UTIL_H
 
 #include <addresstype.h>
+#include <common/transaction_rules.h>
 #include <consensus/amount.h>
 #include <node/transaction.h>
 #include <outputtype.h>
@@ -525,6 +526,13 @@ private:
  */
 void PushWarnings(const UniValue& warnings, UniValue& obj);
 void PushWarnings(const std::vector<bilingual_str>& warnings, UniValue& obj);
+
+/** RPC adapters for the shared transaction-processing rule selection. */
+std::optional<common::ScriptRuleEra> ParseTransactionRules(const UniValue& value);
+void AddTransactionRulesToResult(UniValue& result, const common::TransactionRules& rules);
+RPCArg TransactionRulesArg(bool string_result = false);
+RPCResult TransactionRulesResult();
+RPCResult TransactionRulesWarningsResult();
 
 std::vector<RPCResult> ScriptPubKeyDoc();
 

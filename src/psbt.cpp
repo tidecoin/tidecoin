@@ -382,8 +382,19 @@ bool PSBTInputHasSigningUTXO(const PartiallySignedTransaction& psbt, size_t inde
     CScript script = utxo.scriptPubKey;
     const bool is_p2sh{script.IsPayToScriptHash()};
     if (is_p2sh) {
-        if (GetScriptForDestination(ScriptHash(input.redeem_script)) != script) return false;
-        script = input.redeem_script;
+        CScript redeem_script = input.redeem_script;
+        if (PSBTInputSigned(input)) {
+            // Finalization clears redeem_script. A wrapped witness final must
+            // carry exactly the redeem-program push in its final scriptSig.
+            auto pc = input.final_script_sig.begin();
+            opcodetype opcode;
+            std::vector<unsigned char> data;
+            if (!input.final_script_sig.GetOp(pc, opcode, data) ||
+                pc != input.final_script_sig.end() || input.final_script_sig != (CScript{} << data)) return false;
+            redeem_script = CScript(data.begin(), data.end());
+        }
+        if (GetScriptForDestination(ScriptHash(redeem_script)) != script) return false;
+        script = std::move(redeem_script);
     }
     int version;
     std::vector<unsigned char> program;
@@ -476,23 +487,9 @@ bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned
     CTxOut utxo;
     assert(input_index < psbt.inputs.size());
     const PSBTInput& input = psbt.inputs[input_index];
-    if (!input.IsUTXOConsistent(psbt.tx->vin[input_index].prevout)) return false;
-
-    if (input.non_witness_utxo) {
-        // If we're taking our information from a non-witness UTXO, verify that it matches the prevout.
-        COutPoint prevout = psbt.tx->vin[input_index].prevout;
-        if (prevout.n >= input.non_witness_utxo->vout.size()) {
-            return false;
-        }
-        if (input.non_witness_utxo->GetHash() != prevout.hash) {
-            return false;
-        }
-        utxo = input.non_witness_utxo->vout[prevout.n];
-    } else if (!input.witness_utxo.IsNull()) {
-        utxo = input.witness_utxo;
-    } else {
-        return false;
-    }
+    // Legacy signatures do not commit to the previous amount. Final fields
+    // cannot replace the full transaction needed to establish that output.
+    if (!PSBTInputHasSigningUTXO(psbt, input_index, script_verify_flags) || !psbt.GetInputUTXO(utxo, input_index)) return false;
 
     if (txdata) {
         return VerifyScript(input.final_script_sig, utxo.scriptPubKey, &input.final_script_witness, script_verify_flags, MutableTransactionSignatureChecker{&(*psbt.tx), input_index, utxo.nValue, *txdata, MissingDataBehavior::FAIL, allow_legacy});

@@ -658,8 +658,19 @@ type fails loading without being rewritten. Every referenced key scheme must be
 eligible at the current height, including mixed-scheme descriptors.
 
 Explicit `setpqhdpolicy` / `setpqhdseed` operations select policy defaults again;
-failed policy updates restore the previous custom binding. An explicit address
-scheme override continues to select the policy seed's descriptor for that scheme.
+both receive and change bindings are reapplied, including when the selected
+schemes or seed IDs are unchanged. Supplying only one scheme to `setpqhdpolicy`
+keeps the other scheme's value but still reapplies both branches. This can replace
+custom active bindings, including imported descriptors. Older descriptors remain
+registered for tracking and signing, and no coins are moved. Reactivate custom
+descriptors with `importdescriptors` after policy selection if they should supply
+new addresses. Failed policy updates restore the previous custom bindings.
+
+Reusing existing policy descriptors can succeed while locked. Creating missing
+ones requires unlocking an encrypted wallet; an explicit policy update otherwise
+returns `RPC_WALLET_UNLOCK_NEEDED` (`-13`) and preserves the prior policy and
+bindings. An explicit address scheme override continues to select the policy
+seed's descriptor for that scheme.
 If an output type has no active binding, the policy descriptor can still be found
 or created on demand when eligible. Absence of an active binding is therefore not
 a persistent instruction to disable that policy output type.

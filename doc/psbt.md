@@ -85,20 +85,94 @@ hardware implementations will typically implement multiple roles simultaneously.
   concatenating the inputs and outputs. This can be used to construct CoinJoin
   transactions.
 - **`decodepsbt`** is a diagnostic utility RPC which will show all information in
-  a PSBT in human-readable form, as well as compute its eventual fee if known.
+  a PSBT in human-readable form. Its fee is calculated from supplied UTXO records
+  without verifying their amounts or transaction validity; it is not an approval
+  of that fee. Use `analyzepsbt` to check what data the processing workflow needs.
 - **`analyzepsbt`** is a utility RPC that examines a PSBT and reports the
   current status of its inputs, the next step in the workflow if known, and if
   possible, computes the fee of the resulting transaction and estimates the
   final weight and feerate.
 
+### Selecting script rules
+
+Eight processing RPCs accept an optional final `rules` argument:
+
+| RPC | Position (counting from one) | Result |
+| --- | --- | --- |
+| `walletprocesspsbt` | 6 | Object |
+| `descriptorprocesspsbt` | 5 | Object |
+| `finalizepsbt` | 3 | Object |
+| `analyzepsbt` | 2 | Object |
+| `signrawtransactionwithkey` | 5 | Object |
+| `signrawtransactionwithwallet` | 4 | Object |
+| `utxoupdatepsbt` | 3 | Base64 PSBT string |
+| `combinerawtransaction` | 2 | Transaction hex string |
+
+The accepted strings are `pre-auxpow` and `post-auxpow`. Omitted or JSON `null`
+selects the local next-block era once for the request. At activation height H,
+a tip at H−1 selects post-activation rules. Disabled activation selects pre rules.
+An explicit choice takes precedence even on an offline node or a network with
+activation disabled. It changes only this processing request: standard script
+checks remain enabled, and post rules additionally enable strict PQ verification,
+native witness v1 and `OP_SHA512`.
+
+Use the same explicit era for offline analysis, signing and finalization:
+
+```sh
+tidecoin-cli -named analyzepsbt psbt="$PSBT" rules=post-auxpow
+tidecoin-cli -rpcwallet=offline_wallet -named walletprocesspsbt psbt="$PSBT" rules=post-auxpow
+tidecoin-cli -named finalizepsbt psbt="$SIGNED_PSBT" rules=post-auxpow
+```
+
+The six object results include `rules`, including incomplete results. An explicit
+choice different from the local next-block era adds a `warnings` array explaining
+both eras. A genesis-only host processing post-activation transactions normally
+receives this notice. The two string results keep their existing format and have
+no metadata or notices. `combinerawtransaction` still requires the input coins in
+its local view. No rule field is stored in a PSBT or sent to an external signer.
+The standalone `tidecoin-tx` tool uses these same names but requires an explicit
+`-rules` argument for signing and verification; it has no chain-derived default.
+
+One selection governs cached partial checks, new signatures, existing finals,
+analysis, transaction-record cleanup and extraction. A partial that fails the
+selected rules is excluded from reusable signing data; when signing with its
+owner's key it can be replaced. Foreign entries are preserved. Explicit sighash
+requests and required previous-output data still apply. A supplied invalid final
+remains incomplete; processing does not clear it to automatically re-sign it.
+
+`complete: true` means that all input scripts verify under the selected rules
+with the required supplied input data. It does not establish confirmation,
+unspentness, maturity, finality, sufficient fees or acceptance by the destination.
+Use the destination node's `testmempoolaccept` before broadcasting. Sending,
+address issuance, mining and admission do not accept this override; ordinary
+wallet sends and external-signer fee bumps use one local selection through
+PSBT filling, signing and extraction. GUI PSBT processing also retains one
+selection for each open or sign action, including its analysis and status
+display. A later Broadcast action selects current local rules again; mempool
+admission always follows the current chain. See the
+[offline tutorial](offline-signing-tutorial.md) for separate address provisioning.
+
 ### Tidecoin-specific PSBT behavior
 
-- External signing requires a full previous transaction for each unfinished
-  legacy signing target, including legacy P2SH. All enrolled targets are checked
-  before any device signs. Newly returned legacy partial signatures and finals
-  enforce the same requirement. Native witness inputs and wrapped v0 retain their
-  existing data requirements; unrelated inputs and unchanged verified finals are
-  preserved. See [external signing](external-signer.md#signing-responses-and-completion).
+- Legacy inputs, including legacy P2SH, require the matching full previous
+  transaction (`non_witness_utxo`) for signing and for verification of existing
+  final fields. A `witness_utxo` summary alone does not establish a legacy input's
+  amount or locking script. Without the full record, finalization/extraction
+  remains incomplete and `analyzepsbt` omits fee and size estimates and requests
+  an updater. `has_utxo` still reports whether an output record is present.
+  Wallet processing supplies the full record when the wallet knows the previous
+  transaction, including for already finalized inputs. Contradictory supplied
+  summaries are rejected, not replaced silently.
+- Supported native witness inputs and wrapped v0 may still use output summaries.
+  Finalized wrapped-v0 inputs are classified using the redeem program in their
+  final scriptSig, since finalization removes the separate `redeem_script` field.
+  Witness-only amounts are not independently checked against the chain, and a
+  complete PSBT does not establish confirmation, unspentness or relay acceptance.
+- External signing checks every enrolled unfinished legacy target for its full
+  previous transaction before contacting a device. New legacy partial signatures
+  and all legacy finals enforce the same requirement on device-result merging.
+  Verified existing finals retain their modes and unrelated partial signatures
+  remain unchanged. See [external signing](external-signer.md#signing-responses-and-completion).
 - Existing legacy/v0 finals with undefined hash-type bytes remain verifiable
   and extractable. Mempool admission and relay require nonempty signatures to
   use `ALL`, `NONE` or `SINGLE`, optionally with `ANYONECANPAY`, so verification

@@ -99,22 +99,6 @@ std::optional<uint8_t> SchemeOverrideFromCombo(const QComboBox* combo)
     return static_cast<uint8_t>(value);
 }
 
-unsigned int GetPSBTFinalizeFlags(const ClientModel* client_model)
-{
-    unsigned int flags = STANDARD_SCRIPT_VERIFY_FLAGS;
-    if (!client_model) {
-        return flags;
-    }
-    const int tip_height = client_model->getNumBlocks();
-    const int next_height = tip_height >= 0 ? tip_height + 1 : 0;
-    if (next_height >= Params().GetConsensus().nAuxpowStartHeight) {
-        flags |= SCRIPT_VERIFY_PQ_STRICT;
-        flags |= SCRIPT_VERIFY_WITNESS_V1_512;
-        flags |= SCRIPT_VERIFY_SHA512;
-    }
-    return flags;
-}
-
 } // namespace
 int getIndexForConfTarget(int target) {
     for (unsigned int i = 0; i < confTargets.size(); i++) {
@@ -519,12 +503,12 @@ void SendCoinsDialog::presentPSBT(PartiallySignedTransaction& psbtx)
     } // msgBox.exec()
 }
 
-bool SendCoinsDialog::signWithExternalSigner(PartiallySignedTransaction& psbtx, CMutableTransaction& mtx, bool& complete) {
+bool SendCoinsDialog::signWithExternalSigner(PartiallySignedTransaction& psbtx, CMutableTransaction& mtx, bool& complete, unsigned int script_verify_flags) {
     std::optional<PSBTError> err;
     try {
         err = model->wallet().fillPSBT(std::nullopt, /*sign=*/true,
                                        /*n_signed=*/nullptr, psbtx, complete,
-                                       /*include_pqhd_origins=*/false);
+                                       /*include_pqhd_origins=*/false, /*input_errors=*/nullptr, script_verify_flags);
     } catch (const std::runtime_error& e) {
         QMessageBox::critical(nullptr, tr("Sign failed"), e.what());
         return false;
@@ -547,8 +531,7 @@ bool SendCoinsDialog::signWithExternalSigner(PartiallySignedTransaction& psbtx, 
         return false;
     }
     // fillPSBT does not always properly finalize
-    const unsigned int flags = GetPSBTFinalizeFlags(clientModel);
-    complete = FinalizeAndExtractPSBT(psbtx, mtx, flags);
+    complete = FinalizeAndExtractPSBT(psbtx, mtx, script_verify_flags);
     return true;
 }
 
@@ -595,6 +578,7 @@ void SendCoinsDialog::sendButtonClicked([[maybe_unused]] bool checked)
         assert(!model->wallet().privateKeysDisabled() || model->wallet().hasExternalSigner());
         bool broadcast = true;
         if (model->wallet().hasExternalSigner()) {
+            const auto rules = model->wallet().getTransactionRules();
             CMutableTransaction mtx = CMutableTransaction{*(m_current_transaction->getWtx())};
             PartiallySignedTransaction psbtx(mtx);
             bool complete = false;
@@ -602,10 +586,10 @@ void SendCoinsDialog::sendButtonClicked([[maybe_unused]] bool checked)
             // from being called prematurely and is not expensive.
             const auto err{model->wallet().fillPSBT(std::nullopt, /*sign=*/false,
                                                     /*n_signed=*/nullptr, psbtx, complete,
-                                                    /*include_pqhd_origins=*/false)};
+                                                    /*include_pqhd_origins=*/false, /*input_errors=*/nullptr, rules.flags)};
             assert(!complete);
             assert(!err);
-            send_failure = !signWithExternalSigner(psbtx, mtx, complete);
+            send_failure = !signWithExternalSigner(psbtx, mtx, complete, rules.flags);
             // Don't broadcast when user rejects it on the device or there's a failure:
             broadcast = complete && !send_failure;
             if (!send_failure) {
