@@ -34,7 +34,7 @@ set(CLIENT_VERSION_RC 2)
 set(CLIENT_VERSION_IS_RELEASE "true")
 set(COPYRIGHT_YEAR "2026")
 
-# During the enabling of the CXX and CXXOBJ languages, we modify
+# For the C, CXX and OBJCXX languages, we modify
 # CMake's compiler/linker invocation strings by appending the content
 # of the user-defined `APPEND_*` variables, which allows overriding
 # any flag. We also ensure that the APPEND_* flags are considered
@@ -45,6 +45,8 @@ set(COPYRIGHT_YEAR "2026")
 # for the current toolchain, or by a toolchain file." We do our best
 # to set it before the `project()` command.
 set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
+  CMAKE_C_COMPILE_OBJECT
+  CMAKE_C_LINK_EXECUTABLE
   CMAKE_CXX_COMPILE_OBJECT
   CMAKE_OBJCXX_COMPILE_OBJECT
   CMAKE_CXX_LINK_EXECUTABLE
@@ -183,6 +185,9 @@ set(APPEND_CXXFLAGS "" CACHE STRING "(Objective) C++ compiler flags that are app
 set(APPEND_LDFLAGS "" CACHE STRING "Linker flags that are appended to the command line after all other flags added by the build system. This variable is intended for debugging and special builds.")
 # Appending to this low-level rule variables is the only way to
 # guarantee that the flags appear at the end of the command line.
+string(APPEND CMAKE_C_COMPILE_OBJECT " ${APPEND_CPPFLAGS} ${APPEND_CFLAGS}")
+string(APPEND CMAKE_C_CREATE_SHARED_LIBRARY " ${APPEND_LDFLAGS}")
+string(APPEND CMAKE_C_LINK_EXECUTABLE " ${APPEND_LDFLAGS}")
 string(APPEND CMAKE_CXX_COMPILE_OBJECT " ${APPEND_CPPFLAGS} ${APPEND_CXXFLAGS}")
 string(APPEND CMAKE_CXX_CREATE_SHARED_LIBRARY " ${APPEND_LDFLAGS}")
 string(APPEND CMAKE_CXX_LINK_EXECUTABLE " ${APPEND_LDFLAGS}")
@@ -226,6 +231,7 @@ if(BUILD_FOR_FUZZING)
 endif()
 
 include(TryAppendCXXFlags)
+include(TryAppendCFlags)
 include(TryAppendLinkerFlag)
 
 # Redefine/adjust per-configuration flags.
@@ -372,8 +378,11 @@ if(SANITIZERS)
     RESULT_VAR cxx_supports_sanitizers
     SKIP_LINK
   )
-  if(NOT cxx_supports_sanitizers)
-    message(FATAL_ERROR "Compiler did not accept requested flags.")
+  try_append_c_flags("-fsanitize=${sanitize_opts}" TARGET sanitize_interface
+    RESULT_VAR c_supports_sanitizers
+  )
+  if(NOT cxx_supports_sanitizers OR NOT c_supports_sanitizers)
+    message(FATAL_ERROR "C or C++ compiler did not accept requested sanitizer flags.")
   endif()
 
   # Some compilers (e.g. GCC) require additional libraries like libasan,
@@ -480,6 +489,22 @@ else()
   )
 endif()
 
+# C implementations share the common warning policy, but not C++-only options
+# such as -Woverloaded-virtual or -Wsuggest-override.
+if(MSVC)
+  foreach(flag IN ITEMS /W3 /wd4018 /wd4146 /wd4244 /wd4267 /wd4715 /wd4805)
+    try_append_c_flags("${flag}" TARGET warn_interface)
+  endforeach()
+else()
+  foreach(flag IN ITEMS -Wall -Wextra -Wgnu "-Wformat -Wformat-security"
+      -Wvla -Wredundant-decls -Wdate-time -Wimplicit-fallthrough -Wunreachable-code -Wundef)
+    try_append_c_flags("${flag}" TARGET warn_interface)
+  endforeach()
+  try_append_c_flags("-Wunused-parameter" TARGET warn_interface
+    IF_CHECK_PASSED "-Wno-unused-parameter"
+  )
+endif()
+
 configure_file(cmake/script/Coverage.cmake Coverage.cmake USE_SOURCE_PERMISSIONS COPYONLY)
 configure_file(cmake/script/CoverageFuzz.cmake CoverageFuzz.cmake USE_SOURCE_PERMISSIONS COPYONLY)
 configure_file(cmake/script/CoverageInclude.cmake.in CoverageInclude.cmake USE_SOURCE_PERMISSIONS @ONLY)
@@ -519,26 +544,27 @@ else()
 
   # _FORTIFY_SOURCE requires that there is some level of optimization,
   # otherwise it does nothing and just creates a compiler warning.
-  try_append_cxx_flags("-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3"
-    RESULT_VAR cxx_supports_fortify_source
-    SOURCE "int main() {
+  set(fortify_source_test "int main(void) {
             # if !defined __OPTIMIZE__ || __OPTIMIZE__ <= 0
               #error
             #endif
-            }"
+            return 0;
+          }")
+  try_append_cxx_flags("-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3" TARGET core_interface SKIP_LINK
+    SOURCE "${fortify_source_test}"
   )
-  if(cxx_supports_fortify_source)
-    target_compile_options(core_interface INTERFACE
-      -U_FORTIFY_SOURCE
-      -D_FORTIFY_SOURCE=3
-    )
-  endif()
-  unset(cxx_supports_fortify_source)
+  try_append_c_flags("-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3" TARGET core_interface
+    SOURCE "${fortify_source_test}"
+  )
+  unset(fortify_source_test)
 
   try_append_cxx_flags("-Wstack-protector" TARGET core_interface SKIP_LINK)
+  try_append_c_flags("-Wstack-protector" TARGET core_interface)
   try_append_cxx_flags("-fstack-protector-all" TARGET core_interface)
+  try_append_c_flags("-fstack-protector-all" TARGET core_interface)
   if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|x64|amd64|AMD64|i[3-6]86)$")
     try_append_cxx_flags("-fcf-protection=full" TARGET core_interface)
+    try_append_c_flags("-fcf-protection=full" TARGET core_interface)
   endif()
 
   if(MINGW OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -546,13 +572,16 @@ else()
     # See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=90458 for more details.
   else()
     try_append_cxx_flags("-fstack-clash-protection" TARGET core_interface)
+    try_append_c_flags("-fstack-clash-protection" TARGET core_interface)
   endif()
 
   if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
     if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
       try_append_cxx_flags("-mbranch-protection=bti" TARGET core_interface SKIP_LINK)
+      try_append_c_flags("-mbranch-protection=bti" TARGET core_interface)
     else()
       try_append_cxx_flags("-mbranch-protection=standard" TARGET core_interface SKIP_LINK)
+      try_append_c_flags("-mbranch-protection=standard" TARGET core_interface)
     endif()
   endif()
 
@@ -598,8 +627,9 @@ if(WERROR)
     set(werror_flag "-Werror")
   endif()
   try_append_cxx_flags(${werror_flag} TARGET core_interface SKIP_LINK RESULT_VAR compiler_supports_werror)
-  if(NOT compiler_supports_werror)
-    message(FATAL_ERROR "WERROR set but ${werror_flag} is not usable.")
+  try_append_c_flags(${werror_flag} TARGET core_interface RESULT_VAR c_compiler_supports_werror)
+  if(NOT compiler_supports_werror OR NOT c_compiler_supports_werror)
+    message(FATAL_ERROR "WERROR set but ${werror_flag} is not usable for C or C++.")
   endif()
   unset(werror_flag)
 endif()

@@ -5,11 +5,16 @@ original files from PQClean commit
 `3730b32aa50ba9e712592c1476bdd048f5f6ed7e`, so reconstructing our source does not
 depend on the continued availability of the archived repository.
 
-The snapshot contains 119 original files: the six clean implementation
-directories, the two shared FIPS202 files, and PQClean's README. It includes the
+The snapshot contains 120 original files: the six clean implementation
+directories, the two shared FIPS202 files, `common/compat.h`, and PQClean's README. It includes the
 implementation licenses and upstream Makefiles. It contains no Tidecoin changes.
 The checked-in archive's SHA-256 digest and selection paths are recorded in
 `../VERSIONS.toml`. Original per-file license terms still apply.
+
+The compatibility header is preserved so its Clang version-macro correction is
+also reconstructed. Its original contents match Tidecoin's imported header
+exactly. Adding it does not change the origin revision or any of the other
+119 original files.
 
 Ordinary checks need no Git-origin cache and use no network:
 

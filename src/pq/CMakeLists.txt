@@ -73,6 +73,27 @@ target_link_libraries(tidecoin_quantum
     tidecoin_util
 )
 
+if(SANITIZERS AND CMAKE_C_COMPILER_ID MATCHES "Clang")
+  # PQ arithmetic intentionally uses unsigned wraparound and rotations.
+  # Limit exceptions to those optional integer diagnostics; keep ASan, TSan and
+  # all undefined-behavior checks (including signed overflow/shifts) enabled.
+  set(pq_integer_ignorelist "${PROJECT_SOURCE_DIR}/test/sanitizer_suppressions/pq_integer")
+  add_library(pq_integer_interface INTERFACE)
+  try_append_c_flags("-fsanitize-ignorelist=\"${pq_integer_ignorelist}\"" TARGET pq_integer_interface
+    RESULT_VAR c_supports_pq_integer_ignorelist
+  )
+  if(NOT c_supports_pq_integer_ignorelist)
+    message(FATAL_ERROR "Clang did not accept the PQ integer sanitizer exceptions.")
+  endif()
+  target_link_libraries(tidecoin_quantum PRIVATE pq_integer_interface)
+  get_target_property(pq_sources tidecoin_quantum SOURCES)
+  foreach(source IN LISTS pq_sources)
+    if(source MATCHES "\\.c$")
+      set_property(SOURCE "${source}" APPEND PROPERTY OBJECT_DEPENDS "${pq_integer_ignorelist}")
+    endif()
+  endforeach()
+endif()
+
 target_include_directories(tidecoin_quantum
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

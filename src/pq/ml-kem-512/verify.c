@@ -43,7 +43,7 @@ void PQCLEAN_MLKEM512_CLEAN_cmov(uint8_t *r, const uint8_t *x, size_t len, uint8
 
     PQCLEAN_PREVENT_BRANCH_HACK(b);
 
-    b = -b;
+    b = (uint8_t)-b;
     for (i = 0; i < len; i++) {
         r[i] ^= b & (r[i] ^ x[i]);
     }
@@ -62,6 +62,6 @@ void PQCLEAN_MLKEM512_CLEAN_cmov(uint8_t *r, const uint8_t *x, size_t len, uint8
 *              uint8_t b:        Condition bit; has to be in {0,1}
 **************************************************/
 void PQCLEAN_MLKEM512_CLEAN_cmov_int16(int16_t *r, int16_t v, uint16_t b) {
-    b = -b;
+    b = (uint16_t)-b;
     *r ^= b & ((*r) ^ v);
 }

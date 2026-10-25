@@ -72,8 +72,8 @@ hunks and patches that touch files outside their declared scope. Naming a file
 in the manifest does not exempt its contents from comparison.
 
 Algorithm component directories are checked in full except the two explicitly
-ignored upstream Makefiles. The shared FIPS202 component explicitly selects
-`fips202.c` and `fips202.h`; Tidecoin-native wrappers and adapters are maintained
+ignored upstream Makefiles. The shared components explicitly select
+`fips202.c`, `fips202.h` and `compat.h`; Tidecoin-native wrappers and adapters are maintained
 directly and are not reconstructed from PQClean. The original snapshot retains
 the upstream Makefiles even though Tidecoin uses its own build configuration.
 

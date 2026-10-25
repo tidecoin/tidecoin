@@ -13,7 +13,7 @@ index 8752f56499b6f2bed54e6ae0706669f609df65ac..73f843e32f75de62dd8df4d64e200037
  int PQCLEAN_MLDSA65_CLEAN_crypto_sign_signature_ctx(uint8_t *sig, size_t *siglen,
          const uint8_t *m, size_t mlen,
 diff --git a/src/pq/ml-dsa-65/poly.c b/src/pq/ml-dsa-65/poly.c
-index a5a5e751375591c14b36d24523be7aa0d5e3667a..2a1aec0f79db1299c54f219bcd9a87c3edb60b29 100644
+index a5a5e751375591c14b36d24523be7aa0d5e3667a..c0a4b746d85c06136d8dd08b65b0dee8220121a4 100644
 --- a/src/pq/ml-dsa-65/poly.c
 +++ b/src/pq/ml-dsa-65/poly.c
 @@ -1,3 +1,4 @@
@@ -21,6 +21,19 @@ index a5a5e751375591c14b36d24523be7aa0d5e3667a..2a1aec0f79db1299c54f219bcd9a87c3
  #include "ntt.h"
  #include "params.h"
  #include "poly.h"
+@@ -398,10 +399,10 @@ static unsigned int rej_eta(int32_t *a,
+         t1 = buf[pos++] >> 4;
+
+         if (t0 < 9) {
+-            a[ctr++] = 4 - t0;
++            a[ctr++] = 4 - (int32_t)t0;
+         }
+         if (t1 < 9 && ctr < len) {
+-            a[ctr++] = 4 - t1;
++            a[ctr++] = 4 - (int32_t)t1;
+         }
+     }
+
 @@ -439,6 +440,7 @@ void PQCLEAN_MLDSA65_CLEAN_poly_uniform_eta(poly *a,
          ctr += rej_eta(a->coeffs + ctr, N - ctr, buf, STREAM256_BLOCKBYTES);
      }
@@ -37,7 +50,12 @@ index a5a5e751375591c14b36d24523be7aa0d5e3667a..2a1aec0f79db1299c54f219bcd9a87c3
  }
 
  /*************************************************
-@@ -510,6 +513,7 @@ void PQCLEAN_MLDSA65_CLEAN_poly_challenge(poly *c, const uint8_t seed[CTILDEBYTE
+@@ -506,10 +509,11 @@ void PQCLEAN_MLDSA65_CLEAN_poly_challenge(poly *c, const uint8_t seed[CTILDEBYTE
+         } while (b > i);
+
+         c->coeffs[i] = c->coeffs[b];
+-        c->coeffs[b] = 1 - 2 * (signs & 1);
++        c->coeffs[b] = 1 - 2 * (int32_t)(signs & 1);
          signs >>= 1;
      }
      shake256_inc_ctx_release(&state);

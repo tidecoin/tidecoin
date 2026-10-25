@@ -13,6 +13,7 @@
 #include <hash.h>
 #include <key.h>
 #include <policy/policy.h>
+#include <pq/pq_api.h>
 #include <rpc/util.h>
 #include <script/script.h>
 #include <script/script_error.h>
@@ -34,10 +35,15 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <map>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
 #include <vector>
 
+#include <boost/test/results_collector.hpp>
 #include <boost/test/unit_test.hpp>
 
 #include <univalue.h>
@@ -46,9 +52,6 @@ extern "C" {
 #include <pq/falcon-512/api.h>
 #include <pq/falcon-512/inner.h>
 }
-
-// Uncomment if you want to output updated JSON tests.
-// #define UPDATE_JSON_TESTS
 
 using namespace util::hex_literals;
 
@@ -188,6 +191,7 @@ private:
     uint32_t flags;
     int scriptError{SCRIPT_ERR_OK};
     CAmount nValue;
+    std::optional<CAmount> signing_prevout_amount;
 
     void DoPush()
     {
@@ -244,6 +248,14 @@ public:
         return *this;
     }
 
+    // Override only the spent-output metadata used to sign. The transaction,
+    // current-input amount and metadata used to verify remain unchanged.
+    TestBuilder& SigningPrevoutAmount(CAmount amount)
+    {
+        signing_prevout_amount = amount;
+        return *this;
+    }
+
     TestBuilder& Opcode(const opcodetype& _op)
     {
         DoPush();
@@ -276,8 +288,10 @@ public:
         (void)lenS;
         std::vector<unsigned char> vchSig;
         if (sigversion == SigVersion::WITNESS_V1_512) {
+            CTxOut spent_output{creditTx->vout[0]};
+            if (signing_prevout_amount) spent_output.nValue = *signing_prevout_amount;
             PrecomputedTransactionData txdata;
-            txdata.Init(spendTx, {creditTx->vout[0]}, true);
+            txdata.Init(spendTx, {spent_output}, true);
             uint512 hash;
             BOOST_REQUIRE(SignatureHash512(hash, script, spendTx, 0, nHashType, amount, &txdata));
             key.Sign512(hash, vchSig, legacy_mode);
@@ -344,7 +358,7 @@ public:
     {
         DoPush();
         UniValue array(UniValue::VARR);
-        if (!scriptWitness.stack.empty()) {
+        if (!scriptWitness.stack.empty() || nValue != 0) {
             UniValue wit(UniValue::VARR);
             for (unsigned i = 0; i < scriptWitness.stack.size(); i++) {
                 wit.push_back(HexStr(scriptWitness.stack[i]));
@@ -358,11 +372,6 @@ public:
         array.push_back(FormatScriptError((ScriptError_t)scriptError));
         array.push_back(comment);
         return array;
-    }
-
-    std::string GetComment() const
-    {
-        return comment;
     }
 };
 
@@ -378,22 +387,47 @@ std::string JSONPrettyPrint(const UniValue& univalue)
     return ret;
 }
 
-void WriteGeneratedScriptVectors(const std::string& raw_entries, const char* output_path, bool emit_full_json)
+// Signatures remain randomized. Compare stable case identities and metadata,
+// and execute both generated and stored cases to check their script results.
+using ScriptVectorMetadata = std::tuple<std::string, unsigned int, ScriptError_t, CAmount, size_t>;
+using ScriptVectorMap = std::map<std::string, ScriptVectorMetadata>;
+
+ScriptVectorMap GetScriptVectorMetadata(const UniValue& vectors)
 {
-    FILE* file = fsbridge::fopen(output_path, "w");
-    if (emit_full_json) {
-        std::string body = raw_entries;
-        if (body.ends_with(",\n")) {
-            body.resize(body.size() - 2);
-        } else if (!body.empty() && body.back() == ',') {
-            body.pop_back();
+    BOOST_REQUIRE(vectors.isArray());
+    ScriptVectorMap result;
+    for (const UniValue& row : vectors.getValues()) {
+        BOOST_REQUIRE(row.isArray() && !row.empty());
+        const size_t pos{row[0].isArray() ? 1U : 0U};
+        BOOST_REQUIRE_EQUAL(row.size(), pos + 5);
+        CAmount amount{0};
+        size_t witness_items{0};
+        if (pos != 0) {
+            BOOST_REQUIRE(!row[0].empty());
+            witness_items = row[0].size() - 1;
+            amount = AmountFromValue(row[0][witness_items]);
         }
-        const std::string wrapped = "[\n" + body + (body.empty() ? "" : "\n") + "]\n";
-        fputs(wrapped.c_str(), file);
-    } else {
-        fputs(raw_entries.c_str(), file);
+        const std::string& id{row[pos + 4].get_str()};
+        BOOST_REQUIRE(!id.empty());
+        const ScriptVectorMetadata metadata{row[pos + 1].get_str(), ParseScriptFlags(row[pos + 2].get_str()),
+                                            ParseScriptError(row[pos + 3].get_str()), amount, witness_items};
+        BOOST_REQUIRE_MESSAGE(result.emplace(id, metadata).second, "Duplicate script case: " + id);
     }
-    fclose(file);
+    return result;
+}
+
+void WriteGeneratedScriptVectors(const UniValue& vectors, const char* output_path)
+{
+    std::ofstream file{fs::PathFromString(output_path)};
+    BOOST_REQUIRE_MESSAGE(file.is_open(), "Cannot open script fixture output: " << output_path);
+    file << "[\n";
+    for (size_t i = 0; i < vectors.size(); ++i) {
+        if (i != 0) file << ",\n";
+        file << JSONPrettyPrint(vectors[i]);
+    }
+    file << "\n]\n";
+    file.close();
+    BOOST_REQUIRE_MESSAGE(file.good(), "Cannot write script fixture output: " << output_path);
 }
 } // namespace
 
@@ -402,17 +436,8 @@ BOOST_FIXTURE_TEST_SUITE(script_tests, ScriptTest)
 BOOST_AUTO_TEST_CASE(script_build)
 {
     const std::string_view vector_json{std::string_view{json_tests::script_tests_pq}};
-    const char* const default_gen_output{"script_tests_pq.json.gen"};
     const char* const env_gen_output{std::getenv("TIDE_SCRIPT_TESTS_GEN_OUTPUT")};
     const bool regenerate_from_env{env_gen_output != nullptr && env_gen_output[0] != '\0'};
-#ifdef UPDATE_JSON_TESTS
-    const bool emit_generated_json{true};
-#else
-    const bool emit_generated_json{regenerate_from_env};
-#endif
-    // PQ signatures are intentionally non-deterministic (Falcon nonce randomness), so
-    // exact JSON membership checks against static fixtures are not stable.
-    const bool verify_json_membership{false};
 
     CKey key0, key1, key2, key3, key4;
     {
@@ -420,10 +445,18 @@ BOOST_AUTO_TEST_CASE(script_build)
         key0.Set(key0_secret.begin(), key0_secret.end());
         BOOST_REQUIRE_MESSAGE(key0.IsValid(), "SCRIPT_BUILD_KEY0_SECRET_HEX is invalid");
     }
-    key1.MakeNewKey(pq::SchemeId::FALCON_512);
-    key2.MakeNewKey(pq::SchemeId::FALCON_512);
-    key3.MakeNewKey(pq::SchemeId::FALCON_512);
-    key4.MakeNewKey(pq::SchemeId::FALCON_512);
+    // Keep the historical key0 for the fixed legacy-only signature. Derive the
+    // other test keys from fixed material without changing signing randomness.
+    uint8_t key_tag{1};
+    for (CKey* key : {&key1, &key2, &key3, &key4}) {
+        std::array<uint8_t, 64> material{};
+        material.back() = key_tag++;
+        std::vector<uint8_t> pubkey;
+        pq::SecureKeyBytes secret;
+        BOOST_REQUIRE(pq::KeyGenFromSeed(/*pqhd_version=*/1, pq::SchemeId::FALCON_512, material, pubkey, secret));
+        key->Set(secret.begin(), secret.end());
+        BOOST_REQUIRE(key->IsValid());
+    }
 
     const CPubKey pubkey0 = key0.GetPubKey();
     const CPubKey pubkey1 = key1.GetPubKey();
@@ -1121,6 +1154,14 @@ BOOST_AUTO_TEST_CASE(script_build)
                                 "PQ WIT-V1512-SIGHASH-SINGLE v1_512", witness_v1_512_flags, false, WitnessMode::SH, 1, 1)
                                    .PushWitSig(key0, 1, SIGHASH_SINGLE, 32, 32, SigVersion::WITNESS_V1_512)
                                    .PushWitRedeem());
+    for (const auto& [mode, name] : {std::pair{SIGHASH_ALL, "ALL"}, std::pair{SIGHASH_NONE, "NONE"}, std::pair{SIGHASH_SINGLE, "SINGLE"}}) {
+        tests.push_back(TestBuilder(CScript() << ToByteVector(pubkey0) << OP_CHECKSIG,
+                                    strprintf("PQ WIT-V1512-SPENT-AMOUNT-%s v1_512", name), witness_v1_512_flags, false, WitnessMode::SH, 1, 1)
+                                       .SigningPrevoutAmount(2)
+                                       .PushWitSig(key0, 1, mode, 32, 32, SigVersion::WITNESS_V1_512)
+                                       .PushWitRedeem()
+                                       .ScriptError(SCRIPT_ERR_EVAL_FALSE));
+    }
     tests.push_back(TestBuilder(CScript() << ToByteVector(pubkey0) << OP_CHECKSIG,
                                 "PQ WIT-V1512-SIGHASH-ALL-ACP v1_512", witness_v1_512_flags, false, WitnessMode::SH, 1, 1)
                                    .PushWitSig(key0, 1, SIGHASH_ALL | SIGHASH_ANYONECANPAY, 32, 32, SigVersion::WITNESS_V1_512)
@@ -1177,38 +1218,46 @@ BOOST_AUTO_TEST_CASE(script_build)
                                    .PushSig(key0)
                                    .Push("0").AsWit()
                                    .ScriptError(SCRIPT_ERR_WITNESS_UNEXPECTED));
-    tests.push_back(TestBuilder(CScript() << ToByteVector(pubkey0) << OP_CHECKSIG,
-                                "PQ P2SH(v1_512 P2WSH)", witness_v1_512_flags, true, WitnessMode::SH, 1, 1)
-                                   .PushWitSig(key0, 1, SIGHASH_ALL, 32, 32, SigVersion::WITNESS_V1_512)
-                                   .PushWitRedeem()
-                                   .PushRedeem()
-                                   .ScriptError(SCRIPT_ERR_WITNESS_UNEXPECTED));
-
-    std::set<std::string> tests_set;
-
-    if (verify_json_membership) {
-        UniValue json_tests = read_json(vector_json);
-
-        for (unsigned int idx = 0; idx < json_tests.size(); idx++) {
-            const UniValue& tv = json_tests[idx];
-            tests_set.insert(JSONPrettyPrint(tv.get_array()));
-        }
+    // A wrapped 64-byte v1 program remains ordinary script in both eras.
+    // Its witness is never evaluated, so a wrapped amount-commitment case
+    // would not test signature hashing. Cover the actual spending rules.
+    for (const auto& [era, flags] : {std::pair{"PRE", witness_flags}, std::pair{"POST", witness_v1_512_flags}}) {
+        const CScript script{CScript() << ToByteVector(pubkey0) << OP_CHECKSIG};
+        tests.push_back(TestBuilder(script, strprintf("PQ P2SH WIT-V1512-P2SH-%s-EMPTY v1_512", era), flags, true, WitnessMode::SH, 1, 1)
+                            .PushRedeem());
+        tests.push_back(TestBuilder(script, strprintf("PQ P2SH WIT-V1512-P2SH-%s-CLEANSTACK v1_512", era), flags | SCRIPT_VERIFY_CLEANSTACK, true, WitnessMode::SH, 1, 1)
+                            .PushRedeem()
+                            .ScriptError(SCRIPT_ERR_CLEANSTACK));
+        tests.push_back(TestBuilder(script, strprintf("PQ P2SH WIT-V1512-P2SH-%s-WITNESS v1_512", era), flags, true, WitnessMode::SH, 1, 1)
+                            .PushWitSig(key0, 1, SIGHASH_ALL, 32, 32, SigVersion::WITNESS_V1_512)
+                            .PushWitRedeem()
+                            .PushRedeem()
+                            .ScriptError(SCRIPT_ERR_WITNESS_UNEXPECTED));
     }
 
-    std::string strGen;
+    UniValue generated{UniValue::VARR};
     for (TestBuilder& test : tests) {
         test.Test(*this);
-        std::string str = JSONPrettyPrint(test.GetJSON());
-        if (emit_generated_json) {
-            strGen += str + ",\n";
-        } else if (verify_json_membership && tests_set.count(str) == 0) {
-            BOOST_CHECK_MESSAGE(false, "Missing auto script_valid test: " + test.GetComment());
-        }
+        generated.push_back(test.GetJSON());
     }
 
-    if (emit_generated_json) {
-        const char* const output_path{regenerate_from_env ? env_gen_output : default_gen_output};
-        WriteGeneratedScriptVectors(strGen, output_path, regenerate_from_env);
+    const auto generated_metadata{GetScriptVectorMetadata(generated)};
+    if (regenerate_from_env) {
+        BOOST_REQUIRE_MESSAGE(boost::unit_test::results_collector.results(boost::unit_test::framework::current_test_case_id()).p_assertions_failed == 0,
+                              "Refusing to write script fixtures after a failed generated case");
+        WriteGeneratedScriptVectors(generated, env_gen_output);
+    } else {
+        const auto stored_metadata{GetScriptVectorMetadata(read_json(vector_json))};
+        for (const auto& [id, metadata] : generated_metadata) {
+            const auto stored{stored_metadata.find(id)};
+            BOOST_CHECK_MESSAGE(stored != stored_metadata.end(), "Generated script case missing from fixture: " + id);
+            if (stored != stored_metadata.end()) {
+                BOOST_CHECK_MESSAGE(stored->second == metadata, "Script case metadata differs; regenerate fixture: " + id);
+            }
+        }
+        for (const auto& [id, metadata] : stored_metadata) {
+            BOOST_CHECK_MESSAGE(generated_metadata.contains(id), "Stored script case missing from generator: " + id);
+        }
     }
 }
 BOOST_AUTO_TEST_CASE(script_json_test)

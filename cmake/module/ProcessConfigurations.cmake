@@ -87,18 +87,18 @@ function(set_default_config config)
   endif()
 endfunction()
 
-function(remove_cxx_flag_from_all_configs flag)
+function(remove_flag_from_all_configs language flag)
   get_all_configs(all_configs)
   foreach(config IN LISTS all_configs)
     string(TOUPPER "${config}" config_uppercase)
-    set(flags "${CMAKE_CXX_FLAGS_${config_uppercase}}")
+    set(flags "${CMAKE_${language}_FLAGS_${config_uppercase}}")
     separate_arguments(flags)
     list(FILTER flags EXCLUDE REGEX "${flag}")
     list(JOIN flags " " new_flags)
-    set(CMAKE_CXX_FLAGS_${config_uppercase} "${new_flags}" PARENT_SCOPE)
-    set(CMAKE_CXX_FLAGS_${config_uppercase} "${new_flags}"
+    set(CMAKE_${language}_FLAGS_${config_uppercase} "${new_flags}" PARENT_SCOPE)
+    set(CMAKE_${language}_FLAGS_${config_uppercase} "${new_flags}"
       CACHE STRING
-      "Flags used by the CXX compiler during ${config_uppercase} builds."
+      "Flags used by the ${language} compiler during ${config_uppercase} builds."
       FORCE
     )
   endforeach()
@@ -119,11 +119,14 @@ set_default_config(RelWithDebInfo)
 include(TryAppendCXXFlags)
 
 # We leave assertions on.
-if(MSVC)
-  remove_cxx_flag_from_all_configs(/DNDEBUG)
-else()
-  remove_cxx_flag_from_all_configs(-DNDEBUG)
-
+foreach(language IN ITEMS C CXX)
+  if(MSVC)
+    remove_flag_from_all_configs(${language} /DNDEBUG)
+  else()
+    remove_flag_from_all_configs(${language} -DNDEBUG)
+  endif()
+endforeach()
+if(NOT MSVC)
   # Adjust flags used by the CXX compiler during RELEASE builds.
   # Prefer -O2 optimization level. (-O3 is CMake's default for Release for many compilers.)
   replace_cxx_flag_in_config(Release -O3 -O2)
@@ -154,6 +157,7 @@ else()
   unset(cxx_flags_debug_overridden)
 endif()
 
+set(CMAKE_C_FLAGS_COVERAGE "-g -Og --coverage")
 set(CMAKE_CXX_FLAGS_COVERAGE "-g -Og --coverage")
 set(CMAKE_OBJCXX_FLAGS_COVERAGE "-g -Og --coverage")
 set(CMAKE_EXE_LINKER_FLAGS_COVERAGE "--coverage")

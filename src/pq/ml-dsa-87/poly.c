@@ -400,11 +400,11 @@ static unsigned int rej_eta(int32_t *a,
 
         if (t0 < 15) {
             t0 = t0 - (205 * t0 >> 10) * 5;
-            a[ctr++] = 2 - t0;
+            a[ctr++] = 2 - (int32_t)t0;
         }
         if (t1 < 15 && ctr < len) {
             t1 = t1 - (205 * t1 >> 10) * 5;
-            a[ctr++] = 2 - t1;
+            a[ctr++] = 2 - (int32_t)t1;
         }
     }
 
@@ -511,7 +511,7 @@ void PQCLEAN_MLDSA87_CLEAN_poly_challenge(poly *c, const uint8_t seed[CTILDEBYTE
         } while (b > i);
 
         c->coeffs[i] = c->coeffs[b];
-        c->coeffs[b] = 1 - 2 * (signs & 1);
+        c->coeffs[b] = 1 - 2 * (int32_t)(signs & 1);
         signs >>= 1;
     }
     shake256_inc_ctx_release(&state);
@@ -542,8 +542,8 @@ void PQCLEAN_MLDSA87_CLEAN_polyeta_pack(uint8_t *r, const poly *a) {
         t[6] = (uint8_t) (ETA - a->coeffs[8 * i + 6]);
         t[7] = (uint8_t) (ETA - a->coeffs[8 * i + 7]);
 
-        r[3 * i + 0]  = (t[0] >> 0) | (t[1] << 3) | (t[2] << 6);
-        r[3 * i + 1]  = (t[2] >> 2) | (t[3] << 1) | (t[4] << 4) | (t[5] << 7);
+        r[3 * i + 0]  = (uint8_t)((t[0] >> 0) | (t[1] << 3) | (t[2] << 6));
+        r[3 * i + 1]  = (uint8_t)((t[2] >> 2) | (t[3] << 1) | (t[4] << 4) | (t[5] << 7));
         r[3 * i + 2]  = (t[5] >> 1) | (t[6] << 2) | (t[7] << 5);
     }
 

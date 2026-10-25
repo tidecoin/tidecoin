@@ -122,7 +122,7 @@ if [ -z "$NO_DEPENDS" ]; then
   bash -c "$SHELL_OPTS make $MAKEJOBS -C depends HOST=$HOST $DEP_OPTS LOG=1"
 fi
 
-TIDECOIN_CONFIG_ALL="-DBUILD_BENCH=ON -DBUILD_FUZZ_BINARY=ON"
+TIDECOIN_CONFIG_ALL="-DBUILD_BENCH=ON -DBUILD_FUZZ_BINARY=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
 if [ -z "$NO_DEPENDS" ]; then
   TIDECOIN_CONFIG_ALL="${TIDECOIN_CONFIG_ALL} -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_DIR/$HOST/toolchain.cmake"
 fi
@@ -142,16 +142,14 @@ BASE_BUILD_DIR=${BASE_BUILD_DIR:-$BASE_SCRATCH_DIR/build-$HOST}
 
 TIDECOIN_CONFIG_ALL="$TIDECOIN_CONFIG_ALL -DCMAKE_INSTALL_PREFIX=$BASE_OUTDIR -Werror=dev"
 
-if [[ "${RUN_TIDY}" == "true" ]]; then
-  TIDECOIN_CONFIG_ALL="$TIDECOIN_CONFIG_ALL -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
-fi
-
 bash -c "cmake -S $BASE_ROOT_DIR -B ${BASE_BUILD_DIR} $TIDECOIN_CONFIG_ALL $TIDECOIN_CONFIG" || (
   cd "${BASE_BUILD_DIR}"
   # shellcheck disable=SC2046
   cat $(cmake -P "${BASE_ROOT_DIR}/ci/test/GetCMakeLogFiles.cmake")
   false
 )
+
+python3 "${BASE_ROOT_DIR}/contrib/devtools/check_c_compile_commands.py" "${BASE_BUILD_DIR}"
 
 # shellcheck disable=SC2086
 cmake --build "${BASE_BUILD_DIR}" "$MAKEJOBS" --target all $GOAL || (

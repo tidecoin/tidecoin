@@ -24,7 +24,7 @@ UNALIGNED_VECTOR_POLYFILL_GCC
 
 #elif defined(__GNUC__) && defined(__clang__)
 
-#  if __clang__major__ < 9
+#  if __clang_major__ < 9
 /* Versions of Clang pre-9.0 don't have __m256*_u types */
 UNALIGNED_VECTOR_POLYFILL_GCC
 #  endif

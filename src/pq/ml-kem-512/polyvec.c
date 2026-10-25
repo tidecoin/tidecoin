@@ -21,8 +21,8 @@ void PQCLEAN_MLKEM512_CLEAN_polyvec_compress(uint8_t r[KYBER_POLYVECCOMPRESSEDBY
     for (i = 0; i < KYBER_K; i++) {
         for (j = 0; j < KYBER_N / 4; j++) {
             for (k = 0; k < 4; k++) {
-                t[k]  = a->vec[i].coeffs[4 * j + k];
-                t[k] += ((int16_t)t[k] >> 15) & KYBER_Q;
+                t[k]  = (uint16_t)a->vec[i].coeffs[4 * j + k];
+                t[k] = (uint16_t)(t[k] + (((int16_t)t[k] >> 15) & KYBER_Q));
                 /*      t[k]  = ((((uint32_t)t[k] << 10) + KYBER_Q/2)/ KYBER_Q) & 0x3ff; */
                 d0 = t[k];
                 d0 <<= 10;

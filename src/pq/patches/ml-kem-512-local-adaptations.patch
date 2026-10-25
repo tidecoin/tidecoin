@@ -145,7 +145,7 @@ index ed79efd15986a4ba56b2d28823b6074e5445532a..771cca189d0e915346eb79cf1b7d51ae
 +
  #endif
 diff --git a/src/pq/ml-kem-512/poly.c b/src/pq/ml-kem-512/poly.c
-index e179de8830df7ff1a00dbb9b03a9bf48967c7e7f..ee5b639ccac2353c1bf3379752e264b699abd769 100644
+index e179de8830df7ff1a00dbb9b03a9bf48967c7e7f..b38fafc7b9a054a69740e39e52682b0dd6fa442e 100644
 --- a/src/pq/ml-kem-512/poly.c
 +++ b/src/pq/ml-kem-512/poly.c
 @@ -1,3 +1,4 @@
@@ -153,6 +153,30 @@ index e179de8830df7ff1a00dbb9b03a9bf48967c7e7f..ee5b639ccac2353c1bf3379752e264b6
  #include "cbd.h"
  #include "ntt.h"
  #include "params.h"
+@@ -79,10 +80,10 @@ void PQCLEAN_MLKEM512_CLEAN_poly_tobytes(uint8_t r[KYBER_POLYBYTES], const poly
+
+     for (i = 0; i < KYBER_N / 2; i++) {
+         // map to positive standard representatives
+-        t0  = a->coeffs[2 * i];
+-        t0 += ((int16_t)t0 >> 15) & KYBER_Q;
+-        t1 = a->coeffs[2 * i + 1];
+-        t1 += ((int16_t)t1 >> 15) & KYBER_Q;
++        t0  = (uint16_t)a->coeffs[2 * i];
++        t0 = (uint16_t)(t0 + (((int16_t)t0 >> 15) & KYBER_Q));
++        t1 = (uint16_t)a->coeffs[2 * i + 1];
++        t1 = (uint16_t)(t1 + (((int16_t)t1 >> 15) & KYBER_Q));
+         r[3 * i + 0] = (uint8_t)(t0 >> 0);
+         r[3 * i + 1] = (uint8_t)((t0 >> 8) | (t1 << 4));
+         r[3 * i + 2] = (uint8_t)(t1 >> 4);
+@@ -141,7 +142,7 @@ void PQCLEAN_MLKEM512_CLEAN_poly_tomsg(uint8_t msg[KYBER_INDCPA_MSGBYTES], const
+     for (i = 0; i < KYBER_N / 8; i++) {
+         msg[i] = 0;
+         for (j = 0; j < 8; j++) {
+-            t  = a->coeffs[8 * i + j];
++            t  = (uint32_t)a->coeffs[8 * i + j];
+             // t += ((int16_t)t >> 15) & KYBER_Q;
+             // t  = (((t << 1) + KYBER_Q/2)/KYBER_Q) & 1;
+             t <<= 1;
 @@ -170,6 +171,7 @@ void PQCLEAN_MLKEM512_CLEAN_poly_getnoise_eta1(poly *r, const uint8_t seed[KYBER
      uint8_t buf[KYBER_ETA1 * KYBER_N / 4];
      prf(buf, sizeof(buf), seed, nonce);
@@ -170,7 +194,7 @@ index e179de8830df7ff1a00dbb9b03a9bf48967c7e7f..ee5b639ccac2353c1bf3379752e264b6
 
 
 diff --git a/src/pq/ml-kem-512/polyvec.c b/src/pq/ml-kem-512/polyvec.c
-index 5111056df2d5f7b917a1bd06a5931326ac13a582..c1c00775f24eeee4c86e159baa6690a980c32bc4 100644
+index 5111056df2d5f7b917a1bd06a5931326ac13a582..a67b4f2aa71fae98f8fbae889fcdd11aef77b0dd 100644
 --- a/src/pq/ml-kem-512/polyvec.c
 +++ b/src/pq/ml-kem-512/polyvec.c
 @@ -1,3 +1,4 @@
@@ -178,6 +202,17 @@ index 5111056df2d5f7b917a1bd06a5931326ac13a582..c1c00775f24eeee4c86e159baa6690a9
  #include "params.h"
  #include "poly.h"
  #include "polyvec.h"
+@@ -20,8 +21,8 @@ void PQCLEAN_MLKEM512_CLEAN_polyvec_compress(uint8_t r[KYBER_POLYVECCOMPRESSEDBY
+     for (i = 0; i < KYBER_K; i++) {
+         for (j = 0; j < KYBER_N / 4; j++) {
+             for (k = 0; k < 4; k++) {
+-                t[k]  = a->vec[i].coeffs[4 * j + k];
+-                t[k] += ((int16_t)t[k] >> 15) & KYBER_Q;
++                t[k]  = (uint16_t)a->vec[i].coeffs[4 * j + k];
++                t[k] = (uint16_t)(t[k] + (((int16_t)t[k] >> 15) & KYBER_Q));
+                 /*      t[k]  = ((((uint32_t)t[k] << 10) + KYBER_Q/2)/ KYBER_Q) & 0x3ff; */
+                 d0 = t[k];
+                 d0 <<= 10;
 @@ -153,6 +154,7 @@ void PQCLEAN_MLKEM512_CLEAN_polyvec_basemul_acc_montgomery(poly *r, const polyve
      }
 
@@ -186,6 +221,19 @@ index 5111056df2d5f7b917a1bd06a5931326ac13a582..c1c00775f24eeee4c86e159baa6690a9
  }
 
  /*************************************************
+diff --git a/src/pq/ml-kem-512/reduce.c b/src/pq/ml-kem-512/reduce.c
+index c3bbc145eaccebb4c110525fb2772d92fe0cb973..532e4bee648ff1c4a9b782111fe91b0740dccf9d 100644
+--- a/src/pq/ml-kem-512/reduce.c
++++ b/src/pq/ml-kem-512/reduce.c
+@@ -16,7 +16,7 @@
+ int16_t PQCLEAN_MLKEM512_CLEAN_montgomery_reduce(int32_t a) {
+     int16_t t;
+
+-    t = (int16_t)a * QINV;
++    t = (int16_t)((int16_t)a * QINV);
+     t = (a - (int32_t)t * KYBER_Q) >> 16;
+     return t;
+ }
 diff --git a/src/pq/ml-kem-512/symmetric-shake.c b/src/pq/ml-kem-512/symmetric-shake.c
 index 5c788e406cf774b9b302f536147f1f5af3df1f92..6443be1d721946f861df6eff6617edd29632c9f5 100644
 --- a/src/pq/ml-kem-512/symmetric-shake.c
@@ -204,7 +252,7 @@ index 5c788e406cf774b9b302f536147f1f5af3df1f92..6443be1d721946f861df6eff6617edd2
 
  /*************************************************
 diff --git a/src/pq/ml-kem-512/verify.c b/src/pq/ml-kem-512/verify.c
-index b913890413191884db6dfd823e80f3c5418bf234..267fed7f8b4fc17f64740c45cb4a6f037a4856d8 100644
+index b913890413191884db6dfd823e80f3c5418bf234..9f660d40c2271c8a91c489378165d490abdf1910 100644
 --- a/src/pq/ml-kem-512/verify.c
 +++ b/src/pq/ml-kem-512/verify.c
 @@ -1,4 +1,4 @@
@@ -213,3 +261,20 @@ index b913890413191884db6dfd823e80f3c5418bf234..267fed7f8b4fc17f64740c45cb4a6f03
  #include "verify.h"
  #include <stddef.h>
  #include <stdint.h>
+@@ -43,7 +43,7 @@ void PQCLEAN_MLKEM512_CLEAN_cmov(uint8_t *r, const uint8_t *x, size_t len, uint8
+
+     PQCLEAN_PREVENT_BRANCH_HACK(b);
+
+-    b = -b;
++    b = (uint8_t)-b;
+     for (i = 0; i < len; i++) {
+         r[i] ^= b & (r[i] ^ x[i]);
+     }
+@@ -62,6 +62,6 @@ void PQCLEAN_MLKEM512_CLEAN_cmov(uint8_t *r, const uint8_t *x, size_t len, uint8
+ *              uint8_t b:        Condition bit; has to be in {0,1}
+ **************************************************/
+ void PQCLEAN_MLKEM512_CLEAN_cmov_int16(int16_t *r, int16_t v, uint16_t b) {
+-    b = -b;
++    b = (uint16_t)-b;
+     *r ^= b & ((*r) ^ v);
+ }

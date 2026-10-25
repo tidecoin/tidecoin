@@ -2798,7 +2798,7 @@ BOOST_AUTO_TEST_CASE(locked_pqhd_load_still_rejects_invalid_policy)
     const auto path{m_args.GetDataDirBase() / "locked-invalid-policy"};
     PrepareLockedSeedOnly(path);
     auto wallet{Open(path)};
-    const PQHDPolicy valid{WITH_LOCK(wallet->cs_wallet, return *wallet->GetPQHDPolicy())};
+    const PQHDPolicy valid{WITH_LOCK(wallet->cs_wallet, return PQHDPolicy{*wallet->GetPQHDPolicy()})};
     for (int variant = 0; variant < 7; ++variant) {
         BOOST_TEST_CONTEXT("invalid policy variant " << variant) {
             PQHDPolicy policy{valid};

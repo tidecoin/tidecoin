@@ -548,15 +548,44 @@ Primary artifacts:
 - `test/lint/lint-pq-script-coverage.py` and
   `test/lint/pq_script*_required_cells.json` (required-cell and policy gates)
 
-Regenerate `script_tests_pq.json` from `script_build`:
+`script_build` generates every row of `script_tests_pq.json`. Its keys are fixed,
+but signatures intentionally use normal signing randomness. Regeneration is
+therefore reproducible by case identity and metadata, not by identical signature
+bytes. Each row has a unique case name; numbered coverage cells also have unique
+IDs. Normal `script_build` runs compare both directions against the checked-in
+fixture, checking the output script, flags, exact expected error, previous amount
+and witness item count. `script_json_test` separately executes every stored row.
+The comparison does not compare scriptSig or witness payload bytes; both stored
+and generated cases must produce their declared script result.
+
+The native-v1 spent-amount cases sign with different cached spent-output amounts
+while keeping the spending transaction and current-input amount unchanged. This
+isolates the aggregate amount commitment. Wrapped 64-byte v1 programs remain
+ordinary script: their cases test empty witnesses, CLEANSTACK and unexpected
+nonempty witnesses before and after activation, rather than an amount commitment.
+
+Regenerate a candidate from `script_build` and copy it only if generation succeeds:
 
 ```shell
-TIDE_SCRIPT_TESTS_GEN_OUTPUT=src/test/data/script_tests_pq.json \
+cmake --build build --target test_tidecoin && \
+TIDE_SCRIPT_TESTS_GEN_OUTPUT=/tmp/script_tests_pq.json \
   build/bin/test_tidecoin \
   --run_test=script_tests/script_build \
   --catch_system_errors=no \
-  --color_output=no
+  --color_output=no && \
+  cp /tmp/script_tests_pq.json src/test/data/script_tests_pq.json
+
+cmake --build build --target test_tidecoin
+build/bin/test_tidecoin --run_test=script_tests
+test/lint/lint-pq-script-coverage.py
 ```
+
+Rebuilding is required because the unit test embeds the fixture. Generation
+refuses to write after a failed generated case. Review case additions/removals
+and keep `pq_script_required_cells.json` synchronized; never append cases only
+to the JSON file. To check regeneration twice, write two candidates and compare
+the same metadata fields, allowing randomized signatures to differ. No change to
+production randomness is needed.
 
 Regenerate `script_assets_test.json` from the functional dumper and minimizer:
 
@@ -683,6 +712,30 @@ cmake -B build -DSANITIZERS=address,undefined
 # Enable the thread sanitizer
 cmake -B build -DSANITIZERS=thread
 ```
+
+These options are checked separately with the C and C++ compilers and apply to
+both languages, including the PQ and Yespower C implementations. Assertions remain
+enabled in both languages in Release and RelWithDebInfo builds. C sources also
+receive supported warning and stack-protector options, and `WERROR` applies to both
+languages. `APPEND_CFLAGS` adds C-only options; `APPEND_CPPFLAGS` applies to both.
+
+CI checks the actual compile commands before building. To run the same check:
+
+```bash
+cmake -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+python3 contrib/devtools/check_c_compile_commands.py build
+```
+
+This checks flag propagation, not runtime results. Build and run the tests with
+the selected sanitizer configuration as well; linking its runtime into a binary
+alone does not show that its C objects were instrumented.
+
+Clang PQ builds use `test/sanitizer_suppressions/pq_integer` for intentional
+unsigned modular arithmetic and unsigned rotations reported by the optional
+integer checks. Its sections apply only to those diagnostics in the listed
+functions/files. Address, thread, signed overflow, signed shift and shift-exponent
+checks remain enabled. The compile-command check also rejects unscoped exceptions
+or sections disabling those checks.
 
 If you are compiling with GCC you will typically need to install corresponding
 "san" libraries to actually compile with these flags, e.g. libasan for the

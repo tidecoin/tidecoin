@@ -1,0 +1,35 @@
+# Compile-time Clang exceptions for defined PQ arithmetic, not undefined behavior.
+# Every entry is in an explicit diagnostic section. Never add an unsectioned
+# entry or an [undefined], [address], [thread] or [signed-integer-overflow] section.
+# See https://clang.llvm.org/docs/SanitizerSpecialCaseList.html.
+
+# Falcon field arithmetic, integer-emulated binary64 and PRNG operations use
+# modulo-2^32/2^64 arithmetic and unsigned all-ones masks throughout these files.
+[unsigned-integer-overflow]
+src:*/pq/falcon-*/codec.c
+src:*/pq/falcon-*/common.c
+src:*/pq/falcon-*/fpr.c
+src:*/pq/falcon-*/fpr.h
+src:*/pq/falcon-*/keygen.c
+src:*/pq/falcon-*/rng.c
+src:*/pq/falcon-*/sign.c
+src:*/pq/falcon-*/vrfy.c
+# The legacy norm check accumulates modulo 2^32 and records overflow in ng.
+fun:tidecoin_falcon512_is_short_legacy
+# Montgomery reduction and KEM coefficient/mask operations use unsigned modular
+# intermediates, then select the intended low bits.
+fun:PQCLEAN_MLDSA*_CLEAN_montgomery_reduce
+fun:PQCLEAN_MLKEM512_CLEAN_poly_compress
+fun:PQCLEAN_MLKEM512_CLEAN_poly_tomsg
+fun:PQCLEAN_MLKEM512_CLEAN_verify
+
+# Unsigned rotations and packed-word shifts deliberately discard high bits.
+# This section does NOT disable signed shift-base or shift-exponent checking.
+[unsigned-shift-base]
+fun:KeccakF1600_StatePermute
+src:*/pq/falcon-*/codec.c
+src:*/pq/falcon-*/fpr.c
+src:*/pq/falcon-*/fpr.h
+src:*/pq/falcon-*/keygen.c
+src:*/pq/falcon-*/rng.c
+fun:PQCLEAN_MLKEM512_CLEAN_poly_tomsg

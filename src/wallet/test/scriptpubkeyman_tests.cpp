@@ -21,6 +21,10 @@
 #include <boost/test/unit_test.hpp>
 
 #include <array>
+#include <map>
+#include <set>
+#include <utility>
+#include <vector>
 
 namespace wallet {
 struct WalletFlagTxnTestAccess
@@ -381,7 +385,15 @@ BOOST_AUTO_TEST_CASE(PQHDWitnessV1IssuanceGatedPreAuxpow)
     BOOST_CHECK(wrapped_v0->GetNewDestination(OutputType::P2SH_SEGWIT));
 }
 
-BOOST_AUTO_TEST_CASE(PQHDDefaultDescriptorsUseFamilyPaths)
+// Keep these expectations independent of PQHDPurposeForOutputType and pqhd_params.h.
+static constexpr std::array<std::pair<OutputType, uint32_t>, 4> DEFAULT_PQHD_PURPOSES{{
+    {OutputType::LEGACY, 10044},
+    {OutputType::P2SH_SEGWIT, 10049},
+    {OutputType::BECH32, 10084},
+    {OutputType::BECH32PQ, 10087},
+}};
+
+BOOST_FIXTURE_TEST_CASE(PQHDDefaultDescriptorsUseFamilyPaths, ActivePQWalletTestingSetup)
 {
     REQUIRE_WALLET_TESTS_ENABLED();
     std::unique_ptr<interfaces::Chain>& chain = m_node.chain;
@@ -392,27 +404,110 @@ BOOST_AUTO_TEST_CASE(PQHDDefaultDescriptorsUseFamilyPaths)
     wallet.SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
     wallet.SetupDescriptorScriptPubKeyMans();
 
-    for (const OutputType type : {OutputType::LEGACY, OutputType::P2SH_SEGWIT, OutputType::BECH32}) {
+    BOOST_REQUIRE_GE(wallet.GetTargetHeightForOutputs(), Params().GetConsensus().nAuxpowStartHeight);
+    const auto policy = wallet.GetPQHDPolicy();
+    BOOST_REQUIRE(policy);
+    BOOST_CHECK(policy->default_seed_id == policy->default_change_seed_id);
+    std::map<std::pair<OutputType, bool>, uint256> manager_ids;
+    std::set<CPubKey> pubkeys;
+    for (const auto& [type, purpose] : DEFAULT_PQHD_PURPOSES) {
         for (const bool internal : {false, true}) {
             auto* manager = dynamic_cast<DescriptorScriptPubKeyMan*>(wallet.GetScriptPubKeyMan(type, internal));
             BOOST_REQUIRE(manager);
             LOCK(manager->cs_desc_man);
             const auto info = manager->GetWalletDescriptor().descriptor->GetPQHDKeyPathInfo();
             BOOST_REQUIRE(info);
-            BOOST_REQUIRE_EQUAL(info->path.size(), 5U);
-            BOOST_CHECK_EQUAL(info->path[0] & 0x7FFFFFFFU, PQHDPurposeForOutputType(type));
-            BOOST_CHECK_EQUAL(info->path[1] & 0x7FFFFFFFU, Params().PQHDCoinType());
+            const std::vector<uint32_t> expected_path{
+                0x80000000U | purpose, 0x80000001U, 0x80000007U, 0x80000000U, 0x80000000U | uint32_t{internal}};
+            BOOST_CHECK_EQUAL_COLLECTIONS(info->path.begin(), info->path.end(), expected_path.begin(), expected_path.end());
+            BOOST_CHECK(info->is_range);
+            BOOST_CHECK(info->seed_id == policy->default_seed_id);
+            manager_ids.emplace(std::make_pair(type, internal), manager->GetID());
+            const auto provider = manager->GetSigningProviderForIndex(0);
+            BOOST_REQUIRE(provider);
+            BOOST_REQUIRE_EQUAL(provider->pubkeys.size(), 1U);
+            BOOST_CHECK(pubkeys.insert(provider->pubkeys.begin()->second).second);
         }
     }
 
-    // pkh and wpkh at the same index would otherwise share HASH160(pubkey).
-    const auto legacy = wallet.GetNewDestination(OutputType::LEGACY, "");
-    const auto bech32 = wallet.GetNewDestination(OutputType::BECH32, "");
-    BOOST_REQUIRE(legacy && bech32);
-    const auto* pkh = std::get_if<PKHash>(&*legacy);
-    const auto* wpkh = std::get_if<WitnessV0KeyHash>(&*bech32);
-    BOOST_REQUIRE(pkh && wpkh);
-    BOOST_CHECK(uint160(*pkh) != uint160(*wpkh));
+    // Reapplying policy must find the existing family paths even without active
+    // bindings, rather than create duplicates or select another family's manager.
+    for (const auto& [slot, id] : manager_ids) {
+        wallet.DeactivateScriptPubKeyMan(id, slot.first, slot.second);
+    }
+    const auto manager_count = wallet.GetAllScriptPubKeyMans().size();
+    BOOST_REQUIRE(wallet.SetPQHDPolicy(/*receive_scheme=*/7, /*change_scheme=*/7));
+    BOOST_CHECK_EQUAL(wallet.GetAllScriptPubKeyMans().size(), manager_count);
+    for (const auto& [slot, id] : manager_ids) {
+        const auto [type, internal] = slot;
+        auto* manager = wallet.GetScriptPubKeyMan(type, internal);
+        BOOST_REQUIRE(manager);
+        BOOST_CHECK(manager->GetID() == id);
+        const auto dest = internal ? wallet.GetNewChangeDestination(type) : wallet.GetNewDestination(type, "");
+        BOOST_REQUIRE(dest);
+        BOOST_CHECK(manager->IsMine(GetScriptForDestination(*dest)));
+    }
+}
+
+// No chainstate is installed by BasicTestingSetup, so switching Params here does
+// not invalidate a live chain's reference to its parameters.
+BOOST_FIXTURE_TEST_CASE(PQHDDefaultDescriptorsUseNetworkCoinTypes, BasicTestingSetup)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    struct SeedProvider final : SigningProvider {
+        const std::array<uint8_t, 32> seed{};
+        uint256 ID() const { return pqhd::ComputeSeedID32AsUint256(seed); }
+        std::optional<pqhd::SecureSeed32> GetPQHDSeed(const uint256& id) const override
+        {
+            if (id != ID()) return std::nullopt;
+            std::optional<pqhd::SecureSeed32> result{std::in_place};
+            if (!result->Set(seed)) return std::nullopt;
+            return result;
+        }
+    } seed_provider;
+    const std::array<std::pair<ChainType, uint32_t>, 3> networks{{
+        {ChainType::MAIN, 6868}, {ChainType::TESTNET, 1}, {ChainType::REGTEST, 1},
+    }};
+    std::map<ChainType, std::vector<CPubKey>> network_pubkeys;
+    for (const auto& [network, coin_type] : networks) {
+        SelectParams(network);
+        BOOST_CHECK_EQUAL(Params().PQHDCoinType(), coin_type);
+        // Exercise v1 generation for every network without changing its actual
+        // activation settings (mainnet still has activation disabled).
+        auto consensus = Params().GetConsensus();
+        consensus.nAuxpowStartHeight = 0;
+        std::set<CPubKey> family_pubkeys;
+        for (const auto& [type, purpose] : DEFAULT_PQHD_PURPOSES) {
+            for (const bool internal : {false, true}) {
+                const auto descriptor = GeneratePQHDWalletDescriptor(seed_provider.ID(), /*scheme_prefix=*/7,
+                    type, internal, consensus, /*target_height=*/0);
+                const auto info = descriptor.descriptor->GetPQHDKeyPathInfo();
+                BOOST_REQUIRE(info);
+                const std::vector<uint32_t> expected_path{
+                    0x80000000U | purpose, 0x80000000U | coin_type, 0x80000007U, 0x80000000U, 0x80000000U | uint32_t{internal}};
+                BOOST_CHECK_EQUAL_COLLECTIONS(info->path.begin(), info->path.end(), expected_path.begin(), expected_path.end());
+                BOOST_CHECK(info->is_range);
+                BOOST_CHECK(info->seed_id == seed_provider.ID());
+                BOOST_CHECK(descriptor.descriptor->GetOutputType() == type);
+                std::vector<CScript> scripts;
+                FlatSigningProvider expanded;
+                BOOST_REQUIRE(descriptor.descriptor->Expand(/*pos=*/0, seed_provider, scripts, expanded));
+                BOOST_REQUIRE_EQUAL(scripts.size(), 1U);
+                BOOST_REQUIRE_EQUAL(expanded.pubkeys.size(), 1U);
+                const auto& pubkey = expanded.pubkeys.begin()->second;
+                BOOST_CHECK(family_pubkeys.insert(pubkey).second);
+                network_pubkeys[network].push_back(pubkey);
+            }
+        }
+    }
+    // Testnet and regtest deliberately share a domain. Mainnet must share no
+    // index-0 key with either, even across output families or receive/change.
+    BOOST_CHECK(network_pubkeys.at(ChainType::TESTNET) == network_pubkeys.at(ChainType::REGTEST));
+    for (const auto& main_pubkey : network_pubkeys.at(ChainType::MAIN)) {
+        for (const auto& test_pubkey : network_pubkeys.at(ChainType::TESTNET)) {
+            BOOST_CHECK(main_pubkey != test_pubkey);
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(PQHDDefaultKeypoolAndInternalScheme)

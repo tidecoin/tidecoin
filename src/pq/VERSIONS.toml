@@ -1,5 +1,5 @@
 schema_version = 2
-manifest_updated_on = "2026-10-24"
+manifest_updated_on = "2026-10-25"
 
 [maintenance]
 owner = "Tidecoin developers"
@@ -13,9 +13,10 @@ default_upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
 [[snapshots]]
 upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
 archive_file = "src/pq/upstream/pqclean-3730b32aa50ba9e712592c1476bdd048f5f6ed7e.tar.gz"
-sha256 = "437950c7579b7e016d286d676227255dce943b63c3199e1b84adcd338e3b3cb7"
+sha256 = "5f904f43aad0e2bfc6486aed026a25a302cf396af09d346f9f48f57b48e79ac5"
 paths = [
   "README.md",
+  "common/compat.h",
   "common/fips202.c",
   "common/fips202.h",
   "crypto_kem/ml-kem-512/clean",
@@ -28,6 +29,15 @@ paths = [
 
 [settings]
 ignored_upstream_files = ["Makefile", "Makefile.Microsoft_nmake"]
+
+[[patches]]
+id = "shared-compat-clang-version"
+patch_file = "src/pq/patches/shared-compat-clang-version.patch"
+summary = "Use Clang's actual major-version macro in the compiler compatibility shim."
+reason = "Avoid treating modern Clang as pre-9 and make the C compiler's undefined-macro check pass."
+owner = "Tidecoin developers"
+consensus_impact = "none"
+files = ["src/pq/compat.h"]
 
 [[patches]]
 id = "shared-fips202-cleanup"
@@ -74,7 +84,7 @@ files = [
 id = "ml-dsa-44-local-adaptations"
 patch_file = "src/pq/patches/ml-dsa-44-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for ML-DSA-44 clean implementation."
-reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear key-generation/signing workspaces and lower-level sampling, packing and multiplication temporaries."
+reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear key-generation/signing workspaces and lower-level sampling, packing and multiplication temporaries; make signed coefficient construction and byte truncation explicit without changing encoded results."
 owner = "Tidecoin developers"
 consensus_impact = "indirect"
 files = [
@@ -88,7 +98,7 @@ files = [
 id = "ml-dsa-65-local-adaptations"
 patch_file = "src/pq/patches/ml-dsa-65-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for ML-DSA-65 clean implementation."
-reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear key-generation/signing workspaces and lower-level sampling, packing and multiplication temporaries."
+reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear key-generation/signing workspaces and lower-level sampling, packing and multiplication temporaries; make signed coefficient construction and byte truncation explicit without changing encoded results."
 owner = "Tidecoin developers"
 consensus_impact = "indirect"
 files = [
@@ -102,7 +112,7 @@ files = [
 id = "ml-dsa-87-local-adaptations"
 patch_file = "src/pq/patches/ml-dsa-87-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for ML-DSA-87 clean implementation."
-reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear key-generation/signing workspaces and lower-level sampling, packing and multiplication temporaries."
+reason = "Expose deterministic keygen API, route RNG to the Tidecoin adapter, and clear key-generation/signing workspaces and lower-level sampling, packing and multiplication temporaries; make signed coefficient construction and byte truncation explicit without changing encoded results."
 owner = "Tidecoin developers"
 consensus_impact = "indirect"
 files = [
@@ -116,7 +126,7 @@ files = [
 id = "ml-kem-512-local-adaptations"
 patch_file = "src/pq/patches/ml-kem-512-local-adaptations.patch"
 summary = "Tidecoin integration adaptations for ML-KEM-512 clean implementation."
-reason = "Route includes to Tidecoin-local adapters and expose C++-safe declarations used by local transport wrappers; clear owned seed, key, noise and multiplication workspaces."
+reason = "Route includes to Tidecoin-local adapters and expose C++-safe declarations used by local transport wrappers; clear owned seed, key, noise and multiplication workspaces, and make modular narrowing and mask conversions explicit."
 owner = "Tidecoin developers"
 consensus_impact = "indirect"
 files = [
@@ -127,8 +137,21 @@ files = [
   "src/pq/ml-kem-512/verify.c",
   "src/pq/ml-kem-512/poly.c",
   "src/pq/ml-kem-512/polyvec.c",
+  "src/pq/ml-kem-512/reduce.c",
   "src/pq/ml-kem-512/symmetric-shake.c",
 ]
+
+[[components]]
+name = "shared-compat"
+kind = "shared"
+status = "patched"
+local_path = "src/pq"
+upstream_path = "common"
+include_files = ["compat.h"]
+upstream_commit = "3730b32aa50ba9e712592c1476bdd048f5f6ed7e"
+import_commit = "11d6245a25b4b5e4cf519937a582e9e86cac6f26"
+local_patch_set = ["shared-compat-clang-version"]
+notes = "PQClean-derived compiler compatibility shim, included in reconstruction when correcting the Clang version macro."
 
 [[components]]
 name = "shared-fips202"

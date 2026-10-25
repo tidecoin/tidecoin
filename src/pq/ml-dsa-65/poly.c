@@ -399,10 +399,10 @@ static unsigned int rej_eta(int32_t *a,
         t1 = buf[pos++] >> 4;
 
         if (t0 < 9) {
-            a[ctr++] = 4 - t0;
+            a[ctr++] = 4 - (int32_t)t0;
         }
         if (t1 < 9 && ctr < len) {
-            a[ctr++] = 4 - t1;
+            a[ctr++] = 4 - (int32_t)t1;
         }
     }
 
@@ -509,7 +509,7 @@ void PQCLEAN_MLDSA65_CLEAN_poly_challenge(poly *c, const uint8_t seed[CTILDEBYTE
         } while (b > i);
 
         c->coeffs[i] = c->coeffs[b];
-        c->coeffs[b] = 1 - 2 * (signs & 1);
+        c->coeffs[b] = 1 - 2 * (int32_t)(signs & 1);
         signs >>= 1;
     }
     shake256_inc_ctx_release(&state);

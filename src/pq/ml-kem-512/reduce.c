@@ -16,7 +16,7 @@
 int16_t PQCLEAN_MLKEM512_CLEAN_montgomery_reduce(int32_t a) {
     int16_t t;
 
-    t = (int16_t)a * QINV;
+    t = (int16_t)((int16_t)a * QINV);
     t = (a - (int32_t)t * KYBER_Q) >> 16;
     return t;
 }

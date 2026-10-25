@@ -132,14 +132,20 @@ def parse_script_fixture_rows(errors: list[str]) -> list[dict[str, str]]:
         return []
 
     parsed = []
+    seen_comments: set[str] = set()
     for idx, row in enumerate(data):
         if not isinstance(row, list):
+            fail(errors, f"script fixture row #{idx} must be an array")
             continue
         pos = 1 if row and isinstance(row[0], list) else 0
-        if len(row) < pos + 4:
+        if len(row) != pos + 5 or not all(isinstance(value, str) for value in row[pos:]):
+            fail(errors, f"script fixture row #{idx} must have scripts, flags, result and a case name")
             continue
         expected = row[pos + 3]
-        comment = row[pos + 4] if len(row) > pos + 4 and isinstance(row[pos + 4], str) else ""
+        comment = row[pos + 4]
+        if not comment or comment in seen_comments:
+            fail(errors, f"script fixture row #{idx} has an empty or duplicate case name: {comment}")
+        seen_comments.add(comment)
         parsed.append(
             {
                 "index": str(idx),
@@ -195,7 +201,9 @@ def check_required_script_cells(errors: list[str], rows: list[dict[str, str]]) -
     cell_polarity: dict[str, dict[str, int]] = {}
     for row in rows:
         for cell_id in extract_cell_ids(row["comment"]):
-            if cell_id not in cell_polarity:
+            if cell_id in cell_polarity:
+                fail(errors, f"duplicate script cell ID: {cell_id}")
+            else:
                 cell_polarity[cell_id] = {"ok": 0, "fail": 0}
             if row["expected"] == "OK":
                 cell_polarity[cell_id]["ok"] += 1
