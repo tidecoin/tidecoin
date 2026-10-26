@@ -60,20 +60,18 @@ const CBlock* AuxpowMiner::getCurrentBlock(ChainstateManager& chainman, const CT
 
     {
         LOCK(cs_main);
-        CScriptID script_id(script_pub_key);
-        auto iter = cur_blocks.find(script_id);
-        if (iter != cur_blocks.end()) {
-            block_cur = iter->second;
+        if (pindex_prev != chainman.ActiveTip()) {
+            cur_blocks.clear();
+            blocks.clear();
+            templates.clear();
         }
 
-        if (block_cur == nullptr ||
-            pindex_prev != chainman.ActiveTip() ||
-            (mempool.GetTransactionsUpdated() != tx_updated_last && GetTime() - start_time > 60)) {
-            if (pindex_prev != chainman.ActiveTip()) {
-                blocks.clear();
-                templates.clear();
-                cur_blocks.clear();
-            }
+        const CScriptID script_id(script_pub_key);
+        const auto iter = cur_blocks.find(script_id);
+        const auto tx_updated = mempool.GetTransactionsUpdated();
+        const int64_t now = GetTime();
+        if (iter == cur_blocks.end() ||
+            (tx_updated != iter->second.tx_updated && now - iter->second.created_at > 60)) {
 
             node::BlockAssembler::Options assemble_options;
             node::ApplyArgsManOptions(gArgs, assemble_options);
@@ -85,18 +83,17 @@ const CBlock* AuxpowMiner::getCurrentBlock(ChainstateManager& chainman, const CT
                 throw JSONRPCError(RPC_OUT_OF_MEMORY, "out of memory");
             }
 
-            tx_updated_last = mempool.GetTransactionsUpdated();
-            pindex_prev = chainman.ActiveTip();
-            start_time = GetTime();
-
             new_block->block.SetAuxpowVersion(true);
             new_block->block.nVersion &= ~CPureBlockHeader::MASK_AUXPOW_CHAINID_SHIFTED;
             new_block->block.nVersion |= chainman.GetConsensus().nAuxpowChainId << CPureBlockHeader::VERSION_START_BIT;
 
             block_cur = &new_block->block;
-            cur_blocks.try_emplace(script_id, block_cur);
-            blocks[block_cur->GetHash()] = block_cur;
             templates.push_back(std::move(new_block));
+            blocks[block_cur->GetHash()] = block_cur;
+            cur_blocks.insert_or_assign(script_id, CurrentBlock{block_cur, tx_updated, now});
+            pindex_prev = chainman.ActiveTip();
+        } else {
+            block_cur = iter->second.block;
         }
     }
 

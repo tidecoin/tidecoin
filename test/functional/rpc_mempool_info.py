@@ -4,6 +4,9 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test RPCs that retrieve information from the mempool."""
 
+from decimal import Decimal
+
+from test_framework.messages import COIN
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
@@ -93,6 +96,50 @@ class RPCMempoolInfoTest(BitcoinTestFramework):
 
         self.log.info("Missing txid")
         assert_raises_rpc_error(-3, "Missing txid", self.nodes[0].gettxspendingprevout, [{'vout' : 3}])
+
+        self.test_chunk_fees()
+
+    def test_chunk_fees(self):
+        node = self.nodes[0]
+        self.generate(self.wallet, 1)
+        self.log.info("Check actual chunk fees just below and above the signed 32-bit limit")
+        for fee_sats in (2**31 - 2, 2**31):
+            fee = Decimal(fee_sats) / COIN
+            # Cached Tidecoin coinbases are smaller than these fees, so combine inputs.
+            inputs = []
+            while sum(utxo["value"] for utxo in inputs) <= fee:
+                inputs.append(self.wallet.get_utxo(confirmed_only=True))
+            tx = self.wallet.send_self_transfer_multi(from_node=node, utxos_to_spend=inputs, fee_per_output=fee_sats)
+            for entry in (node.getmempoolentry(tx["txid"]), node.getrawmempool(True)[tx["txid"]]):
+                assert_equal(entry["fees"]["base"], fee)
+                assert_equal(entry["fees"]["modified"], fee)
+                assert_equal(entry["fees"]["chunk"], fee)
+                assert_equal(entry["chunkweight"], entry["weight"])
+
+        self.log.info("Check large modified parent-child chunk fees in all verbose entry views")
+        parent = self.wallet.send_self_transfer(from_node=node, confirmed_only=True, fee=Decimal("0.00001000"))
+        child = self.wallet.send_self_transfer(from_node=node, utxo_to_spend=parent["new_utxo"], fee=Decimal("0.00002000"))
+        base_fee = parent["fee"] + child["fee"]
+        total_fee = node.getmempoolinfo()["total_fee"]
+        previous_chunk_fee = int(base_fee * COIN)
+        for fee_sats in (2**31 - 2, 2**31 - 1, 2**31, 2**32 + 123, 100 * COIN):
+            node.prioritisetransaction(child["txid"], fee_delta=fee_sats - previous_chunk_fee)
+            previous_chunk_fee = fee_sats
+            chunk_fee = Decimal(fee_sats) / COIN
+            entries = node.getrawmempool(True)
+            chunk_weight = sum(entries[tx["txid"]]["weight"] for tx in (parent, child))
+            related = {
+                parent["txid"]: node.getmempoolancestors(child["txid"], True)[parent["txid"]],
+                child["txid"]: node.getmempooldescendants(parent["txid"], True)[child["txid"]],
+            }
+            for tx in (parent, child):
+                modified_fee = parent["fee"] if tx is parent else chunk_fee - parent["fee"]
+                for entry in (node.getmempoolentry(tx["txid"]), entries[tx["txid"]], related[tx["txid"]]):
+                    assert_equal(entry["fees"]["base"], tx["fee"])
+                    assert_equal(entry["fees"]["modified"], modified_fee)
+                    assert_equal(entry["fees"]["chunk"], chunk_fee)
+                    assert_equal(entry["chunkweight"], chunk_weight)
+            assert_equal(node.getmempoolinfo()["total_fee"], total_fee)
 
 
 if __name__ == '__main__':

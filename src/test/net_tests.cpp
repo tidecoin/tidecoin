@@ -34,6 +34,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 
 using namespace std::literals;
 using namespace util::hex_literals;
@@ -1416,6 +1417,85 @@ public:
 };
 
 } // namespace
+
+BOOST_AUTO_TEST_CASE(v2transport_info)
+{
+    pq::MLKEM512Keypair keypair;
+    InitTestKEMKeypair(keypair, m_rng);
+    V2Transport initiator{0, true, keypair.PublicKey(), keypair.SecretKey(), {}};
+    V2Transport responder{1, false, {}, {}, {}};
+    const auto check_info = [](const Transport& transport, TransportProtocolType type) {
+        const auto info = transport.GetInfo();
+        BOOST_CHECK(info.transport_type == type);
+        BOOST_CHECK_EQUAL(info.session_id.has_value(), type == TransportProtocolType::V2);
+        if (info.session_id) BOOST_CHECK(!info.session_id->IsNull());
+    };
+    const auto transfer = [](Transport& sender, Transport& receiver, size_t count) {
+        auto bytes = std::get<0>(sender.GetBytesToSend(false));
+        BOOST_REQUIRE_GE(bytes.size(), count);
+        bytes = bytes.first(count);
+        BOOST_REQUIRE(receiver.ReceivedBytes(bytes));
+        BOOST_REQUIRE(bytes.empty());
+        sender.MarkBytesSent(count);
+    };
+
+    check_info(initiator, TransportProtocolType::DETECTING);
+    check_info(responder, TransportProtocolType::DETECTING);
+    // The responder distinguishes v2 from v1 before receiving the full key.
+    for (size_t count : {size_t{16}, pq::MLKEM512_PUBLICKEY_BYTES - 17, size_t{1}}) {
+        transfer(initiator, responder, count);
+        check_info(responder, TransportProtocolType::DETECTING);
+        check_info(initiator, TransportProtocolType::DETECTING);
+    }
+    // The initiator must remain detecting throughout the ciphertext reply.
+    for (size_t count : {size_t{1}, pq::MLKEM512_CIPHERTEXT_BYTES - 2, size_t{1}}) {
+        transfer(responder, initiator, count);
+        check_info(initiator, TransportProtocolType::DETECTING);
+    }
+    for (bool incoming_to_initiator : {true, false}) {
+        auto& sender = incoming_to_initiator ? responder : initiator;
+        auto& receiver = incoming_to_initiator ? initiator : responder;
+        // Neither a complete terminator nor a partial version packet completes the handshake.
+        for (size_t count : std::array<size_t, 3>{BIP324PQCipher::GARBAGE_TERMINATOR_LEN - 1, 1, BIP324PQCipher::EXPANSION - 1}) {
+            transfer(sender, receiver, count);
+            check_info(receiver, TransportProtocolType::DETECTING);
+        }
+        transfer(sender, receiver, 1);
+        check_info(receiver, TransportProtocolType::V2);
+    }
+    const auto session_id = initiator.GetInfo().session_id;
+    BOOST_CHECK(responder.GetInfo().session_id == session_id);
+    for (bool incoming_to_initiator : {true, false}) {
+        auto& sender = incoming_to_initiator ? responder : initiator;
+        auto& receiver = incoming_to_initiator ? initiator : responder;
+        CSerializedNetMsg message;
+        message.m_type = "ping";
+        message.data.resize(8);
+        BOOST_REQUIRE(sender.SetMessageToSend(message));
+        transfer(sender, receiver, std::get<0>(sender.GetBytesToSend(false)).size());
+        BOOST_REQUIRE(receiver.ReceivedMessageComplete());
+        check_info(receiver, TransportProtocolType::V2);
+        BOOST_CHECK(receiver.GetInfo().session_id == session_id);
+        bool reject{false};
+        const auto received = receiver.GetReceivedMessage({}, reject);
+        BOOST_CHECK(!reject);
+        BOOST_CHECK_EQUAL(received.m_type, "ping");
+        check_info(receiver, TransportProtocolType::V2);
+        BOOST_CHECK(receiver.GetInfo().session_id == session_id);
+    }
+
+    V2Transport fallback{2, false};
+    DataStream header;
+    header << CMessageHeader(Params().MessageStart(), "version", 0);
+    auto prefix = MakeUCharSpan(header).first(15);
+    BOOST_REQUIRE(fallback.ReceivedBytes(prefix));
+    BOOST_REQUIRE(prefix.empty());
+    check_info(fallback, TransportProtocolType::DETECTING);
+    auto last = MakeUCharSpan(header).subspan(15, 1);
+    BOOST_REQUIRE(fallback.ReceivedBytes(last));
+    BOOST_REQUIRE(last.empty());
+    check_info(fallback, TransportProtocolType::V1);
+}
 
 BOOST_AUTO_TEST_CASE(v2transport_test)
 {

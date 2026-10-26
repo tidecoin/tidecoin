@@ -314,7 +314,7 @@ static void entryToJSON(const CTxMemPool& pool, UniValue& info, const CTxMemPool
     fees.pushKV("modified", ValueFromAmount(e.GetModifiedFee()));
     fees.pushKV("ancestor", ValueFromAmount(ancestor_fees));
     fees.pushKV("descendant", ValueFromAmount(descendant_fees));
-    fees.pushKV("chunk", ValueFromAmount((int)feerate.fee));
+    fees.pushKV("chunk", ValueFromAmount(feerate.fee));
     info.pushKV("fees", std::move(fees));
 
     const CTransaction& tx = e.GetTx();

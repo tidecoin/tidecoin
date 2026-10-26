@@ -10,9 +10,12 @@
 #include <node/blockstorage.h>
 #include <pow.h>
 #include <primitives/block.h>
+#include <rpc/auxpow_miner.h>
+#include <rpc/protocol.h>
 #include <script/script.h>
 #include <test/util/setup_common.h>
 #include <util/chaintype.h>
+#include <util/time.h>
 #include <validation.h>
 
 #include <boost/test/unit_test.hpp>
@@ -20,6 +23,24 @@
 #include <algorithm>
 
 namespace auxpow_tests {
+class AuxpowMinerForTest
+{
+public:
+    static CBlock Current(AuxpowMiner& miner, ChainstateManager& chainman,
+                          const CTxMemPool& mempool, const CScript& payout)
+    {
+        LOCK(miner.cs);
+        uint256 target;
+        return *miner.getCurrentBlock(chainman, mempool, payout, target);
+    }
+
+    static CBlock Saved(AuxpowMiner& miner, const uint256& hash)
+    {
+        LOCK(miner.cs);
+        return *miner.lookupSavedBlock(hash.GetHex());
+    }
+};
+
 class CAuxPowForTest
 {
 public:
@@ -261,6 +282,79 @@ BOOST_FIXTURE_TEST_CASE(auxpow_blockheader_reads_auxpow, TestingSetup)
     BOOST_CHECK(header.IsAuxpow());
     BOOST_CHECK(header.auxpow);
     BOOST_CHECK_EQUAL(header.auxpow->getParentBlockHash(), block.auxpow->getParentBlockHash());
+}
+
+BOOST_FIXTURE_TEST_CASE(auxpow_template_refresh_and_retention, TestChain100Setup)
+{
+    using auxpow_tests::AuxpowMinerForTest;
+    AuxpowMiner miner;
+    auto& chainman = *m_node.chainman;
+    auto& mempool = *m_node.mempool;
+    const CScript payout_a{CScript() << OP_TRUE};
+    const CScript payout_b{CScript() << OP_2};
+    const int64_t start{GetTime()};
+    const auto current = [&](const CScript& payout) {
+        return AuxpowMinerForTest::Current(miner, chainman, mempool, payout).GetHash();
+    };
+
+    const auto a0 = current(payout_a);
+    SetMockTime(start + 30);
+    const auto b0 = current(payout_b);
+    BOOST_CHECK(a0 != b0);
+    mempool.AddTransactionsUpdated(1);
+
+    // Each payout must wait strictly more than 60 seconds from its own creation.
+    SetMockTime(start + 60);
+    BOOST_CHECK(current(payout_a) == a0);
+    SetMockTime(start + 61);
+    const auto a1 = current(payout_a);
+    BOOST_CHECK(a1 != a0);
+    BOOST_CHECK(current(payout_a) == a1);
+    BOOST_CHECK(current(payout_b) == b0);
+    SetMockTime(start + 90);
+    BOOST_CHECK(current(payout_b) == b0);
+    SetMockTime(start + 91);
+    const auto b1 = current(payout_b);
+    BOOST_CHECK(b1 != b0);
+    BOOST_CHECK(current(payout_b) == b1);
+    BOOST_CHECK(current(payout_a) == a1);
+
+    // Time alone does not expire current or previously issued work.
+    SetMockTime(start + 3600);
+    BOOST_CHECK(current(payout_a) == a1);
+    BOOST_CHECK(current(payout_b) == b1);
+    mempool.AddTransactionsUpdated(1);
+    const auto a2 = current(payout_a);
+    const auto b2 = current(payout_b);
+    BOOST_CHECK(a2 != a1);
+    BOOST_CHECK(b2 != b1);
+    BOOST_CHECK(current(payout_a) == a2);
+    BOOST_CHECK(current(payout_b) == b2);
+
+    // Moving mock time backwards must not look like an elapsed refresh interval.
+    mempool.AddTransactionsUpdated(1);
+    SetMockTime(start + 3500);
+    BOOST_CHECK(current(payout_a) == a2);
+    BOOST_CHECK(current(payout_b) == b2);
+    for (const auto& hash : {a0, b0, a1, b1, a2, b2}) {
+        BOOST_CHECK(AuxpowMinerForTest::Saved(miner, hash).GetHash() == hash);
+    }
+
+    SetMockTime(start + 3601);
+    const auto block = CreateAndProcessBlock({}, payout_a);
+    const auto next_a = AuxpowMinerForTest::Current(miner, chainman, mempool, payout_a);
+    const auto next_b = AuxpowMinerForTest::Current(miner, chainman, mempool, payout_b);
+    BOOST_CHECK(next_a.hashPrevBlock == block.GetHash());
+    BOOST_CHECK(next_b.hashPrevBlock == block.GetHash());
+    BOOST_CHECK(current(payout_a) == next_a.GetHash());
+    BOOST_CHECK(current(payout_b) == next_b.GetHash());
+    for (const auto& hash : {a0, b0, a1, b1, a2, b2}) {
+        BOOST_CHECK_EXCEPTION(AuxpowMinerForTest::Saved(miner, hash), UniValue,
+            [](const UniValue& error) {
+                return error["code"].getInt<int>() == RPC_INVALID_PARAMETER &&
+                       error["message"].get_str() == "block hash unknown";
+            });
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

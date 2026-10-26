@@ -5,7 +5,9 @@
 """
 Test v2 transport
 """
+from io import BytesIO
 import socket
+import time
 
 from test_framework.messages import MAGIC_BYTES, NODE_P2P_V2
 from test_framework.test_framework import BitcoinTestFramework
@@ -15,6 +17,7 @@ from test_framework.util import (
     p2p_port,
     assert_raises_rpc_error
 )
+from test_framework.v2_p2p import EncryptedP2PState, KEM_CIPHERTEXT_LEN, KEM_PUBLIC_KEY_LEN
 
 
 class V2TransportTest(BitcoinTestFramework):
@@ -22,6 +25,7 @@ class V2TransportTest(BitcoinTestFramework):
         self.setup_clean_chain = True
         self.num_nodes = 5
         self.extra_args = [["-v2transport=1"], ["-v2transport=1"], ["-v2transport=0"], ["-v2transport=0"], ["-v2transport=0"]]
+        self.extra_args[0].append("-peertimeout=60")
 
     def run_test(self):
         sending_handshake = "start sending v2 handshake to peer"
@@ -30,6 +34,8 @@ class V2TransportTest(BitcoinTestFramework):
         self.disconnect_nodes(1, 2)
         self.disconnect_nodes(2, 3)
         self.disconnect_nodes(3, 4)
+
+        self.test_outbound_handshake_info()
 
         # verify local services
         network_info = self.nodes[2].getnetworkinfo()
@@ -190,6 +196,68 @@ class V2TransportTest(BitcoinTestFramework):
                 s.sendall(b'\x00')  # send out last byte
                 # should disconnect immediately
                 self.wait_until(lambda: not peer_id in [p["id"] for p in self.nodes[0].getpeerinfo()])
+
+    def test_outbound_handshake_info(self):
+        self.log.info("Check outgoing transport status through a partial handshake and timeout")
+        node = self.nodes[0]
+        start = int(time.time())
+        node.setmocktime(start)
+        try:
+            for complete in (True, False):
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+                    listener.settimeout(self.options.timeout_factor * 10)
+                    listener.bind(("127.0.0.1", 0))
+                    listener.listen(1)
+                    address = "%s:%d" % listener.getsockname()
+                    node.addconnection(address, "outbound-full-relay", v2transport=True)
+                    conn, _ = listener.accept()
+                    with conn:
+                        conn.settimeout(self.options.timeout_factor * 10)
+                        self.wait_until(lambda: any(p["addr"] == address for p in node.getpeerinfo()))
+                        peer_id = next(p["id"] for p in node.getpeerinfo() if p["addr"] == address)
+
+                        def peer_info():
+                            return next(p for p in node.getpeerinfo() if p["id"] == peer_id)
+
+                        def check_detecting():
+                            info = peer_info()
+                            assert_equal(info["transport_protocol_type"], "detecting")
+                            assert_equal(info["session_id"], "")
+
+                        check_detecting()
+                        key = b""
+                        while len(key) < KEM_PUBLIC_KEY_LEN:
+                            chunk = conn.recv(KEM_PUBLIC_KEY_LEN - len(key))
+                            assert chunk
+                            key += chunk
+                        state = EncryptedP2PState(initiating=False, net=self.chain)
+                        consumed, reply = state.respond_v2_handshake(BytesIO(key))
+                        assert_equal(consumed, KEM_PUBLIC_KEY_LEN)
+                        sent = KEM_CIPHERTEXT_LEN - 1
+                        conn.sendall(reply[:sent])
+                        self.wait_until(lambda: peer_info()["bytesrecv"] == sent)
+                        check_detecting()
+                        if complete:
+                            # Complete the ciphertext, then all but the last byte of the version packet.
+                            for end in (KEM_CIPHERTEXT_LEN, len(reply) - 1):
+                                conn.sendall(reply[sent:end])
+                                sent = end
+                                self.wait_until(lambda: peer_info()["bytesrecv"] == sent)
+                                check_detecting()
+                            conn.sendall(reply[-1:])
+                            self.wait_until(lambda: peer_info()["transport_protocol_type"] == "v2")
+                            assert_equal(peer_info()["session_id"], state.peer["session_id"].hex())
+                            node.disconnectnode(nodeid=peer_id)
+                        else:
+                            with node.assert_debug_log(
+                                expected_msgs=[f"V2 handshake timeout, disconnecting peer={peer_id}"],
+                                unexpected_msgs=[f"version handshake timeout, disconnecting peer={peer_id}"],
+                            ):
+                                node.setmocktime(start + 61)
+                                self.wait_until(lambda: all(p["id"] != peer_id for p in node.getpeerinfo()))
+                        self.wait_until(lambda: all(p["id"] != peer_id for p in node.getpeerinfo()))
+        finally:
+            node.setmocktime(0)
 
 
 if __name__ == '__main__':

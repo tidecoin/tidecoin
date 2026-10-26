@@ -54,6 +54,7 @@ class AuxpowMiningTest(BitcoinTestFramework):
 
         self.test_getauxblock()
         self.test_create_submit_auxblock()
+        self.test_cache_refresh()
 
     def test_common(self, create, submit):
         """Common code for getauxblock and createauxblock/submitauxblock."""
@@ -194,6 +195,90 @@ class AuxpowMiningTest(BitcoinTestFramework):
         auxblock1 = self.nodes[0].createauxblock(addr1)
         auxblock2 = self.nodes[0].createauxblock(addr2)
         assert auxblock1["hash"] != auxblock2["hash"]
+
+    def test_cache_refresh(self):
+        self.log.info("Check per-payout template refresh and retention until the next tip")
+        node = self.nodes[0]
+        self.generate(node, 1)
+        wallet = MiniWallet(node)
+        address_a = node.get_deterministic_priv_key().address
+        address_b = self.nodes[1].get_deterministic_priv_key().address
+        start = node.getblockheader(node.getbestblockhash())["time"] + 1
+
+        def set_time(offset):
+            for peer in self.nodes:
+                peer.setmocktime(start + offset)
+
+        set_time(0)
+        a0 = node.createauxblock(address_a)
+        set_time(30)
+        b0 = node.createauxblock(address_b)
+        assert a0["hash"] != b0["hash"]
+        tx1 = wallet.send_self_transfer(from_node=node)
+        self.sync_mempools()
+
+        set_time(60)
+        assert_equal(node.createauxblock(address_a), a0)
+        set_time(61)
+        a1 = node.createauxblock(address_a)
+        assert a1["hash"] != a0["hash"]
+        assert_equal(a1["coinbasevalue"], a0["coinbasevalue"] + int(tx1["fee"] * COIN))
+        assert_equal(node.createauxblock(address_a), a1)
+        assert_equal(node.createauxblock(address_b), b0)
+
+        set_time(90)
+        assert_equal(node.createauxblock(address_b), b0)
+        set_time(91)
+        b1 = node.createauxblock(address_b)
+        assert b1["hash"] != b0["hash"]
+        assert_equal(b1["coinbasevalue"], a1["coinbasevalue"])
+        assert_equal(node.createauxblock(address_b), b1)
+        assert_equal(node.createauxblock(address_a), a1)
+
+        tx2 = wallet.send_self_transfer(from_node=node)
+        self.sync_mempools()
+        set_time(122)
+        a2 = node.createauxblock(address_a)
+        assert a2["hash"] != a1["hash"]
+        assert_equal(a2["coinbasevalue"], a1["coinbasevalue"] + int(tx2["fee"] * COIN))
+        assert_equal(node.createauxblock(address_b), b1)
+        set_time(152)
+        b2 = node.createauxblock(address_b)
+        assert b2["hash"] != b1["hash"]
+        assert_equal(b2["coinbasevalue"], a2["coinbasevalue"])
+        assert_equal(node.createauxblock(address_a), a2)
+        assert_equal(node.createauxblock(address_b), b2)
+
+        # An unchanged mempool and a long interval do not expire outstanding work.
+        set_time(3600)
+        assert_equal(node.createauxblock(address_a), a2)
+        assert_equal(node.createauxblock(address_b), b2)
+        issued = (a0, b0, a1, b1, a2, b2)
+        for template in issued:
+            # A known template reaches proof decoding instead of "block hash unknown".
+            assert_raises_rpc_error(-1, None, node.submitauxblock, template["hash"], "x")
+
+        # Submit the oldest template after both payouts have refreshed twice.
+        proof = computeAuxpow(a0["hash"], reverseHex(a0["_target"]), True)
+        assert node.submitauxblock(a0["hash"], proof)
+        self.sync_all()
+        assert_equal(node.getbestblockhash(), a0["hash"])
+        assert_equal(len(node.getblock(a0["hash"])["tx"]), 1)
+        assert_equal(set(node.getrawmempool()), {tx1["txid"], tx2["txid"]})
+
+        # A create request observes the new tip and invalidates every old lookup.
+        next_a = node.createauxblock(address_a)
+        next_b = node.createauxblock(address_b)
+        assert_equal(next_a["previousblockhash"], a0["hash"])
+        assert_equal(next_b["previousblockhash"], a0["hash"])
+        for template in issued:
+            assert_raises_rpc_error(-8, "block hash unknown", node.submitauxblock, template["hash"], "x")
+        proof = computeAuxpow(next_b["hash"], reverseHex(next_b["_target"]), True)
+        assert node.submitauxblock(next_b["hash"], proof)
+        self.sync_all()
+        assert_equal(set(node.getblock(next_b["hash"])["tx"][1:]), {tx1["txid"], tx2["txid"]})
+        assert_equal(getCoinbaseAddr(node, next_b["hash"]), address_b)
+        assert_equal(node.getrawmempool(), [])
 
 
 if __name__ == "__main__":

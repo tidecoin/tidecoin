@@ -12,6 +12,7 @@
 #include <uint256.h>
 #include <univalue.h>
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <string>
@@ -31,14 +32,19 @@ class AuxpowMinerForTest;
 class AuxpowMiner
 {
 private:
+    struct CurrentBlock {
+        const CBlock* block;
+        unsigned int tx_updated;
+        int64_t created_at;
+    };
+
     mutable RecursiveMutex cs;
+    // Retain all issued work until a request observes a new chain tip.
     std::vector<std::unique_ptr<node::CBlockTemplate>> templates;
     std::map<uint256, const CBlock*> blocks;
-    std::map<CScriptID, const CBlock*> cur_blocks;
+    std::map<CScriptID, CurrentBlock> cur_blocks;
 
-    unsigned tx_updated_last{0};
     const CBlockIndex* pindex_prev{nullptr};
-    uint64_t start_time{0};
 
     const CBlock* getCurrentBlock(ChainstateManager& chainman, const CTxMemPool& mempool,
                                   const CScript& script_pub_key, uint256& target) EXCLUSIVE_LOCKS_REQUIRED(cs);

@@ -250,6 +250,11 @@ post-quantum key encapsulation during the peer-to-peer handshake:
 - Post-quantum key encapsulation replaces the X25519 key exchange
 - 800-byte public keys, 768-byte ciphertexts, 32-byte shared secrets
 
+`getpeerinfo` reports `detecting` with an empty session ID until the v2 transport
+handshake is complete, including while an outgoing connection waits for the
+peer's ciphertext reply. This also corrects the timeout description for a
+partially received ciphertext reply.
+
 Script Extensions (Post-AuxPoW)
 ================================
 
@@ -313,6 +318,14 @@ and available for activation:
 - `createauxblock` and `submitauxblock` RPC commands
 - Currently disabled on mainnet (`nAuxpowStartHeight = AUXPOW_DISABLED`)
 - Active at block 1000 on testnet for testing
+
+`createauxblock` and `getauxblock` reuse the latest template for each payout
+address. If the mempool changes, that payout's template can refresh after more
+than 60 seconds; requests for other payout addresses do not reset its refresh
+interval. Previously issued templates remain available for submission until a
+later work request observes a different chain tip, or the node restarts.
+Refreshing work does not expire older templates, and no count, age or memory limit
+is imposed on this cache.
 
 Mining and IPC reliability
 --------------------------
@@ -508,6 +521,11 @@ paying the required fees. Tidecoin retains a 100-unique-removed-transaction guar
 checks. Local fee-priority RPC behavior and base-fee relay ordering are preserved. Existing
 `getmempoolentry` and `getmempoolinfo` responses include chunk and cluster-limit metadata; no new
 RPC is required.
+
+`fees.chunk` retains the full 64-bit amount in `getmempoolentry` and verbose
+`getrawmempool`, `getmempoolancestors` and `getmempooldescendants` results. This
+includes fees above 21.47483647 TDC and large positive or negative local fee
+adjustments. Transaction fees and mining selection are unchanged.
 
 Some previously accepted connected groups exceeding the new cluster limits will be rejected,
 including when reloading unconfirmed transactions. Conversely, small chains longer than 25 entries

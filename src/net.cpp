@@ -1674,8 +1674,7 @@ Transport::Info V2Transport::GetInfo() const noexcept
 
     // Do not report v2 and session ID until the version packet has been received
     // and verified (confirming that the other side very likely has the same keys as us).
-    if (m_recv_state != RecvState::KEY_MAYBE_V1 && m_recv_state != RecvState::KEY &&
-        m_recv_state != RecvState::GARB_GARBTERM && m_recv_state != RecvState::VERSION) {
+    if (m_recv_state == RecvState::APP || m_recv_state == RecvState::APP_READY) {
         info.transport_type = TransportProtocolType::V2;
         info.session_id = uint256(MakeUCharSpan(m_cipher.GetSessionID()));
     } else {

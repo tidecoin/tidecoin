@@ -22,6 +22,7 @@
 #include <script/descriptor.h>
 #include <script/script.h>
 #include <test/util/setup_common.h>
+#include <test/util/txmempool.h>
 #include <univalue.h>
 #include <util/strencodings.h>
 #include <util/time.h>
@@ -101,6 +102,36 @@ UniValue RPCTestingSetup::CallRPC(std::string args)
 
 
 BOOST_FIXTURE_TEST_SUITE(rpc_tests, RPCTestingSetup)
+
+BOOST_AUTO_TEST_CASE(mempool_chunk_fee_reporting)
+{
+    auto& pool = *m_node.mempool;
+    CMutableTransaction tx;
+    tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256{1}), 0});
+    tx.vout.emplace_back(COIN, CScript() << OP_TRUE);
+    AddToMempool(pool, TestMemPoolEntryHelper{}.Fee(1000).FromTx(tx));
+    const auto txid = tx.GetHash().ToString();
+    CAmount previous_fee{1000};
+    for (const auto& [fee, expected] : std::vector<std::pair<CAmount, const char*>>{
+             {1000, "0.00001000"},
+             {2147483646, "21.47483646"},
+             {2147483647, "21.47483647"},
+             {2147483648, "21.47483648"},
+             {4294967296, "42.94967296"},
+             {100 * COIN, "100.00000000"},
+             {0, "0.00000000"},
+             {-2147483648, "-21.47483648"},
+             {-2147483649, "-21.47483649"}}) {
+        pool.PrioritiseTransaction(tx.GetHash(), fee - previous_fee);
+        previous_fee = fee;
+        const auto entry = CallRPC("getmempoolentry " + txid);
+        BOOST_CHECK_EQUAL(entry["fees"]["base"].getValStr(), "0.00001000");
+        BOOST_CHECK_EQUAL(entry["fees"]["modified"].getValStr(), expected);
+        BOOST_CHECK_EQUAL(entry["fees"]["chunk"].getValStr(), expected);
+        const auto all = CallRPC("getrawmempool true");
+        BOOST_CHECK_EQUAL(all[txid]["fees"]["chunk"].getValStr(), expected);
+    }
+}
 
 BOOST_AUTO_TEST_CASE(transaction_script_rules)
 {
