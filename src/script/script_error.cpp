@@ -55,6 +55,8 @@ std::string ScriptErrorString(const ScriptError serror)
             return "Locktime requirement not satisfied";
         case SCRIPT_ERR_SIG_HASHTYPE:
             return "Signature hash type missing or not understood";
+        case SCRIPT_ERR_SIG_FALCON_ENCODING:
+            return "Non-canonical Falcon-512 signature encoding";
         case SCRIPT_ERR_MINIMALDATA:
             return "Data push larger than necessary";
         case SCRIPT_ERR_SIG_PUSHONLY:

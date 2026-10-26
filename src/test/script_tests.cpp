@@ -5,6 +5,7 @@
 #include <test/data/script_tests_pq.json.h>
 
 #include <common/system.h>
+#include <common/transaction_rules.h>
 #include <core_io.h>
 #include <crypto/ripemd160.h>
 #include <crypto/sha1.h>
@@ -22,6 +23,7 @@
 #include <script/signingprovider.h>
 #include <script/solver.h>
 #include <streams.h>
+#include <test/util/falcon.h>
 #include <test/util/json.h>
 #include <test/util/random.h>
 #include <test/util/script.h>
@@ -91,6 +93,7 @@ static ScriptErrorDesc script_errors[]={
     {SCRIPT_ERR_NEGATIVE_LOCKTIME, "NEGATIVE_LOCKTIME"},
     {SCRIPT_ERR_UNSATISFIED_LOCKTIME, "UNSATISFIED_LOCKTIME"},
     {SCRIPT_ERR_SIG_HASHTYPE, "SIG_HASHTYPE"},
+    {SCRIPT_ERR_SIG_FALCON_ENCODING, "SIG_FALCON_ENCODING"},
     {SCRIPT_ERR_MINIMALDATA, "MINIMALDATA"},
     {SCRIPT_ERR_SIG_PUSHONLY, "SIG_PUSHONLY"},
     {SCRIPT_ERR_SIG_HIGH_S, "SIG_HIGH_S"},
@@ -2394,6 +2397,133 @@ BOOST_AUTO_TEST_CASE(legacy_v0_hash_type_controls)
             }
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(falcon_legacy_encoding_script_forms)
+{
+    CKey key;
+    key.MakeNewKey(pq::SchemeId::FALCON_512);
+    const auto pubkey = ToByteVector(key.GetPubKey());
+    constexpr unsigned int consensus{MANDATORY_SCRIPT_VERIFY_FLAGS};
+    constexpr unsigned int policy{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DEFINED_HASHTYPE | SCRIPT_VERIFY_FALCON_CANONICAL};
+    BOOST_CHECK_EQUAL(consensus & SCRIPT_VERIFY_FALCON_CANONICAL, 0U);
+    BOOST_CHECK_EQUAL(STANDARD_SCRIPT_VERIFY_FLAGS & SCRIPT_VERIFY_FALCON_CANONICAL, 0U);
+    for (auto era : {common::ScriptRuleEra::PRE_AUXPOW, common::ScriptRuleEra::POST_AUXPOW}) {
+        BOOST_CHECK_EQUAL(common::ScriptFlagsForEra(era) & SCRIPT_VERIFY_FALCON_CANONICAL, 0U);
+    }
+    // p2pk, p2pkh, sh(pkh), wpkh, sh(wpkh), multi, sh(multi), wsh(multi), sh(wsh(multi)).
+    for (int form = 0; form < 9; ++form) {
+        const bool multisig{form >= 5};
+        const bool keyhash{form >= 1 && form <= 4};
+        const bool witness{form == 3 || form == 4 || form >= 7};
+        const bool wrapped{form == 2 || form == 4 || form == 6 || form == 8};
+        CScript script = multisig ? GetScriptForMultisig(1, {key.GetPubKey()}) :
+            keyhash ? GetScriptForDestination(PKHash{key.GetPubKey()}) : CScript{} << pubkey << OP_CHECKSIG;
+        CScript redeem = !witness ? script : keyhash ? GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey()}) :
+            GetScriptForDestination(WitnessV0ScriptHash{script});
+        const CScript output = wrapped ? GetScriptForDestination(ScriptHash{redeem}) : redeem;
+        for (int hashtype : {1, 2, 3, 0x81, 0x82, 0x83}) {
+            BOOST_TEST_CONTEXT("form=" << form << " sighash=" << hashtype) {
+                CMutableTransaction tx;
+                tx.vin.resize(1);
+                tx.vout.emplace_back(9000, CScript{} << OP_TRUE);
+                const auto sig = test::SignFalcon512WithAlternates(key,
+                    SignatureHash(script, tx, 0, hashtype, 10000, witness ? SigVersion::WITNESS_V0 : SigVersion::BASE));
+                BOOST_REQUIRE(!sig.empty());
+                const auto parsed = test::ParseFalcon512(sig);
+                BOOST_REQUIRE(parsed);
+                for (unsigned variant = 0; variant < 4; ++variant) {
+                    auto changed = sig;
+                    if (variant & 1) test::SetFalconBit(changed, parsed->zero_sign_bits[0]);
+                    if (variant & 2) changed.back() |= 1;
+                    changed.push_back(hashtype);
+                    std::vector<std::vector<unsigned char>> stack;
+                    if (multisig) stack.emplace_back();
+                    stack.push_back(changed);
+                    if (keyhash) stack.push_back(pubkey);
+                    tx.vin[0].scriptSig.clear();
+                    tx.vin[0].scriptWitness.SetNull();
+                    if (witness) {
+                        tx.vin[0].scriptWitness.stack = stack;
+                        if (!keyhash) tx.vin[0].scriptWitness.stack.push_back(ToByteVector(script));
+                    } else {
+                        for (const auto& item : stack) tx.vin[0].scriptSig << item;
+                    }
+                    if (wrapped) tx.vin[0].scriptSig << ToByteVector(redeem);
+                    for (unsigned int flags : {consensus, policy, policy | SCRIPT_VERIFY_PQ_STRICT}) {
+                        ScriptError error;
+                        const bool result = VerifyScript(tx.vin[0].scriptSig, output, &tx.vin[0].scriptWitness, flags,
+                            MutableTransactionSignatureChecker{&tx, 0, 10000, MissingDataBehavior::ASSERT_FAIL, !(flags & SCRIPT_VERIFY_PQ_STRICT)}, &error);
+                        const bool expected{variant == 0 || flags == consensus};
+                        BOOST_CHECK_EQUAL(result, expected);
+                        BOOST_CHECK_EQUAL(error, expected ? SCRIPT_ERR_OK : flags == policy ? SCRIPT_ERR_SIG_FALCON_ENCODING : SCRIPT_ERR_SIG_NULLFAIL);
+                    }
+                }
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(falcon_legacy_encoding_opcode_semantics)
+{
+    CKey key;
+    key.MakeNewKey(pq::SchemeId::FALCON_512);
+    auto sig = test::SignFalcon512WithAlternates(key, uint256{1});
+    BOOST_REQUIRE(!sig.empty());
+    const auto parsed = test::ParseFalcon512(sig);
+    BOOST_REQUIRE(parsed);
+    test::SetFalconBit(sig, parsed->zero_sign_bits[0]);
+    sig.push_back(SIGHASH_ALL);
+    const auto pubkey = ToByteVector(key.GetPubKey());
+    constexpr unsigned int policy{SCRIPT_VERIFY_DEFINED_HASHTYPE | SCRIPT_VERIFY_FALCON_CANONICAL};
+    const auto check = [&](std::vector<std::vector<unsigned char>> stack, const CScript& script, unsigned int flags, ScriptError expected, bool truth = true) {
+        ScriptError error;
+        // A failed checker makes OP_NOT and skipped-multisig behavior explicit.
+        const bool result = EvalScript(stack, script, flags, BaseSignatureChecker{}, SigVersion::BASE, &error);
+        BOOST_CHECK_EQUAL(result, expected == SCRIPT_ERR_OK);
+        BOOST_CHECK_EQUAL(error, expected);
+        if (result) {
+            BOOST_REQUIRE(!stack.empty());
+            BOOST_CHECK(stack.back() == (truth ? std::vector<unsigned char>{1} : std::vector<unsigned char>{}));
+        }
+    };
+    for (const auto opcode : {OP_CHECKSIG, OP_CHECKSIGVERIFY, OP_CHECKMULTISIG, OP_CHECKMULTISIGVERIFY}) {
+        const bool multi{opcode == OP_CHECKMULTISIG || opcode == OP_CHECKMULTISIGVERIFY};
+        const bool verify{opcode == OP_CHECKSIGVERIFY || opcode == OP_CHECKMULTISIGVERIFY};
+        CScript script;
+        if (multi) script << OP_1;
+        script << pubkey;
+        if (multi) script << OP_1;
+        script << opcode;
+        script << (verify ? OP_TRUE : OP_NOT);
+        auto stack = std::vector<std::vector<unsigned char>>{};
+        if (multi) stack.emplace_back();
+        stack.push_back(sig);
+        check(stack, script, policy, SCRIPT_ERR_SIG_FALCON_ENCODING);
+        // Strict mode retains normal failed-signature semantics, even with
+        // the new policy flag: this is not an unconditional strict error.
+        const auto strict_error = !verify ? SCRIPT_ERR_OK : multi ? SCRIPT_ERR_CHECKMULTISIGVERIFY : SCRIPT_ERR_CHECKSIGVERIFY;
+        check(stack, script, policy | SCRIPT_VERIFY_PQ_STRICT, strict_error);
+        for (auto& item : stack) item.clear();
+        check(stack, script, policy, strict_error); // Empty signatures are unchanged.
+        stack.back() = {0x39, SIGHASH_ALL}; // Malformed, not an alternate encoding.
+        check(stack, script, policy, strict_error);
+        check(stack, script, policy | SCRIPT_VERIFY_NULLFAIL, SCRIPT_ERR_SIG_NULLFAIL);
+        stack.back() = sig;
+        stack.back().back() = 0x41;
+        check(stack, script, policy, SCRIPT_ERR_SIG_HASHTYPE);
+    }
+    // Matching visits the last argument (empty) first and would skip sig.
+    for (bool invert : {false, true}) {
+        CScript script = CScript{} << OP_2 << pubkey << pubkey << OP_2 << OP_CHECKMULTISIG;
+        if (invert) script << OP_NOT;
+        check({{}, sig, {}}, script, policy, SCRIPT_ERR_SIG_FALCON_ENCODING);
+        check({{}, sig, {}}, script, policy | SCRIPT_VERIFY_PQ_STRICT, SCRIPT_ERR_OK, invert);
+    }
+    // Invalid public keys cannot bypass a check on consumed signatures.
+    check({sig}, CScript{} << std::vector<unsigned char>{1} << OP_CHECKSIG << OP_NOT, policy, SCRIPT_ERR_SIG_FALCON_ENCODING);
+    check({}, CScript{} << OP_FALSE << OP_IF << sig << pubkey << OP_CHECKSIG << OP_ENDIF << OP_TRUE, policy, SCRIPT_ERR_OK);
+    check({sig}, CScript{} << OP_DROP << OP_TRUE, policy, SCRIPT_ERR_OK);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

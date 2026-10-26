@@ -10,12 +10,13 @@ from feature_auxpow_mempool_transition import falcon_signature_variants
 from rpc_psbt_witness_v1 import WitnessV1PSBTTest
 from test_framework.address import script_to_p2sh
 from test_framework.descriptors import descsum_create
+from test_framework.falcon import falcon512_alternates
 from test_framework.messages import CTransaction, CTxOut, tx_from_hex
 from test_framework.psbt import (
     PSBT, PSBT_IN_NON_WITNESS_UTXO, PSBT_IN_PARTIAL_SIG, PSBT_IN_REDEEM_SCRIPT,
     PSBT_IN_WITNESS_SCRIPT, PSBT_IN_WITNESS_UTXO,
 )
-from test_framework.util import assert_equal, assert_raises_rpc_error
+from test_framework.util import assert_equal, assert_not_equal, assert_raises_rpc_error
 from test_framework.wallet_util import generate_keypair
 
 PRE = 'pre-auxpow'
@@ -97,6 +98,7 @@ class TransactionRulesTest(WitnessV1PSBTTest):
         assert_equal(offline.getblockcount(), 0)
         self.check_contract(cases[0], owner)
         self.check_cached(cases[0], owner)
+        self.check_alternate_encodings(cases, owner)
         self.check_cleanup_and_missing(cases, owner)
         self.check_multisig(cases, owner)
         self.check_workflow()
@@ -215,6 +217,55 @@ class TransactionRulesTest(WitnessV1PSBTTest):
             checked = offline.signrawtransactionwithkey(combined, [], [prevout], rules=PRE)
             assert_equal(checked['complete'], complete)
         assert not node.testmempoolaccept([old['hex']])[0]['allowed']
+
+    def check_alternate_encodings(self, cases, owner):
+        node, offline = self.nodes
+        _, foreign_pubkey = generate_keypair(scheme="7")
+        foreign_key = bytes([PSBT_IN_PARTIAL_SIG]) + foreign_pubkey
+        foreign_signature = b"\x01\x01"
+        self.log.info("Old encodings complete under pre rules; strict processing replaces owned invalid partials")
+        for scheme, template, _, pubkey, descriptor, _, base, _, _ in cases:
+            if scheme != 7 or template == 'wsh512(pk({}))':
+                continue
+            own_key = bytes([PSBT_IN_PARTIAL_SIG]) + pubkey
+            for mode in ('ALL', 'NONE'):
+                for _ in range(100):
+                    partial = PSBT.from_base64(owner.walletprocesspsbt(base.to_base64(), sighashtype=mode, finalize=False, rules=PRE)['psbt'])
+                    original = partial.i[0].map[own_key]
+                    alternates = falcon512_alternates(original)
+                    if alternates:
+                        break
+                else:
+                    raise AssertionError('No Falcon signature with both alternate encodings')
+                for alternate in alternates:
+                    partial.i[0].map[own_key] = alternate
+                    partial.i[0].map[foreign_key] = foreign_signature
+                    value = partial.to_base64()
+                    if mode == 'NONE':
+                        assert_raises_rpc_error(-22, 'sighash', owner.walletprocesspsbt, value, rules=PRE)
+                        assert_raises_rpc_error(-22, 'sighash', offline.descriptorprocesspsbt, value, [descriptor], rules=PRE)
+                    calls = (
+                        lambda psbt, era, finalize: owner.walletprocesspsbt(psbt, sighashtype=mode, finalize=finalize, rules=era),
+                        lambda psbt, era, finalize: offline.descriptorprocesspsbt(psbt, [descriptor], sighashtype=mode, finalize=finalize, rules=era),
+                    )
+                    final = offline.finalizepsbt(value, False, PRE)['psbt']
+                    for call in calls:
+                        old = call(value, PRE, True)
+                        assert old['complete']
+                        assert not node.testmempoolaccept([old['hex']])[0]['allowed']
+                        assert call(final, PRE, True)['complete']
+                        assert not call(final, POST, True)['complete']
+                        replaced = call(value, POST, False)
+                        fields = PSBT.from_base64(replaced['psbt']).i[0].map
+                        assert_not_equal(fields[own_key], alternate)
+                        assert_equal(fields[foreign_key], foreign_signature)
+                        self.accepted(offline.finalizepsbt(replaced['psbt'], rules=POST))
+                    # No key is needed to finish a valid pre-rules partial.
+                    assert offline.descriptorprocesspsbt(value, [], sighashtype=mode, rules=PRE)['complete']
+                    strict = offline.descriptorprocesspsbt(value, [], sighashtype=mode, rules=POST)
+                    assert not strict['complete']
+                    assert_equal(PSBT.from_base64(strict['psbt']).i[0].map[own_key], alternate)
+                    assert not offline.finalizepsbt(final, rules=POST)['complete']
 
     def check_cleanup_and_missing(self, cases, owner):
         node, offline = self.nodes

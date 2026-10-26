@@ -9,6 +9,7 @@
 #include <crypto/sha1.h>
 #include <crypto/sha256.h>
 #include <crypto/sha512.h>
+#include <pq/pq_api.h>
 #include <pubkey.h>
 #include <script/script.h>
 #include <uint256.h>
@@ -191,6 +192,15 @@ static bool CheckSignatureHashType(const valtype& signature, SigVersion version,
     }
 }
 
+static bool CheckFalconSignatureEncoding(const valtype& signature, unsigned int flags, ScriptError* serror)
+{
+    if (!(flags & SCRIPT_VERIFY_FALCON_CANONICAL) || (flags & SCRIPT_VERIFY_PQ_STRICT) || signature.empty()) return true;
+    if (pq::IsNonCanonicalLegacyFalcon512(std::span{signature}.first(signature.size() - 1))) {
+        return set_error(serror, SCRIPT_ERR_SIG_FALCON_ENCODING);
+    }
+    return true;
+}
+
 static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPubKey, CScript::const_iterator pbegincodehash, CScript::const_iterator pend, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror, bool& fSuccess)
 {
     assert(sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0 || sigversion == SigVersion::WITNESS_V1_512);
@@ -206,6 +216,7 @@ static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPu
     }
 
     if (!CheckSignatureHashType(vchSig, sigversion, flags, serror)) return false;
+    if (!CheckFalconSignatureEncoding(vchSig, flags, serror)) return false;
     fSuccess = checker.CheckPostQuantumSignature(vchSig, vchPubKey, scriptCode, sigversion);
 
     if (!fSuccess && (flags & SCRIPT_VERIFY_NULLFAIL) && vchSig.size())
@@ -960,6 +971,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         // Validate every argument before matching, including
                         // signatures the matching loop may never reach.
                         if (!CheckSignatureHashType(vchSig, sigversion, flags, serror)) return false;
+                        if (!CheckFalconSignatureEncoding(vchSig, flags, serror)) return false;
                         if (sigversion == SigVersion::BASE) {
                             int found = FindAndDelete(scriptCode, CScript() << vchSig);
                             if (found > 0 && (flags & SCRIPT_VERIFY_CONST_SCRIPTCODE))

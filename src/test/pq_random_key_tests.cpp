@@ -2,6 +2,8 @@
 #include <pq/cleanse.h>
 #include <pq/pq_api.h>
 #include <pq/randombytes.h>
+#include <test/util/falcon.h>
+#include <util/strencodings.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -190,6 +192,166 @@ BOOST_AUTO_TEST_CASE(falcon_exact_compressed_encoding)
                 BOOST_CHECK(verify(sig));
             }
         }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(falcon_legacy_encodings)
+{
+    // Public vector checked with unmodified Tidecoin 0.18.3 at
+    // 7b525367e9ea1b614aa380a52394f0e3d3878aa9; no private key is needed.
+    // SHA256 of the detached signature: d0b42fdce08f0ce60272567009ce10500fd0d8daad0aac725963153f0978aff8.
+    const auto pk = ParseHex(
+        "0916a65538af1f6d61590eab0c6cac76bc64e41cd1c28aa5fc20d203ee06ac1edb916a71910d2f7bde409793762138bcee4b1986b6c9db0a"
+        "832c161ff0ddc597634cdf68db227d22528c84cda281660c1e958a53f99f08af37d522db72ee5486db9a8c5092af041b51ec031c9e98098e"
+        "0eafba49bb21404baece006853a220b509a8a0045b914b10967077218c2d7e899a678a8b7b42426a9ae72abf9e131012268f12b19f935192"
+        "c67805857a9b8af8048ec124148fbf3259ddc8f56f52860034f858c20b53c4cda276e4a2282634b619563899085c941c64c0908ec381d700"
+        "8660a55e02a2578789c60ed3bc68f99bf17e26599a973edd5c81048fd05f96b39019a7400a55778337e210127288374547dd3e0281595e08"
+        "b653aec002dd03806ee6a199a911628b726d63fcaaef48a10f232f9b19b4e207f4970d74b778c0450c8544200d8a9895c2276a985b470fa4"
+        "dc4091383701e124498a12008c61b75076f6911f1ecd21566c36c489c632251d30a6c317254d5ed05c6bc528b5d9350b96ca9fb8eec4cb07"
+        "dea12d5a892213e91c557a6875171f6d6614399bc79b896e1c90ae09835f9187f55a8aa617694af5088222791e4a501a896ebcc9fd05606e"
+        "53b89db04943e47292c896211ae99b362871f4bae0676f991b47c9d88d1988de2660ab119f110c10d48fd58bbeb66b2f6d419e502ba02a9a"
+        "0b13e541bb150aa3962a87a90a44d2b494b5a08a2c891a703c37f82607b980f136265f5178c657f2cde641b0ee35e28a1cbe3c0e6aa8fbda"
+        "d47725ad83961c84b6e124c012e6c50aca2dea9ae55476e5eb12e854c5977028fae898816e12f7fa2bd3558ce28f25d80b8c6a4922636226"
+        "dc917e4b24b45cc947610d42dee53d4056bba71be7f40d5429135f53ff78a13e6bd16a2caf681c224aaadb5d2184e7a50ee2b34122e95b9e"
+        "3a876e2ee4f544c7285e5e6358e4324a5651dae2168c857c0f3aa661c8070eb2246b6f3e2c69f3d9148a5b74141cfa181ddda356b0b4e7d8"
+        "f686bc0bc436954eb86a10076a1b933f1940f258827750e941689dcb858fe59898b965dd98f0ac96190e8d2aac9f1b686cad1ef8d0b32241"
+        "77580e71bb3890e7623eab56d442126762ac85b4930e7dee03b245c62f3599e5a654e0f88e16429ac2ed543e8df5a4a01b5572a5f968e9ca"
+        "8f5e7a1e10135ed2492e3933364eb5288c0f450f18ba5745f87977e41a4b96a6b10b02ca6e755e79a5a5f018fcd6d25118668badb8a6729b"
+        "80");
+    const auto msg = ParseHex(
+        "01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3da");
+    const auto original = ParseHex(
+        "39209f5e3b3bc9d5baa7ee2ce8b3496f641ee0463376b4792cac9d2c2a8765c1f70d12586436a5665282e6e079c89255bf620f1cacde319a"
+        "bd926aab71512d4c7f09a0aec42d6ffb893393995d73e6dbb1d7290a751ee8d1653186bed552c8a5b7fd32d233ad7241beff34b78c9a227f"
+        "b0347174f77bffcaca9121743333ee692657da6967759855a26f6412e5362a064b3cf53546d66b1e7063ae1bb91761d0469471b5d63a4d4d"
+        "f5a2290cb49dcc42b3138b8d1dd9c0114a1f19cf20a61f4ee42b6cbd0dedd934ae2085d3fa68bced04f658ac9f0fbb878877adee861deec9"
+        "551894ff1d29dbb6082a0fe77fb9ac7d07c3669e38cdceda857de774dd8615ad73a1e8d167336e16bb60f3b3cef6e07da208fc0632fcf070"
+        "52a9991b659a442ad170a65def7437f68b108abafeabe65139d97f9552ff0ee2ec3fb241134249b267db44a548d954aac3f9452c5e156f13"
+        "ca41f0632e2224ead3df9fcb7c7cfc5e69a1404a74b325c135128a19dcc039389356cad2a290980f09e9b65133ccbc0bcf14cea78d16344a"
+        "e278874e61f947ee4a137334a46310242fb6cd968cab2b7d4252d7aaa2f34231a6251e974ff03d932fe5d81cae7b3dfa8935fee78bf2c892"
+        "296f635308489198e3a75efe659cca2dd78e6ba1f05abb0449ce17d553ba78764cb903ccdcb1d223fcd557798806ecb462da26fe0eae6938"
+        "f154031ca6114b5ecf648bdd1356b7224351bf03c26198d7d9192cb74d1433e6b4aac2fbe8c712b45dc4423f531a542b458646332833bf85"
+        "e0378eec7d2ea9eb1c542193c642d2dd393aea4bddc77f39805dc831f1328b29278bb6109dfa2c4430ffacfe71f62212fcdbf32441d9a913"
+        "5beb8fb05c8e54df177f6fb9fd942cd750600c14fb26c27ecaa22708e71484418582206811864fa0");
+    BOOST_REQUIRE_EQUAL(pk.size(), 897U);
+    BOOST_REQUIRE_EQUAL(msg.size(), 32U);
+    BOOST_REQUIRE_EQUAL(original.size(), 656U);
+    const auto parsed = test::ParseFalcon512(original);
+    BOOST_REQUIRE(parsed);
+    BOOST_REQUIRE_EQUAL(parsed->zero_sign_bits.size(), 2U);
+    BOOST_REQUIRE_EQUAL(parsed->unused_bits, 5U);
+    for (unsigned signs = 0; signs < 4; ++signs) {
+        for (unsigned tail = 0; tail < 32; ++tail) {
+            auto sig = original;
+            for (unsigned i = 0; i < 2; ++i) {
+                if (signs & (1U << i)) test::SetFalconBit(sig, parsed->zero_sign_bits[i]);
+            }
+            sig.back() |= tail;
+            const bool canonical{signs == 0 && tail == 0};
+            const auto decoded = test::ParseFalcon512(sig);
+            BOOST_REQUIRE(decoded);
+            BOOST_CHECK(decoded->coefficients == parsed->coefficients);
+            BOOST_CHECK(pq::Verify(pq::kFalcon512Info, msg, sig, pk, true));
+            BOOST_CHECK_EQUAL(pq::Verify(pq::kFalcon512Info, msg, sig, pk, false), canonical);
+            BOOST_CHECK_EQUAL(pq::IsNonCanonicalLegacyFalcon512(sig), !canonical);
+        }
+    }
+    // Compare the classifier with the independent bit parser for every body
+    // bit change. This also runs under the instrumented unit-test build.
+    for (size_t bit = 41 * 8; bit < original.size() * 8; ++bit) {
+        auto sig = original;
+        sig[bit / 8] ^= 1U << (7 - bit % 8);
+        const auto decoded = test::ParseFalcon512(sig);
+        bool alternate{false};
+        if (decoded) {
+            alternate = (sig.back() & ((1U << decoded->unused_bits) - 1)) != 0;
+            for (const auto pos : decoded->zero_sign_bits) {
+                alternate |= (sig[pos / 8] & (1U << (7 - pos % 8))) != 0;
+            }
+        }
+        BOOST_CHECK_EQUAL(pq::IsNonCanonicalLegacyFalcon512(sig), alternate);
+    }
+    // Incomplete or extra bytes are not alternate *complete* encodings.
+    for (size_t length = 0; length < original.size(); ++length) {
+        BOOST_CHECK(!pq::IsNonCanonicalLegacyFalcon512(std::span{original}.first(length)));
+    }
+    auto alternate = original;
+    test::SetFalconBit(alternate, parsed->zero_sign_bits[0]);
+    alternate.back() |= 1;
+    for (const auto& base : {original, alternate}) {
+        for (const unsigned char suffix : {0, 1, 255}) {
+            auto sig = base;
+            sig.push_back(suffix);
+            BOOST_CHECK(!pq::IsNonCanonicalLegacyFalcon512(sig));
+            BOOST_CHECK(!pq::Verify(pq::kFalcon512Info, msg, sig, pk, true));
+            BOOST_CHECK(!pq::Verify(pq::kFalcon512Info, msg, sig, pk, false));
+        }
+        auto padded = base;
+        padded.resize(666, 0);
+        BOOST_CHECK(!pq::IsNonCanonicalLegacyFalcon512(padded));
+        BOOST_CHECK(!pq::Verify(pq::kFalcon512Info, msg, padded, pk, true));
+        for (const unsigned char header : {0, 0x38, 0x3a, 0xff}) {
+            auto sig = base;
+            sig[0] = header;
+            BOOST_CHECK(!pq::IsNonCanonicalLegacyFalcon512(sig));
+        }
+    }
+    // Classification does not check the nonce, message, key or norm.
+    alternate[1] ^= 1;
+    BOOST_CHECK(pq::IsNonCanonicalLegacyFalcon512(alternate));
+    BOOST_CHECK(!pq::Verify(pq::kFalcon512Info, msg, alternate, pk, true));
+    const std::vector<unsigned char> large(65536, 0x39);
+    BOOST_CHECK(!pq::IsNonCanonicalLegacyFalcon512(large));
+    // A complete canonical encoding need not be a valid mathematical signature.
+    for (const int16_t value : {0, 2047}) {
+        std::array<int16_t, 512> coefficients;
+        coefficients.fill(value);
+        const auto sig = test::EncodeFalcon512(coefficients);
+        BOOST_CHECK(!pq::IsNonCanonicalLegacyFalcon512(sig));
+        BOOST_CHECK(!pq::Verify(pq::kFalcon512Info, msg, sig, pk, true));
+        BOOST_CHECK(!pq::Verify(pq::kFalcon512Info, msg, sig, pk, false));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(falcon_encoding_boundaries)
+{
+    std::array<int16_t, 512> coefficients{};
+    // The all-zero body is byte aligned; adding unary bits covers every
+    // remaining final-byte alignment without relying on randomized signing.
+    for (unsigned extra_bits = 0; extra_bits < 8; ++extra_bits) {
+        coefficients[0] = 128 * extra_bits;
+        auto sig = test::EncodeFalcon512(coefficients);
+        const auto parsed = test::ParseFalcon512(sig);
+        BOOST_REQUIRE(parsed);
+        BOOST_CHECK(parsed->coefficients == coefficients);
+        BOOST_CHECK_EQUAL(parsed->unused_bits, (8 - extra_bits) % 8);
+        BOOST_CHECK(!pq::IsNonCanonicalLegacyFalcon512(sig));
+        auto negative_zero = sig;
+        test::SetFalconBit(negative_zero, parsed->zero_sign_bits.back());
+        BOOST_CHECK(pq::IsNonCanonicalLegacyFalcon512(negative_zero));
+        if (parsed->unused_bits) {
+            sig.back() |= (1U << parsed->unused_bits) - 1;
+            BOOST_CHECK(pq::IsNonCanonicalLegacyFalcon512(sig));
+        }
+    }
+    for (const int16_t magnitude : {-2047, 2047}) {
+        coefficients.fill(magnitude);
+        const auto sig = test::EncodeFalcon512(coefficients);
+        const auto parsed = test::ParseFalcon512(sig);
+        BOOST_REQUIRE(parsed);
+        BOOST_CHECK(parsed->coefficients == coefficients);
+        BOOST_CHECK(!pq::IsNonCanonicalLegacyFalcon512(sig));
+    }
+    coefficients.fill(0);
+    coefficients[0] = 2048;
+    auto invalid = test::EncodeFalcon512(coefficients);
+    BOOST_CHECK(!test::ParseFalcon512(invalid));
+    BOOST_CHECK(!pq::IsNonCanonicalLegacyFalcon512(invalid));
+    // An unterminated unary coefficient, including its truncations.
+    invalid.resize(44);
+    std::fill(invalid.begin() + 41, invalid.end(), 0);
+    for (size_t length = 41; length <= invalid.size(); ++length) {
+        BOOST_CHECK(!pq::IsNonCanonicalLegacyFalcon512(std::span{invalid}.first(length)));
     }
 }
 

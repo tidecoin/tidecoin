@@ -125,6 +125,10 @@ enum : uint32_t {
     // Mempool policy only; active witness v1 enforces this without the flag.
     SCRIPT_VERIFY_DEFINED_HASHTYPE = (1U << 16),
 
+    // Refuse old noncanonical Falcon-512 encodings before strict activation.
+    // Mempool policy only; strict signature verification is unchanged.
+    SCRIPT_VERIFY_FALCON_CANONICAL = (1U << 17),
+
     // Constants to point to the highest flag in use. Add new flags above this line.
     //
     SCRIPT_VERIFY_END_MARKER

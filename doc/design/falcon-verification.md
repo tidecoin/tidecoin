@@ -610,3 +610,58 @@ The two intentional differences (norm bound and max signature size) are the "leg
 ## 12. Conclusion
 
 The Falcon-512 implementation in the published Tidecoin repository (`https://github.com/tidecoin/tidecoin`) is verified to be the **corrected PQClean "clean" implementation**. The 2019 sampler bug was fixed 15+ months before Tidecoin's genesis block (December 27, 2020). The implementation uses integer emulation (FPEMU) for all floating-point operations, providing constant-time execution with no FPU side channels. The only intentional deviations from upstream PQClean are the relaxed norm bound and corresponding signature size cap, which constitute the "legacy mode" that will be tightened to standard PQClean parameters when AuxPoW activates.
+
+## 2026-10-26: preactivation encoding compatibility
+
+This section concerns compressed-signature decoding, separately from the
+historical sampler investigation above. Its source baselines are Tidecoin 0.18.3
+at `7b525367e9ea1b614aa380a52394f0e3d3878aa9` (`src/codec.cpp`, `src/pqclean.cpp`)
+and the 1.x tree at `fe1f24317b11f42178014c95a65c82c3492df6a3` before this change.
+
+The old decoder accepts a sign bit on a zero coefficient and ignores unused
+bits in the final consumed byte. These choices do not change the decoded
+coefficients. The 1.x legacy wrapper previously used the canonical PQClean
+decoder, which rejects both, although the wrapper already retained the old
+norm bound. That made it reject some signatures accepted by 0.18.3 before
+activation.
+
+`src/pq/falcon512.c` now contains the old decoder, with its original attribution,
+for legacy verification only. The wrapper still requires exact consumption of
+the entire compressed body. No trailing bytes or padding are permitted. The
+vendored canonical decoder and strict verifier are unchanged, as are local
+signing bounds and encodings.
+
+| Check | Canonical encoding | Negative zero / unused final bits | Extra trailing bytes |
+| --- | --- | --- | --- |
+| Preactivation block signature verification | Verify normally | Verify with old decoder | Reject |
+| Preactivation relay signature argument | Verify normally | Hard script error | Existing verification failure |
+| Strict signature verification | Verify normally | Reject | Reject |
+
+The new `SCRIPT_VERIFY_FALCON_CANONICAL` flag is set only by mempool
+`PolicyScriptChecks`, beside the existing relay-only hash-type flag. It is absent
+from block flags, mandatory/shared standard flags and the shared transaction-rule
+selector (`common::ScriptFlagsForEra`). It applies even with
+`-acceptnonstdtxn=1` and becomes inert when `SCRIPT_VERIFY_PQ_STRICT` is set.
+Strict verification retains its existing failed signature semantics, including
+scripts that inspect a false signature result.
+
+The format classifier returns true only when the complete detached Falcon-512
+buffer decodes under the old rules but not under the canonical rules. It checks
+neither the nonce/message/key nor the signature norm. Malformed buffers are left
+to normal verification. The interpreter excludes the sighash byte, checks after
+hash-type validation and before the signature checker/cache, and checks every
+CHECKMULTISIG signature argument before matching. Unexecuted branches and
+non-signature data are unaffected. The policy error cannot be inverted by
+`OP_NOT`.
+
+The signature cache retains its exact-byte and legacy/strict domains. The
+whole-script cache includes the flag word and witness transaction hash. Block
+acceptance must not bypass policy, and policy refusal must not prevent old-rule
+block acceptance or fetching a canonical witness transaction with the same txid.
+Disconnected transactions and persisted entries undergo ordinary admission.
+
+The public fixed vector and dedicated unit tests cover all 128 encodings of one
+signature, boundaries, script forms, negation and caches. Functional coverage is
+in `feature_falcon_encoding.py` and `rpc_transaction_rules.py`. No old checkout
+is required to run these tests. See [PSBT rule selection](../psbt.md) for why
+pre-rules completion can succeed while relay refuses the extracted transaction.

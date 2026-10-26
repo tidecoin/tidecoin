@@ -438,6 +438,12 @@ void HeadersSyncState::PushRetargetSample(uint32_t nbits, int64_t mtp)
 
 bool HeadersSyncState::CheckWindowAwareRetarget(uint32_t prev_nbits, uint32_t next_nbits, int64_t next_time, int64_t prev_time, int64_t next_height) const
 {
+    // Legacy transitions do not need averaging samples. This also covers
+    // normal heights when AuxPoW activation is disabled.
+    if (next_height < m_consensus_params.nAuxpowStartHeight) {
+        return PermittedDifficultyTransition(m_consensus_params, next_height, prev_nbits, next_nbits);
+    }
+
     const int64_t win = m_consensus_params.nPowAveragingWindow;
     if (static_cast<int64_t>(m_recent_nbits.size()) < win || static_cast<int64_t>(m_recent_mtp.size()) < win + 1) return true;
 

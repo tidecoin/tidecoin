@@ -130,8 +130,16 @@ Falcon-512 signatures operate in two modes:
 - **Strict mode** (post-AuxPoW): PQClean verification with exact compressed
   encoding, activated by the `SCRIPT_VERIFY_PQ_STRICT` consensus flag.
 
-Keys are identical in both modes. Only signature creation and verification
-bounds differ.
+Keys are identical in both modes; verification bounds and encoding rules differ.
+Both signing modes produce canonical signatures within the strict norm bound
+and the same 666-byte local size limit.
+
+Before AuxPoW activation, Falcon-512 block verification preserves the signature
+encodings accepted by Tidecoin 0.18.3. Relay requires canonical compressed
+encoding, including when `-acceptnonstdtxn=1` is used. After activation, a
+successful signature check requires canonical encoding under the strict block
+rules. Extra trailing signature bytes remain invalid in both eras. Local signing
+continues to produce canonical signatures.
 
 Strict Falcon-512 and Falcon-1024 verification rejects extra trailing bytes,
 including zero padding to 666 or 1280 bytes. The decoder must consume the
@@ -331,6 +339,10 @@ Mining and IPC reliability
 Block validation and synchronization
 ====================================
 
+- Both passes of initial header synchronization check legacy difficulty
+  transitions before AuxPoW activation, including when activation is disabled.
+  These preliminary checks preserve the historical retarget and minimum-
+  difficulty exceptions; full header acceptance still checks the exact target.
 - Ordinary headers are checked with the work algorithm required at their height,
   including during both passes of initial header synchronization. Full-block
   validation also checks the height-specific rules.

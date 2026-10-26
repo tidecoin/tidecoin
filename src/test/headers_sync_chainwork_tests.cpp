@@ -9,6 +9,8 @@
 #include <pow.h>
 #include <test/util/setup_common.h>
 #include <validation.h>
+#include <array>
+#include <optional>
 #include <vector>
 
 #include <boost/test/unit_test.hpp>
@@ -24,6 +26,11 @@ struct HeadersGeneratorSetup : public RegTestingSetup {
     void GenerateHeaders(std::vector<CBlockHeader>& headers, size_t count,
             const uint256& starting_hash, const int nVersion, int prev_time,
             const uint256& merkle_root, const uint32_t nBits);
+
+    /** Exercise a difficulty transition in both passes without relying on commitments. */
+    void CheckRetargetBothPhases(const Consensus::Params& params, int next_height,
+            uint32_t old_bits, uint32_t new_bits, bool expected, size_t history_size,
+            uint32_t time_delta = 60, std::optional<uint32_t> valid_bits = std::nullopt);
 };
 
 void HeadersGeneratorSetup::FindProofOfWork(CBlockHeader& starting_header)
@@ -51,6 +58,61 @@ void HeadersGeneratorSetup::GenerateHeaders(std::vector<CBlockHeader>& headers,
         prev_time = next_header.nTime;
     }
     return;
+}
+
+void HeadersGeneratorSetup::CheckRetargetBothPhases(const Consensus::Params& params, int next_height,
+        uint32_t old_bits, uint32_t new_bits, bool expected, size_t history_size,
+        uint32_t time_delta, std::optional<uint32_t> valid_bits)
+{
+    BOOST_REQUIRE(history_size > 0 && history_size <= static_cast<size_t>(next_height));
+    std::vector<CBlockIndex> history(history_size);
+    std::vector<uint256> hashes(history_size);
+    for (size_t i = 0; i < history_size; ++i) {
+        CBlockHeader header;
+        header.nVersion = 4;
+        header.nTime = 1'600'000'000 + 60 * static_cast<uint32_t>(i);
+        header.nBits = old_bits;
+        if (i > 0) header.hashPrevBlock = hashes[i - 1];
+        hashes[i] = header.GetHash();
+        history[i].nVersion = header.nVersion;
+        history[i].nTime = header.nTime;
+        history[i].nBits = header.nBits;
+        history[i].phashBlock = &hashes[i];
+        history[i].nHeight = next_height - static_cast<int>(history_size) + static_cast<int>(i);
+        if (i > 0) history[i].pprev = &history[i - 1];
+    }
+    const CBlockIndex* start = &history.back();
+    CBlockHeader candidate = start->GetBlockHeader();
+    candidate.hashPrevBlock = start->GetBlockHash();
+    candidate.nTime += time_delta;
+    candidate.nBits = new_bits;
+
+    // PoW is checked by the caller, not HeadersSyncState. A threshold of one
+    // lets either candidate reach it, avoiding randomized commitment checks
+    // when changing the redownloaded header to isolate the retarget check.
+    for (bool redownload : {false, true}) {
+        BOOST_TEST_CONTEXT("height=" << next_height << " history=" << history_size << " redownload=" << redownload) {
+            HeadersSyncState sync{0, params, start, arith_uint256{1}};
+            if (redownload) {
+                CBlockHeader valid = candidate;
+                valid.nBits = expected ? new_bits : valid_bits.value_or(old_bits);
+                BOOST_REQUIRE(sync.ProcessNextHeaders({valid}, true).success);
+                BOOST_REQUIRE(sync.GetState() == HeadersSyncState::State::REDOWNLOAD);
+            }
+            const auto result = sync.ProcessNextHeaders({candidate}, true);
+            BOOST_CHECK_EQUAL(result.success, expected);
+            if (!expected) {
+                BOOST_CHECK(!result.request_more);
+                BOOST_CHECK(result.pow_validated_headers.empty());
+                BOOST_CHECK(sync.GetState() == HeadersSyncState::State::FINAL);
+            } else if (redownload) {
+                BOOST_REQUIRE_EQUAL(result.pow_validated_headers.size(), 1U);
+                BOOST_CHECK(result.pow_validated_headers.front().GetHash() == candidate.GetHash());
+            } else {
+                BOOST_CHECK(sync.GetState() == HeadersSyncState::State::REDOWNLOAD);
+            }
+        }
+    }
 }
 
 BOOST_FIXTURE_TEST_SUITE(headers_sync_chainwork_tests, HeadersGeneratorSetup)
@@ -234,6 +296,82 @@ BOOST_AUTO_TEST_CASE(headers_sync_window_retarget_post_auxpow)
 
     auto result = hss.ProcessNextHeaders(headers, true);
     BOOST_CHECK(!result.success);
+}
+
+BOOST_AUTO_TEST_CASE(headers_sync_legacy_retarget)
+{
+    auto params = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
+    BOOST_REQUIRE_EQUAL(params.nAuxpowStartHeight, Consensus::AUXPOW_DISABLED);
+    BOOST_REQUIRE_EQUAL(params.DifficultyAdjustmentInterval(), 7200);
+    BOOST_REQUIRE(!params.fPowAllowMinDifficultyBlocks);
+    // Stay below the legacy overflow range for the bounded retarget cases.
+    arith_uint256 target = UintToArith256(params.powLimit) >> 32;
+    const uint32_t old_bits = target.GetCompact();
+    target.SetCompact(old_bits);
+
+    for (int activation : {Consensus::AUXPOW_DISABLED, 15000}) {
+        params.nAuxpowStartHeight = activation;
+        for (size_t history : {1U, 30U}) {
+            // Legacy screening must not wait for an averaging window.
+            CheckRetargetBothPhases(params, 7201, old_bits, old_bits, true, history);
+            CheckRetargetBothPhases(params, 7201, old_bits, arith_uint256{target * 2}.GetCompact(), false, history);
+            CheckRetargetBothPhases(params, 7201, old_bits, arith_uint256{target / 2}.GetCompact(), false, history);
+            for (int height : {7200, 14400}) {
+                for (const auto& permitted : std::array<arith_uint256, 5>{target / 4, target / 2, target, target * 2, target * 4}) {
+                    CheckRetargetBothPhases(params, height, old_bits, permitted.GetCompact(), true, history);
+                }
+                CheckRetargetBothPhases(params, height, old_bits, arith_uint256{target * 8}.GetCompact(), false, history);
+                CheckRetargetBothPhases(params, height, old_bits, arith_uint256{target / 8}.GetCompact(), false, history);
+            }
+        }
+        CheckRetargetBothPhases(params, 1, old_bits, arith_uint256{target * 2}.GetCompact(), false, 1);
+
+        // Preserve the historical arithmetic exception: the legacy retarget
+        // can wrap, so the preliminary check deliberately permits these cases.
+        CBlockIndex previous;
+        previous.nHeight = 7199;
+        previous.nTime = 1'600'000'000;
+        previous.nBits = UintToArith256(params.powLimit).GetCompact();
+        const uint32_t wrapped_bits = CalculateNextWorkRequired(&previous,
+                previous.GetBlockTime() - params.nPowTargetTimespan * 10, params);
+        BOOST_REQUIRE_NE(wrapped_bits, previous.nBits);
+        CheckRetargetBothPhases(params, 7200, previous.nBits, wrapped_bits, true, 30);
+
+        // Testnet/regtest's broad min-difficulty exception remains unchanged.
+        params.fPowAllowMinDifficultyBlocks = true;
+        CheckRetargetBothPhases(params, 7201, old_bits, arith_uint256{target * 8}.GetCompact(), true, 1);
+        CheckRetargetBothPhases(params, 7200, old_bits, arith_uint256{target / 8}.GetCompact(), true, 30);
+        params.fPowAllowMinDifficultyBlocks = false;
+    }
+    params.nAuxpowStartHeight = Consensus::AUXPOW_DISABLED;
+    CheckRetargetBothPhases(params, Consensus::AUXPOW_DISABLED - 1,
+            old_bits, arith_uint256{target * 2}.GetCompact(), false, 30);
+}
+
+BOOST_AUTO_TEST_CASE(headers_sync_retarget_activation_window)
+{
+    auto params = CreateChainParams(*m_node.args, ChainType::MAIN)->GetConsensus();
+    params.nAuxpowStartHeight = 1000;
+    BOOST_REQUIRE_EQUAL(params.nPowAveragingWindow, 17);
+    arith_uint256 target = UintToArith256(params.powLimit) >> 32;
+    const uint32_t old_bits = target.GetCompact();
+    target.SetCompact(old_bits);
+    const uint32_t changed_bits = arith_uint256{target * 8}.GetCompact();
+
+    CheckRetargetBothPhases(params, 999, old_bits, changed_bits, false, 30);
+    for (int height : {1000, 1001, 1017}) {
+        CheckRetargetBothPhases(params, height, old_bits, changed_bits, true, 30);
+    }
+    CheckRetargetBothPhases(params, 1018, old_bits, old_bits, true, 30);
+    CheckRetargetBothPhases(params, 1018, old_bits, changed_bits, false, 30);
+    // The existing post-activation warmup for insufficient history still applies.
+    CheckRetargetBothPhases(params, 1018, old_bits, changed_bits, true, 1);
+
+    params.nPowAllowMinDifficultyBlocksAfterHeight = 1000;
+    const uint32_t powlimit_bits = UintToArith256(params.powLimit).GetCompact();
+    CheckRetargetBothPhases(params, 1018, old_bits, powlimit_bits, true, 30, 361);
+    CheckRetargetBothPhases(params, 1018, old_bits, old_bits, false, 30, 361, powlimit_bits);
+    CheckRetargetBothPhases(params, 1018, old_bits, old_bits, true, 30, 360);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

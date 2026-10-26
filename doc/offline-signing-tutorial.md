@@ -266,6 +266,15 @@ unspent, or that finality, maturity and fee requirements are met. Existing
 partials are checked under these same rules: an owned partial that fails can be
 replaced when signing, while an invalid supplied final stays incomplete.
 
+One concrete difference from relay policy is older Falcon-512 encoding:
+`pre-auxpow` processing can complete an old-valid signature containing a
+negative-zero sign or nonzero unused final bits, but current nodes refuse to
+relay it. Obtain fresh canonical signatures for relay. Reprocessing an already
+valid final does not automatically rewrite it. With `post-auxpow`, such a partial
+fails verification and can be replaced when its owner signs; an invalid final
+stays incomplete. Local signing produces canonical, unpadded signatures in
+either era.
+
 ### Check and Broadcast the Signed Transaction
 
 Transfer `final_tx.txt` to the online host. Check it against the destination

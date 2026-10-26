@@ -1244,9 +1244,9 @@ bool MemPoolAccept::PolicyScriptChecks(const ATMPArgs& args, Workspace& ws)
     const CBlockIndex* const tip = m_active_chainstate.m_chain.Tip();
     const int next_height = tip ? tip->nHeight + 1 : 0;
     const Consensus::Params& consensus_params = m_active_chainstate.m_chainman.GetConsensus();
-    // Keep this relay-only restriction out of shared signing/finalization flags
+    // Keep these relay-only restrictions out of shared signing/finalization flags
     // and the separate consensus checks below.
-    unsigned int scriptVerifyFlags = STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DEFINED_HASHTYPE;
+    unsigned int scriptVerifyFlags = STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DEFINED_HASHTYPE | SCRIPT_VERIFY_FALCON_CANONICAL;
     scriptVerifyFlags |= GetAuxpowScriptFlags(next_height, consensus_params);
 
     // Check input scripts and signatures.

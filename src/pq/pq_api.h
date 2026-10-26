@@ -15,6 +15,7 @@
 #include <vector>
 
 extern "C" {
+int tidecoin_falcon512_is_noncanonical_legacy(const uint8_t* sig, size_t siglen);
 int tidecoin_falcon512_pubkey_from_sk(const uint8_t* sk, size_t sklen,
                                       uint8_t* pk, size_t pklen);
 int tidecoin_falcon512_sign_legacy_attempt(uint8_t* sig, size_t* siglen,
@@ -35,6 +36,13 @@ int tidecoin_mldsa87_pubkey_from_sk(const uint8_t* sk, size_t sklen,
 }
 
 namespace pq {
+
+/** True only for a complete old Falcon-512 encoding refused by the canonical
+ * decoder. This checks format, not validity; signature excludes the sighash byte. */
+inline bool IsNonCanonicalLegacyFalcon512(std::span<const unsigned char> signature)
+{
+    return tidecoin_falcon512_is_noncanonical_legacy(signature.data(), signature.size()) != 0;
+}
 
 /** Secure byte container (locked + cleansed on deallocation). */
 using SecureKeyBytes = std::vector<uint8_t, secure_allocator<uint8_t>>;

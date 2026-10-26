@@ -140,6 +140,15 @@ owner's key it can be replaced. Foreign entries are preserved. Explicit sighash
 requests and required previous-output data still apply. A supplied invalid final
 remains incomplete; processing does not clear it to automatically re-sign it.
 
+For example, `pre-auxpow` processing can complete an older valid Falcon-512
+encoding with a negative-zero coefficient sign or nonzero unused final bits.
+Current relay policy refuses these encodings even before activation. Obtain
+fresh canonical signatures through the ordinary signing workflow for relay;
+processing an already valid final does not rewrite it. `post-auxpow` processing
+rejects these encodings for successful signature checks and can replace an
+invalid owned partial, but leaves an invalid supplied final incomplete. Extra
+trailing bytes, including zero padding, are invalid under both selections.
+
 `complete: true` means that all input scripts verify under the selected rules
 with the required supplied input data. It does not establish confirmation,
 unspentness, maturity, finality, sufficient fees or acceptance by the destination.

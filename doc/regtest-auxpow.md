@@ -34,6 +34,16 @@ verification, witness-v1 and SHA512 script rules. Regtest's no-retargeting flag
 and easy proof-of-work limit remain unchanged. `never` selects pre-activation
 behavior throughout the usable height range.
 
+Before activation, Falcon-512 block checks preserve 0.18.3 decoding, including
+negative-zero coefficient signs and nonzero unused final bits. Mempool policy
+refuses these alternate encodings at every height, even with
+`-acceptnonstdtxn=1`. At tip `H-2` a block at `H-1` may contain one; at tip `H-1`
+a successful signature check in block `H` requires strict canonical encoding.
+Rolling back restores the old block rules without relaxing relay. Appended
+signature bytes remain invalid in both eras. `feature_falcon_encoding.py` tests
+actual block submission separately from relay, including rollback. Dedicated
+script-cache tests cover consensus/policy checks in both orders.
+
 Use fresh test data when changing rules for already stored blocks. Nodes that
 exchange blocks must use matching activation settings. This setting neither
 revalidates an existing chainstate nor isolates peers automatically.

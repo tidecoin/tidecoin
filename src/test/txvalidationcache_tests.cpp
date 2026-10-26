@@ -5,10 +5,12 @@
 #include <addresstype.h>
 #include <consensus/validation.h>
 #include <key.h>
+#include <policy/policy.h>
 #include <random.h>
 #include <script/sigcache.h>
 #include <script/sign.h>
 #include <script/signingprovider.h>
+#include <test/util/falcon.h>
 #include <test/util/setup_common.h>
 #include <txmempool.h>
 #include <util/chaintype.h>
@@ -74,7 +76,7 @@ BOOST_FIXTURE_TEST_CASE(pq_scheme_activation, BasicTestingSetup)
                         // Populate caches after activation, then revisit the same
                         // signature before activation, including the 512-bit path.
                         for (bool active : {true, false, true}) {
-                            const unsigned int flags{active ? SCRIPT_VERIFY_PQ_STRICT : SCRIPT_VERIFY_NONE};
+                            const unsigned int flags{SCRIPT_VERIFY_FALCON_CANONICAL | (active ? SCRIPT_VERIFY_PQ_STRICT : SCRIPT_VERIFY_NONE)};
                             CachingTransactionSignatureChecker checker{&tx, 0, amount, true, cache, txdata, !active};
                             std::vector<std::vector<unsigned char>> stack;
                             if (multisig) stack.emplace_back();
@@ -620,6 +622,78 @@ BOOST_FIXTURE_TEST_CASE(checkinputs_test, Dersig100Setup)
         BOOST_CHECK(CheckInputScripts(CTransaction(tx), state, &m_node.chainman->ActiveChainstate().CoinsTip(), SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS, true, true, txdata, m_node.chainman->m_validation_cache, &scriptchecks));
         // Should get 2 script checks back -- caching is on a whole-transaction basis.
         BOOST_CHECK_EQUAL(scriptchecks.size(), 2U);
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(falcon_legacy_encoding_caches, BasicTestingSetup)
+{
+    CKey key;
+    key.MakeNewKey(pq::SchemeId::FALCON_512);
+    const CScript script = CScript{} << ToByteVector(key.GetPubKey()) << OP_CHECKSIG;
+    constexpr unsigned int legacy{MANDATORY_SCRIPT_VERIFY_FLAGS};
+    constexpr unsigned int policy{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_DEFINED_HASHTYPE | SCRIPT_VERIFY_FALCON_CANONICAL};
+    constexpr unsigned int strict{legacy | SCRIPT_VERIFY_PQ_STRICT};
+    for (bool witness : {false, true}) {
+        const CTxOut prevout{10000, witness ? GetScriptForDestination(WitnessV0ScriptHash{script}) : script};
+        CMutableTransaction mtx;
+        mtx.vin.resize(1);
+        mtx.vin[0].prevout = COutPoint{Txid::FromUint256(uint256{1}), 0};
+        mtx.vout.emplace_back(9000, CScript{} << OP_TRUE);
+        const auto hash = SignatureHash(script, mtx, 0, SIGHASH_ALL, prevout.nValue, witness ? SigVersion::WITNESS_V0 : SigVersion::BASE);
+        const auto original = test::SignFalcon512WithAlternates(key, hash);
+        BOOST_REQUIRE(!original.empty());
+        const auto parsed = test::ParseFalcon512(original);
+        BOOST_REQUIRE(parsed);
+        CCoinsView dummy;
+        CCoinsViewCache coins{&dummy};
+        coins.AddCoin(mtx.vin[0].prevout, Coin{prevout, 1, false}, false);
+        for (bool store : {false, true}) {
+            ValidationCache cache{1 << 20, 1 << 20};
+            // Use one cache across different raw bytes of the same authorization.
+            for (unsigned variant : {1, 0, 2, 3, 0}) {
+                auto sig = original;
+                if (variant & 1) test::SetFalconBit(sig, parsed->zero_sign_bits[0]);
+                if (variant & 2) sig.back() |= 1;
+                sig.push_back(SIGHASH_ALL);
+                if (witness) {
+                    mtx.vin[0].scriptWitness.stack = {sig, ToByteVector(script)};
+                } else {
+                    mtx.vin[0].scriptSig = CScript{} << sig;
+                }
+                const CTransaction tx{mtx};
+                PrecomputedTransactionData txdata;
+                txdata.Init(tx, {prevout}, true);
+                // Warm the mathematical cache with legacy success, then check
+                // policy and strict rules without spending the referenced coin.
+                for (unsigned int flags : {legacy, policy, strict, legacy, strict, policy}) {
+                    CachingTransactionSignatureChecker checker{&tx, 0, prevout.nValue, store, cache.m_signature_cache, txdata, !(flags & SCRIPT_VERIFY_PQ_STRICT)};
+                    ScriptError error;
+                    const bool ok = VerifyScript(tx.vin[0].scriptSig, prevout.scriptPubKey, &tx.vin[0].scriptWitness, flags, checker, &error);
+                    const bool expected{variant == 0 || flags == legacy};
+                    BOOST_CHECK_EQUAL(ok, expected);
+                    if (flags == policy && variant) BOOST_CHECK_EQUAL(error, SCRIPT_ERR_SIG_FALCON_ENCODING);
+                }
+                LOCK(cs_main);
+                for (bool deferred : {false, true}) {
+                    // Separate full-script caches prove both orderings without
+                    // relying on the outcome of a preceding loop iteration.
+                    for (bool policy_first : {false, true}) {
+                        ValidationCache full_cache{1 << 20, 1 << 20};
+                        const std::array<unsigned int, 5> flags_order{
+                            policy_first ? policy : legacy, policy_first ? legacy : policy, strict, legacy, policy};
+                        for (unsigned int flags : flags_order) {
+                            TxValidationState state;
+                            std::vector<CScriptCheck> checks;
+                            bool ok = CheckInputScripts(tx, state, coins, flags, store, true, txdata, full_cache, deferred ? &checks : nullptr);
+                            for (auto& check : checks) {
+                                if (check()) ok = false;
+                            }
+                            BOOST_CHECK_EQUAL(ok, variant == 0 || flags == legacy);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

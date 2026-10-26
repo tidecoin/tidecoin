@@ -18,6 +18,119 @@ enum {
         TIDECOIN_FALCON512_LEGACY_CRYPTO_BYTES - TIDECOIN_FALCON512_NONCELEN - 3,
 };
 
+/*
+ * Encoding/decoding of keys and signatures.
+ *
+ * ==========================(LICENSE BEGIN)============================
+ *
+ * Copyright (c) 2017-2019  Falcon Project
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining
+ * a copy of this software and associated documentation files (the
+ * "Software"), to deal in the Software without restriction, including
+ * without limitation the rights to use, copy, modify, merge, publish,
+ * distribute, sublicense, and/or sell copies of the Software, and to
+ * permit persons to whom the Software is furnished to do so, subject to
+ * the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
+ * ===========================(LICENSE END)=============================
+ *
+ * @author   Thomas Pornin <thomas.pornin@nccgroup.com>
+ */
+/*
+ * Tidecoin 0.18.3 src/codec.cpp, commit
+ * 7b525367e9ea1b614aa380a52394f0e3d3878aa9. Preserve the old treatment of
+ * negative zero and unused final bits for preactivation block verification.
+ * The caller still requires exact consumption. Strict verification continues
+ * to use the canonical PQClean decoder.
+ */
+static size_t
+tidecoin_falcon512_comp_decode_legacy(
+    int16_t *x, unsigned logn,
+    const void *in, size_t max_in_len) {
+    const uint8_t *buf;
+    size_t n, u, v;
+    uint32_t acc;
+    unsigned acc_len;
+
+    n = (size_t)1 << logn;
+    buf = (const uint8_t *)in;
+    acc = 0;
+    acc_len = 0;
+    v = 0;
+    for (u = 0; u < n; u ++) {
+        unsigned b, s, m;
+
+        /*
+         * Get next eight bits: sign and low seven bits of the
+         * absolute value.
+         */
+        if (v >= max_in_len) {
+            return 0;
+        }
+        /* Explicitly discard the high byte, as the old uint32_t shift did. */
+        acc = ((acc & 0x00FFFFFFu) << 8) | (uint32_t)buf[v ++];
+        b = acc >> acc_len;
+        s = b & 128;
+        m = b & 127;
+
+        /*
+         * Get next bits until a 1 is reached.
+         */
+        for (;;) {
+            if (acc_len == 0) {
+                if (v >= max_in_len) {
+                    return 0;
+                }
+                acc = ((acc & 0x00FFFFFFu) << 8) | (uint32_t)buf[v ++];
+                acc_len = 8;
+            }
+            acc_len --;
+            if (((acc >> acc_len) & 1) != 0) {
+                break;
+            }
+            m += 128;
+            if (m > 2047) {
+                return 0;
+            }
+        }
+        x[u] = (int16_t) m;
+        if (s) {
+            x[u] = (int16_t) - x[u];
+        }
+    }
+    return v;
+}
+
+/* Format only: false for canonical encodings and malformed full buffers. */
+int tidecoin_falcon512_is_noncanonical_legacy(const uint8_t* sig, size_t siglen)
+{
+    int16_t decoded[512];
+    if (siglen <= 1 + TIDECOIN_FALCON512_NONCELEN) {
+        return 0;
+    }
+    if (sig[0] != 0x30 + 9) {
+        return 0;
+    }
+    const uint8_t* body = sig + 1 + TIDECOIN_FALCON512_NONCELEN;
+    const size_t bodylen = siglen - 1 - TIDECOIN_FALCON512_NONCELEN;
+    if (PQCLEAN_FALCON512_CLEAN_comp_decode(decoded, 9, body, bodylen) == bodylen) {
+        return 0;
+    }
+    return tidecoin_falcon512_comp_decode_legacy(decoded, 9, body, bodylen) == bodylen;
+}
+
 static int tidecoin_falcon512_is_short_legacy(const int16_t* s1,
                                               const int16_t* s2,
                                               unsigned logn)
@@ -85,7 +198,7 @@ static int tidecoin_falcon512_verify_legacy(const uint8_t* sig, size_t siglen,
     if (sigbuflen == 0) {
         return -1;
     }
-    if (PQCLEAN_FALCON512_CLEAN_comp_decode(sig_dec, 9, sigbuf, sigbuflen) != sigbuflen) {
+    if (tidecoin_falcon512_comp_decode_legacy(sig_dec, 9, sigbuf, sigbuflen) != sigbuflen) {
         return -1;
     }
 

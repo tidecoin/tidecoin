@@ -70,6 +70,7 @@ static std::map<std::string, unsigned int> mapFlagNames = {
     {std::string("CONST_SCRIPTCODE"), (unsigned int)SCRIPT_VERIFY_CONST_SCRIPTCODE},
     {std::string("PQ_STRICT"), (unsigned int)SCRIPT_VERIFY_PQ_STRICT},
     {std::string("DEFINED_HASHTYPE"), (unsigned int)SCRIPT_VERIFY_DEFINED_HASHTYPE},
+    {std::string("FALCON_CANONICAL"), (unsigned int)SCRIPT_VERIFY_FALCON_CANONICAL},
 };
 
 unsigned int ParseScriptFlags(std::string strFlags)
@@ -321,6 +322,8 @@ BOOST_AUTO_TEST_CASE(tx_valid)
     // This relay-only flag is deliberately absent from STANDARD_SCRIPT_VERIFY_FLAGS.
     BOOST_CHECK_EQUAL(ParseScriptFlags("DEFINED_HASHTYPE"), SCRIPT_VERIFY_DEFINED_HASHTYPE);
     BOOST_CHECK_EQUAL(FormatScriptFlags(SCRIPT_VERIFY_DEFINED_HASHTYPE), "DEFINED_HASHTYPE");
+    BOOST_CHECK_EQUAL(ParseScriptFlags("FALCON_CANONICAL"), SCRIPT_VERIFY_FALCON_CANONICAL);
+    BOOST_CHECK_EQUAL(FormatScriptFlags(SCRIPT_VERIFY_FALCON_CANONICAL), "FALCON_CANONICAL");
 
     const char* const env_valid_output{std::getenv("TIDE_TX_VALID_GEN_OUTPUT")};
     const char* const env_invalid_output{std::getenv("TIDE_TX_INVALID_GEN_OUTPUT")};
