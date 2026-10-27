@@ -6,7 +6,7 @@ Tidecoin is an independently maintained post-quantum cryptocurrency derived from
 
 Tidecoin is a decentralized peer-to-peer cryptocurrency engineered from block zero to resist attacks from both classical and quantum computers. While Bitcoin and virtually all major blockchains rely on ECDSA or Schnorr signatures over secp256k1 — which Shor's algorithm will break once sufficiently powerful quantum computers exist — Tidecoin replaces ECDSA entirely with post-quantum signature schemes from the NIST PQC process.
 
-The network has been in continuous operation since December 27, 2020, with over 2.3 million blocks produced. No security incident, consensus failure, or cryptographic vulnerability has been reported. Tidecoin uses finalized NIST standards where available and NIST-selected schemes still in standardization where appropriate.
+The network has been in continuous operation since December 27, 2020, with over 2.7 million blocks produced. No security incident, consensus failure, or cryptographic vulnerability has been reported. Tidecoin uses finalized NIST standards where available and NIST-selected schemes still in standardization where appropriate.
 
 | | |
 |---|---|
@@ -33,10 +33,10 @@ Tidecoin applies post-quantum cryptography beyond transaction signatures. There 
 
 | Layer | Algorithm | Standard | Purpose |
 |-------|-----------|----------|---------|
-| Signatures (active since genesis) | Falcon-512 | NIST PQC winner, Draft FIPS 206 (FN-DSA) | 666-byte lattice signatures |
-| Signatures (post-AuxPoW) | Falcon-1024 | NIST PQC winner, Draft FIPS 206 (FN-DSA) | Higher-security Falcon parameter set |
-| Signatures (post-AuxPoW) | ML-DSA-44/65/87 | NIST FIPS 204 | Module-lattice digital signatures |
-| P2P transport encryption | ML-KEM-512 | NIST FIPS 203 | Post-quantum key encapsulation |
+| Signatures (active since genesis) | Falcon-512 | NIST-selected; FIPS 206 (FN-DSA) in preparation | Variable-length lattice signatures, at most 666 bytes when signed locally |
+| Signatures (post-AuxPoW) | Falcon-1024 | NIST-selected; FIPS 206 (FN-DSA) in preparation | Higher-security Falcon parameter set, at most 1,280 bytes when signed locally |
+| Signatures (post-AuxPoW) | ML-DSA-44/65/87 | NIST FIPS 204 | Module-lattice digital signatures, fixed 2,420/3,309/4,627 bytes |
+| P2P transport encryption | ML-KEM-512 | NIST FIPS 203 | Post-quantum key encapsulation for opportunistic v2 encryption |
 | Witness script hashing (post-AuxPoW) | SHA-512 | NIST FIPS 180-4 | P2WSH-512 witness scripts, 256-bit security under Grover's algorithm |
 | Wallet key derivation | PQHD | Tidecoin design | Hardened-only, hash-based HD wallet for PQ schemes |
 
@@ -52,14 +52,14 @@ Post-quantum blockchain designs generally fall into three groups:
 | Stateful PQ | Use hash-based signatures such as XMSS or LMS | Conservative assumptions, but key reuse limits and state tracking add operational complexity |
 | Full-stack PQ from genesis | Apply PQ design across signing, wallet, transport, and script extensions from launch | No migration debt; smaller network initially |
 
-Tidecoin is a full-stack PQ design on a Bitcoin-architecture chain. Falcon and ML-DSA handle transaction signing, while PQHD wallet derivation, SHA-512 witness extensions, ML-KEM-encrypted peer transport, and height-gated consensus upgrades aim to close quantum-era exposure across the transaction lifecycle.
+Tidecoin is a full-stack PQ design on a Bitcoin-architecture chain. Falcon and ML-DSA handle transaction signing, while PQHD wallet derivation, SHA-512 witness extensions, opportunistic ML-KEM-encrypted peer transport, and height-gated consensus upgrades aim to close quantum-era exposure across the transaction lifecycle.
 
 See the [whitepaper design positioning](doc/whitepaper.md#13-design-positioning) for the detailed trade-off analysis.
 
 ## Key Features
 
 - **Full-stack post-quantum security** — Signatures, P2P transport, script hashing, and wallet derivation are designed for the quantum era, not only the signing layer.
-- **NIST standards, not experiments** — Signature and transport cryptography uses finalized NIST standards where available, plus Falcon as a NIST PQC winner in Draft FIPS 206 standardization.
+- **NIST standards and selected schemes** — ML-DSA and ML-KEM are finalized NIST standards (FIPS 204 and FIPS 203). Falcon is a NIST-selected scheme whose FN-DSA standard, FIPS 206, is in preparation; Tidecoin uses the pinned PQClean Falcon implementation of the Round 3 specification.
 - **Multi-scheme cryptographic agility** — Five NIST-track signature parameter sets. If a vulnerability is found in one lattice construction, alternative schemes are available through height-gated consensus upgrade.
 - **Bitcoin-derived architecture** — Retains the UTXO model and adapts Bitcoin Core's script, networking, and validation architecture, with Tidecoin-specific tests for PQ signatures, PQHD, AuxPoW, and transport code.
 - **CPU-friendly mining** — YespowerTIDE is the pre-AuxPoW memory-hard proof-of-work algorithm for fair distribution without specialized hardware.
@@ -104,14 +104,16 @@ cmake --build build
 
 ```bash
 # Start the Tidecoin daemon
-./build/src/tidecoind
+./build/bin/tidecoind
 
-# Start with the GUI
-./build/src/qt/tidecoin-qt
+# Start with the GUI (when built with -DBUILD_GUI=ON)
+./build/bin/tidecoin-qt
 
 # CLI interface
-./build/src/tidecoin-cli getblockchaininfo
+./build/bin/tidecoin-cli getblockchaininfo
 ```
+
+These paths assume the default CMake runtime output directory.
 
 ## How Do I Run Tests?
 
@@ -139,11 +141,11 @@ Further developer documentation is available in the [doc folder](doc/).
 
 ### What makes Tidecoin quantum-resistant?
 
-Tidecoin replaces Bitcoin's ECDSA with Falcon-512, a lattice-based digital signature scheme selected by NIST for post-quantum standardization (Draft FIPS 206 / FN-DSA). The underlying hard problem — Short Integer Solution (SIS) over NTRU lattices — has no known efficient quantum algorithm. Tidecoin also supports a height-gated upgrade path to Falcon-1024 and the finalized FIPS 204 ML-DSA parameter sets.
+Tidecoin replaces Bitcoin's ECDSA with Falcon-512, a lattice-based digital signature scheme selected by NIST for post-quantum standardization (FN-DSA/FIPS 206, in preparation). The underlying hard problem — Short Integer Solution (SIS) over NTRU lattices — has no known efficient quantum algorithm. Tidecoin also supports a height-gated upgrade path to Falcon-1024 and the finalized FIPS 204 ML-DSA parameter sets.
 
 ### How does Falcon-512 compare to Bitcoin's ECDSA?
 
-Falcon-512 produces 666-byte padded signatures versus ECDSA's roughly 71-byte DER signatures, but ECDSA is broken by Shor's quantum algorithm once cryptographically relevant quantum computers exist. Falcon-512 is a NIST PQC winner with compact lattice signatures and QROM security under the hardness of SIS over NTRU lattices.
+Falcon-512 produces variable-length compressed signatures, at most 666 bytes when signed locally and without padding, versus ECDSA's roughly 71-byte DER signatures, but ECDSA is broken by Shor's quantum algorithm once cryptographically relevant quantum computers exist. Falcon-512 is a NIST PQC winner with compact lattice signatures and QROM security under the hardness of SIS over NTRU lattices.
 
 ### Can I mine Tidecoin with a CPU?
 
@@ -151,7 +153,7 @@ Yes. Tidecoin uses the YespowerTIDE algorithm, a memory-hard proof-of-work speci
 
 ### Is Falcon the same as NIST's FN-DSA?
 
-Yes. Falcon (Fast Fourier Lattice-based Compact Signatures over NTRU) is the algorithm selected by NIST and being standardized as FN-DSA under Draft FIPS 206. Tidecoin has used Falcon-512 as its active mainnet signature scheme since genesis.
+FN-DSA is the standard being developed from Falcon (Fast Fourier Lattice-based Compact Signatures over NTRU) as FIPS 206. Tidecoin uses the pinned PQClean implementation of the Round 3 Falcon specification, with Falcon-512 active on mainnet since genesis. Compatibility with the final FN-DSA standard will need a separate evaluation.
 
 ### What is PQHD?
 
@@ -193,7 +195,7 @@ Tidecoin is released under the MIT License. See [COPYING](COPYING) for details.
 
 - NIST FIPS 203: ML-KEM Standard. August 2024. https://csrc.nist.gov/pubs/fips/203/final
 - NIST FIPS 204: ML-DSA Standard. August 2024. https://csrc.nist.gov/pubs/fips/204/final
-- NIST Draft FIPS 206: FN-DSA (Falcon). https://csrc.nist.gov/pubs/fips/206/ipd
+- NIST Post-Quantum Cryptography project: FN-DSA/FIPS 206 (Falcon) standardization in preparation. https://csrc.nist.gov/projects/post-quantum-cryptography
 - NIST IR 8547: Transition to Post-Quantum Cryptography Standards. 2024.
 - Federal Reserve FEDS 2025-093: Harvest Now Decrypt Later. 2025.
 - Shor, P. "Algorithms for Quantum Computation." FOCS 1994.

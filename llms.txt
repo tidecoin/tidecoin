@@ -1,13 +1,13 @@
 # Tidecoin
 
-> Post-quantum cryptocurrency using NIST-standardized FALCON-512 signatures, operational since December 2020.
+> Post-quantum cryptocurrency using FALCON-512 signatures (NIST-selected; FN-DSA/FIPS 206 in preparation), operational since December 2020.
 
 Tidecoin is an independently maintained post-quantum cryptocurrency derived from
 Bitcoin Core. It replaces ECDSA entirely with post-quantum signature schemes.
 Every transaction since genesis
 (December 27, 2020) has been signed with FALCON-512, a lattice-based scheme selected
-by NIST for standardization as FN-DSA (Draft FIPS 206). The network has produced over
-2.3 million blocks with zero security incidents.
+by NIST for standardization as FN-DSA (FIPS 206, in preparation). The network has produced over
+2.7 million blocks with zero security incidents.
 
 The Tidecoin 1.x codebase was initially based on Bitcoin Core v30 and has since
 evolved through Tidecoin-specific development and selected updates from later
@@ -18,7 +18,7 @@ and compatibility requirements.
 
 - Ticker: TDC
 - Genesis: December 27, 2020
-- Blocks produced: 2,300,000+
+- Blocks produced: 2,700,000+
 - Security incidents: 0
 - Max supply: ~21,000,000 TDC
 - Block time: 60 seconds
@@ -28,15 +28,22 @@ and compatibility requirements.
 
 ## Post-Quantum Cryptography
 
-Tidecoin uses exclusively NIST-standardized cryptographic primitives:
+Tidecoin uses NIST-selected post-quantum primitives. ML-DSA and ML-KEM are
+finalized NIST standards; Falcon's FN-DSA standard (FIPS 206) is in preparation,
+and Tidecoin uses the pinned PQClean implementation of the Falcon Round 3
+specification:
 
-- FALCON-512 (Draft FIPS 206 / FN-DSA): Default signature scheme, 666-byte signatures
-- FALCON-1024 (Draft FIPS 206 / FN-DSA): Higher security variant, 1,280-byte signatures
-- ML-DSA-44 (FIPS 204): Module-lattice digital signatures
-- ML-DSA-65 (FIPS 204): Module-lattice digital signatures
-- ML-DSA-87 (FIPS 204): Module-lattice digital signatures
-- ML-KEM-512 (FIPS 203): Post-quantum encrypted P2P transport
-- SHA-512 (FIPS 180-4): Witness script hashing for 256-bit quantum security
+- FALCON-512 (FN-DSA/FIPS 206 in preparation): Default signature scheme since genesis. Variable-length compressed signatures without padding, at most 666 bytes when signed locally
+- FALCON-1024 (FN-DSA/FIPS 206 in preparation): Higher security variant (post-AuxPoW). Variable-length compressed signatures, at most 1,280 bytes when signed locally
+- ML-DSA-44 (FIPS 204): Module-lattice digital signatures (post-AuxPoW), 2,420 bytes
+- ML-DSA-65 (FIPS 204): Module-lattice digital signatures (post-AuxPoW), 3,309 bytes
+- ML-DSA-87 (FIPS 204): Module-lattice digital signatures (post-AuxPoW), 4,627 bytes
+- ML-KEM-512 (FIPS 203): Key exchange for opportunistic v2 P2P encryption. Peers can still use unencrypted v1 connections, and the handshake does not verify peer identity
+- SHA-512 (FIPS 180-4): Witness script hashing for 256-bit quantum security (post-AuxPoW)
+
+Signature sizes exclude the transaction sighash byte. Falcon's local signing
+limits are not consensus length limits. ML-DSA verification requires the exact
+fixed length listed for its parameter set.
 
 No ECDSA, Schnorr, or Taproot exists anywhere in the protocol.
 
@@ -46,10 +53,10 @@ No ECDSA, Schnorr, or Taproot exists anywhere in the protocol.
 |---------|----------|-----|---------|
 | PQ since genesis | Yes (Dec 2020) | Yes (Jun 2018) | No |
 | Signature scheme | FALCON-512 (NIST) | XMSS (stateful) | ECDSA |
-| Signature size | 666 bytes | ~2,500 bytes | 71 bytes |
+| Signature size | Up to 666 bytes (variable) | ~2,500 bytes | ~71 bytes |
 | PQ transport | ML-KEM-512 | No | No |
 | Stateless signatures | Yes | No | N/A |
-| NIST standard | Draft FIPS 206 | No | No |
+| NIST standard | FIPS 206 in preparation | No | No |
 
 ## Documentation
 

@@ -25,8 +25,9 @@ constexpr bool IsKnownPurpose(uint32_t purpose)
            purpose == PURPOSE_WPKH || purpose == PURPOSE_WSH512;
 }
 
-// Coin type (path element 1). Test networks share one value so a seed never
-// yields the same keys on a test network and on mainnet.
+// Coin type (path element 1). Test networks share one value, so default
+// descriptors from one seed differ between test networks and mainnet. Explicit
+// paths may use either known coin type on any network.
 constexpr uint32_t COIN_TYPE_MAIN{6868};
 constexpr uint32_t COIN_TYPE_TEST{1};
 

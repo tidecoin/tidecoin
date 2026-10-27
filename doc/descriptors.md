@@ -88,7 +88,8 @@ Rules enforced by parser:
 - Wildcard form must be final `*h` (or `*'`) and then exactly 5 fixed hardened
   elements before it.
 - `purpose` must be one of the PQHD purposes listed below.
-- `cointype` must be `6868` (mainnet) or `1` (test networks).
+- `cointype` must be `6868` (mainnet) or `1` (test networks). Either value is
+  accepted on any network; default descriptors use the current network's value.
 - `scheme` must fit in `uint8` and be a recognized PQ scheme prefix.
 - `change` must be `0` or `1`.
 - Multipath derivation (`<...;...>`) is not supported in `pqhd(...)`.

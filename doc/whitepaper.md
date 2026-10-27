@@ -6,7 +6,7 @@
 
 ## Abstract
 
-Tidecoin is a decentralized cryptocurrency engineered from genesis to resist attacks from both classical and quantum computers. Built on Bitcoin Core, it replaces ECDSA with post-quantum signature schemes from the NIST PQC process -- Falcon-512/1024 and ML-DSA-44/65/87 -- while preserving the UTXO model, scripting system, and 15+ years of peer-reviewed consensus logic. Post-quantum design extends beyond signatures to include a hardened-only PQHD wallet, SHA-512 witness scripts, ML-KEM-512 peer-to-peer transport encryption, and a two-phase proof-of-work strategy transitioning from CPU-friendly YespowerTIDE to scrypt-based merged mining with Litecoin. The network has been in continuous operation since December 27, 2020.
+Tidecoin is a decentralized cryptocurrency engineered from genesis to resist attacks from both classical and quantum computers. Built on Bitcoin Core, it replaces ECDSA with post-quantum signature schemes from the NIST PQC process -- Falcon-512/1024 and ML-DSA-44/65/87 -- while preserving the UTXO model, scripting system, and 15+ years of peer-reviewed consensus logic. Post-quantum design extends beyond signatures to include a hardened-only PQHD wallet, SHA-512 witness scripts, opportunistic ML-KEM-512 peer-to-peer transport encryption, and a two-phase proof-of-work strategy transitioning from CPU-friendly YespowerTIDE to scrypt-based merged mining with Litecoin. The network has been in continuous operation since December 27, 2020.
 
 ---
 
@@ -42,7 +42,7 @@ Tidecoin was conceived in direct response to these realities. Its genesis block,
 
 This references the breakthrough by the University of Science and Technology of China, whose photonic quantum computer Jiuzhang demonstrated quantum computational advantage -- an event that underscored the urgency of quantum-safe cryptography.
 
-Since that genesis block, Tidecoin has produced over 2.3 million blocks across more than five years of continuous operation, with every single transaction secured by post-quantum signatures. No security incident, consensus failure, or cryptographic vulnerability has been reported.
+Since that genesis block, Tidecoin has produced over 2.7 million blocks across more than five years of continuous operation, with every single transaction secured by post-quantum signatures. No security incident, consensus failure, or cryptographic vulnerability has been reported.
 
 ---
 
@@ -83,7 +83,7 @@ This includes the estimated 968,000 BTC in addresses attributed to Satoshi Nakam
 Bitcoin's BIP-360 (P2QRH) and QBIP proposals for post-quantum migration face severe obstacles:
 
 - **Political inertia:** Bitcoin's conservative governance model requires global consensus. The SegWit activation took approximately two years; Taproot took three. Post-quantum migration is far more complex.
-- **Block space pressure:** Post-quantum signatures are 10-100x larger than ECDSA (666 bytes for Falcon-512 vs. 64 bytes for ECDSA). Migration would consume significant block space for potentially years.
+- **Block space pressure:** Post-quantum signatures are 10-100x larger than ECDSA (up to 666 bytes for Falcon-512 vs. 64 bytes for ECDSA). Migration would consume significant block space for potentially years.
 - **Unrecoverable funds:** Coins in P2PK addresses (including Satoshi's holdings) cannot migrate because the keys are presumably lost.
 - **Timeline mismatch:** The Bitcoin community's estimated migration timeline is 5-10 years. If CRQCs arrive on the optimistic timeline, Bitcoin may not be ready.
 
@@ -101,7 +101,7 @@ Every post-quantum cryptographic primitive in Tidecoin is either a finalized NIS
 
 - **ML-DSA** (FIPS 204, August 2024) -- Digital signatures
 - **ML-KEM** (FIPS 203, August 2024) -- Key encapsulation
-- **Falcon** (Draft FIPS 206) -- Digital signatures with compact sizes
+- **Falcon** (FN-DSA/FIPS 206 in preparation) -- Digital signatures with compact sizes
 - **SHA-512** -- FIPS 180-4 hash function
 
 We deliberately avoided exotic, unvetted algorithms. The NIST PQC competition ran for eight years (2016-2024), with 69 initial submissions narrowed to 4 winners through extensive cryptanalysis by the global academic community.
@@ -142,7 +142,7 @@ New signature schemes are activated through height-gated consensus upgrades, not
 
 Falcon (**F**ast-Fourier **L**attice-based **C**ompact Signatures **o**ver **N**TRU) is a NIST PQC Round 3 winner, designated for standardization as **FIPS 206 (FN-DSA)**. The draft standard was described as "basically written, awaiting approval" at the 6th PQC Standardization Conference in September 2025.
 
-Falcon-512 has been the active signature scheme on Tidecoin's mainnet since genesis (December 2020), making Tidecoin one of the earliest live blockchains to use this lattice-based signature family later designated for standardization as FN-DSA (Draft FIPS 206).
+Falcon-512 has been the active signature scheme on Tidecoin's mainnet since genesis (December 2020), making Tidecoin one of the earliest live blockchains to use this lattice-based signature family later designated for standardization as FN-DSA (FIPS 206, in preparation).
 
 #### 4.1.1 Mathematical Foundation: NTRU Lattices and the GPV Framework
 
@@ -229,7 +229,7 @@ The Falcon specification defines multiple signature encoding formats:
 
 Tidecoin uses variable-length compressed signatures for both Falcon variants. Verification requires the decoder to consume the entire signature: extra trailing bytes, including zero padding to 666 or 1,280 bytes, are rejected. Legacy Falcon-512 already applies this rule; the strict Falcon-512 and Falcon-1024 verifiers apply it under the AuxPoW rules. This prevents changing transaction identifiers through alternate padded encodings of the same signature. Local signing retries compressed signatures longer than 666 bytes for Falcon-512 or 1,280 bytes for Falcon-1024, including legacy Falcon-512, so those sizes bound locally generated signatures and their wallet estimates. No padding is added, and the transaction sighash byte is counted separately. External-signing estimates use the larger PQClean bounds. The local signing bounds are not consensus length limits.
 
-FIPS 206 will include both padded and compressed formats with domain separation to maintain strong unforgeability when multiple encodings coexist.
+FN-DSA/FIPS 206 remains in preparation. Its final encoding rules will need to be evaluated separately from the Falcon formats used by Tidecoin.
 
 #### 4.1.8 Integer Emulation: Eliminating Floating-Point Side Channels
 
@@ -256,7 +256,7 @@ Tidecoin's Falcon-512 implementation supports two verification modes:
 
 #### 4.1.10 From Falcon to FN-DSA (FIPS 206): What Changes
 
-FIPS 206 standardizes Falcon under the name **FN-DSA** (FFT over NTRU-Lattice-Based Digital Signature Algorithm). Tidecoin currently uses vendored PQClean Falcon implementing the original Round 3 Falcon specification; the following FN-DSA changes are standards background that may inform future upgrades. Key changes from the original Falcon specification:
+FIPS 206 is being developed to standardize Falcon under the name **FN-DSA** (FFT over NTRU-Lattice-Based Digital Signature Algorithm). Tidecoin currently uses vendored PQClean Falcon implementing the original Round 3 Falcon specification. The following proposed FN-DSA changes are standards background that may inform future upgrades; they do not describe a published final standard and remain subject to change:
 
 1. **BUFF security via public key hashing:** FN-DSA computes hm = SHAKE-256(nonce || hpk || 0x00 || len(ctx) || ctx || message), where hpk is a 64-byte hash of the public key. This achieves Beyond UnForgeability Features (BUFF) security at zero size cost -- no change to public key or signature sizes (ePrint 2024/710).
 
@@ -362,10 +362,10 @@ ML-DSA complements Falcon with several distinct advantages:
 - **No Gaussian sampling:** ML-DSA uses only uniform sampling from bounded integer ranges. Gaussian sampling is difficult to implement in constant time and has been the source of numerous side-channel attacks on other lattice schemes.
 - **Simpler implementation:** The core operations are SHAKE hashing, NTT-based polynomial multiplication, and coefficient-wise arithmetic with norm checks. No complex number-theoretic operations like FFT tree construction.
 - **Hedged signing by default:** FIPS 204 mixes fresh randomness with secret key material, providing simultaneous defense against faulty RNGs, side channels, and fault injection.
-- **Already finalized:** FIPS 204 was published August 13, 2024 and is effective immediately. Falcon's FIPS 206 remains in draft with projected finalization in 2026-2027.
+- **Already finalized:** FIPS 204 was published August 13, 2024 and is effective immediately. Falcon's FN-DSA standard, FIPS 206, remains in preparation.
 - **Strong unforgeability (SUF-CMA):** An adversary cannot produce a new valid signature even for a message that has already been signed.
 
-The tradeoff: ML-DSA signatures (2,420-4,627 bytes) are roughly 3.6x larger than the corresponding Falcon signatures (666-1,280 bytes). In blockchain contexts where bandwidth is constrained, Falcon's compactness remains valuable -- which is why Tidecoin supports both families, allowing users to choose the appropriate tradeoff.
+The tradeoff: ML-DSA signatures (2,420-4,627 bytes) are roughly 3.6x larger than the corresponding Falcon signatures (at most 666-1,280 bytes when signed locally). In blockchain contexts where bandwidth is constrained, Falcon's compactness remains valuable -- which is why Tidecoin supports both families, allowing users to choose the appropriate tradeoff.
 
 #### 4.2.7 From CRYSTALS-Dilithium to ML-DSA (FIPS 204)
 
@@ -383,7 +383,7 @@ The standard is based on Dilithium specification version 3.1, with changes made 
 All five signature schemes are registered in a compile-time scheme registry. Each scheme has:
 
 - A unique one-byte prefix (0x07-0x0B) prepended to serialized public keys
-- Fixed metadata: public key size, secret key size, maximum and fixed signature sizes
+- Size metadata: public key size, secret key size, the PQClean signature buffer bound (also used for external-signing estimates) and the local signing maximum. Falcon signatures are variable-length; its local signing and estimation bounds are not consensus length limits. ML-DSA verification requires the exact fixed signature length for its parameter set.
 - A human-readable name
 
 The verification path through consensus code is:
@@ -421,11 +421,11 @@ m / purpose' / coin_type' / scheme' / account' / change' / index'
 
 All path elements are hardened (high bit set):
 - `purpose'` = script family: 10044' (`pkh`), 10049' (`sh(wpkh)`), 10084' (`wpkh`), 10087' (`wsh512`), or 10007' for custom and multisig descriptors
-- `coin_type'` = 6868' on mainnet, 1' on test networks
+- `coin_type'` = 6868' for mainnet, 1' for test networks (the default descriptors use the current network's value; either value is accepted on any network)
 - `scheme'` = PQ scheme identifier
 - `account'`, `change'`, `index'` = User-controlled derivation
 
-Giving each script family its own purpose means one seed and index never produce the same key for two address types. Without it, a `pkh` and a `wpkh` address at the same index would carry the same `HASH160(pubkey)` and be linkable on-chain. The separate test-network coin type keeps test keys distinct from mainnet keys.
+Giving each default script family its own purpose means one seed and index never produce the same key for two default address types. Without it, a `pkh` and a `wpkh` address at the same index would carry the same `HASH160(pubkey)` and be linkable on-chain. The separate test-network coin type keeps generated test keys distinct from generated mainnet keys. These are properties of the default paths: an explicitly imported descriptor may use any known purpose or either coin type, and then derives the same keys as any other descriptor with the same seed and path.
 
 ### 5.3 Key Derivation
 
@@ -714,7 +714,13 @@ ML-KEM-512 parameters (NIST Security Category 1):
 | Ciphertext | 768 bytes |
 | Shared secret | 32 bytes |
 
-The ML-KEM handshake establishes a 256-bit shared secret that is then used for authenticated encryption of all subsequent peer-to-peer communication. As with Bitcoin's BIP 324 v2 transport, the primary purpose is peer privacy and censorship resistance — preventing ISP-level traffic analysis, connection fingerprinting, and selective relay censorship. Tidecoin replaces the ECDH key exchange with ML-KEM so that this protection does not become a quantum-era weakness.
+The ML-KEM handshake establishes a 256-bit shared secret that is then used for authenticated encryption of subsequent messages on that connection. Here "authenticated" means that modified messages are detected; it does not mean the remote peer's identity is verified. As with Bitcoin's BIP 324 v2 transport, the purpose is to raise the cost of surveillance and selective interference: an observer of the network path cannot read relayed messages, and altered messages are rejected, so reading or filtering traffic requires an active attack. Tidecoin replaces the ECDH key exchange with ML-KEM so that this protection does not become a quantum-era weakness.
+
+The transport has the following limits:
+
+- **Opportunistic encryption.** v2 is enabled by default, but nodes still accept inbound v1 connections. Peer support and connection settings determine whether outbound attempts use v2, and eligible unsuccessful attempts can retry with v1. A connection is encrypted only when both sides complete the v2 handshake.
+- **No peer authentication.** The key exchange does not identify the remote party. An active attacker positioned between two peers can complete a separate handshake with each one. Operators who need assurance can compare the session ID reported by `getpeerinfo` through an independent channel.
+- **Recognizable handshake.** The ML-KEM public-key encoding has a recognizable structure. Unlike Bitcoin's BIP 324 handshake, Tidecoin's handshake does not look uniformly random, and adding random bytes after the key does not hide its structure. Recognizing the key exchange does not reveal message contents.
 
 ### 8.2 Why P2P Encryption Matters for PQ
 
@@ -723,6 +729,8 @@ In a post-quantum setting, P2P encryption makes it harder for a passive network 
 1. Intercept unconfirmed transactions in transit between peers
 2. Collect exposed public keys from transaction relay traffic without participating as a receiving peer
 3. Correlate transport-layer metadata with observed transaction propagation
+
+These benefits apply to encrypted v2 connections against passive observers. An adversary that connects to nodes as an ordinary peer, or actively intercepts unauthenticated connections, still receives relayed transactions.
 
 ---
 
@@ -864,7 +872,7 @@ Tidecoin had no premine, no initial coin offering, and no developer allocation. 
 | **Network magic** | 0xecfacea5 |
 | **Bech32 HRP** | `tbc` (mainnet), `q` (PQ witness, post-AuxPoW) |
 | **Signature schemes** | Falcon-512 (genesis), Falcon-1024 / ML-DSA-44/65/87 (post-AuxPoW) |
-| **P2P encryption** | ML-KEM-512 |
+| **P2P encryption** | ML-KEM-512 (opportunistic v2 transport) |
 | **DNS seeds** | seed.tidecoin.co |
 | **SegWit** | Active from block 1 |
 | **AuxPoW Chain ID** | 8 |
@@ -930,6 +938,9 @@ The transition from YespowerTIDE to scrypt merged mining trades the Phase 1 adva
 | Key exchange | ECDH (secp256k1) | ML-KEM-512 (FIPS 203) |
 | Quantum security | Broken by Shor | NIST Category 1 |
 | Shared secret | 32 bytes | 32 bytes |
+| Encryption | Opportunistic, v1 fallback | Opportunistic, v1 fallback |
+| Peer authentication | None (session ID can be compared manually) | None (session ID can be compared manually) |
+| Handshake appearance | Uniform-looking (ElligatorSwift) | Recognizable ML-KEM public key encoding |
 
 ### 12.5 Memory Safety
 
@@ -954,7 +965,7 @@ Post-quantum blockchain projects differ in how deep the PQ commitment goes. Some
 | **Full-stack PQ (new chain)** | PQ across signing, wallet, transport from launch | No migration debt; smaller network initially |
 | **Stateful PQ** | Hash-based signatures (XMSS, LMS) | Conservative assumptions, but key reuse limits and state tracking add operational complexity |
 
-Tidecoin is a full-stack PQ design on a Bitcoin-architecture chain. Falcon and ML-DSA handle transaction signing, but Tidecoin also uses a hardened-only PQHD wallet, SHA-512 witness extensions, and ML-KEM-encrypted peer transport. The aim is to close quantum-era exposure across the full transaction lifecycle, not just at the signing step.
+Tidecoin is a full-stack PQ design on a Bitcoin-architecture chain. Falcon and ML-DSA handle transaction signing, but Tidecoin also uses a hardened-only PQHD wallet, SHA-512 witness extensions, and opportunistic ML-KEM-encrypted peer transport. The aim is to close quantum-era exposure across the full transaction lifecycle, not just at the signing step.
 
 On the stateful-vs-stateless axis, Tidecoin chose stateless lattice signatures. Stateful schemes like XMSS have strong security properties but turn address reuse and signer state into consensus-level concerns -- operational complexity that is hard to justify when stateless alternatives exist. Lattice signatures avoid this entirely and preserve a wallet experience close to Bitcoin's.
 
@@ -981,7 +992,7 @@ By combining the proven foundation of Bitcoin Core with NIST's post-quantum cryp
 1. NIST FIPS 203: Module-Lattice-Based Key-Encapsulation Mechanism Standard (ML-KEM). August 2024. https://csrc.nist.gov/pubs/fips/203/final
 2. NIST FIPS 204: Module-Lattice-Based Digital Signature Standard (ML-DSA). August 2024. https://csrc.nist.gov/pubs/fips/204/final
 3. NIST FIPS 205: Stateless Hash-Based Digital Signature Standard (SLH-DSA). August 2024. https://csrc.nist.gov/pubs/fips/205/final
-4. NIST Draft FIPS 206: FFT over NTRU-Lattice-Based Digital Signature Standard (FN-DSA/Falcon). In preparation. https://csrc.nist.gov/presentations/2025/fips-206-fn-dsa-falcon
+4. NIST Post-Quantum Cryptography project: FN-DSA/FIPS 206 (Falcon) standardization in preparation. https://csrc.nist.gov/projects/post-quantum-cryptography
 5. NIST IR 8547: Transition to Post-Quantum Cryptography Standards. 2024. https://csrc.nist.gov/pubs/ir/8547/ipd
 6. NIST Post-Quantum Cryptography Standardization Process. https://csrc.nist.gov/projects/post-quantum-cryptography/post-quantum-cryptography-standardization
 

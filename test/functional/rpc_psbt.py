@@ -1352,6 +1352,34 @@ class PSBTTest(BitcoinTestFramework):
         if not self.options.usecli:
             self.test_sighash_mismatch()
         self.test_sighash_adding()
+        self.test_decodepsbt_sighash_display()
+
+    def test_decodepsbt_sighash_display(self):
+        self.log.info("Test decodepsbt displays the complete declared sighash value")
+        psbt = self.nodes[0].createpsbt([{"txid": "00" * 31 + "01", "vout": 0}], [{"data": "00"}])
+        for value, name in [
+            (0x01, "ALL"),
+            (0x02, "NONE"),
+            (0x03, "SINGLE"),
+            (0x81, "ALL|ANYONECANPAY"),
+            (0x82, "NONE|ANYONECANPAY"),
+            (0x83, "SINGLE|ANYONECANPAY"),
+            (0x00, ""),
+            (0x04, ""),
+            (0xff, ""),
+            (0x101, ""),
+            (0x181, ""),
+            (0x80000001, ""),
+            (0xffffffff, ""),
+        ]:
+            mod_psbt = PSBT.from_base64(psbt)
+            mod_psbt.i[0].map[PSBT_IN_SIGHASH_TYPE] = value.to_bytes(4, byteorder="little")
+            decoded = self.nodes[0].decodepsbt(mod_psbt.to_base64())["inputs"][0]
+            assert_equal(decoded["sighash"], name)
+            if name:
+                assert "sighash_value" not in decoded
+            else:
+                assert_equal(decoded["sighash_value"], value)
 
 if __name__ == '__main__':
     PSBTTest(__file__).main()

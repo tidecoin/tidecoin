@@ -5,8 +5,9 @@ Instructions for AI coding assistants working with this repository.
 ## Project Overview
 
 Tidecoin is an independently maintained post-quantum cryptocurrency derived from
-Bitcoin Core. It replaces ECDSA entirely with NIST-standardized post-quantum
-signature schemes. The network has been operational since December 27, 2020.
+Bitcoin Core. It replaces ECDSA entirely with NIST-selected post-quantum
+signature schemes (FIPS 204 ML-DSA and Falcon, whose FN-DSA standard, FIPS 206,
+is in preparation). The network has been operational since December 27, 2020.
 
 The Tidecoin 1.x codebase was initially based on Bitcoin Core v30 and has since
 evolved through Tidecoin-specific development and selected updates from later
@@ -39,12 +40,12 @@ build/test/functional/test_runner.py
 
 ### Cryptographic Schemes
 
-Five NIST-standardized PQ signature schemes (defined in `src/pq/pq_scheme.h`):
+Five NIST-selected PQ signature schemes (defined in `src/pq/pq_scheme.h`):
 
 | Scheme | Prefix | Standard |
 |--------|--------|----------|
-| Falcon-512 | 0x07 | Draft FIPS 206 |
-| Falcon-1024 | 0x08 | Draft FIPS 206 |
+| Falcon-512 | 0x07 | FIPS 206 in preparation |
+| Falcon-1024 | 0x08 | FIPS 206 in preparation |
 | ML-DSA-44 | 0x09 | FIPS 204 |
 | ML-DSA-65 | 0x0A | FIPS 204 |
 | ML-DSA-87 | 0x0B | FIPS 204 |
@@ -75,7 +76,7 @@ Falcon-512 is the default and has been used since genesis.
   mainnet. Gates activation of multi-scheme support, witness v1, OP_SHA512,
   and strict PQ verification.
 - **ML-KEM-512 Transport**: V2 P2P encryption uses post-quantum key encapsulation
-  instead of X25519. Enabled by default.
+  in place of BIP324's secp256k1 ECDH key exchange. Enabled by default.
 
 ### Binaries
 

@@ -63,10 +63,17 @@ Constants from `src/pq/pqhd_params.h`:
 - `COIN_TYPE_MAIN = 6868` (mainnet)
 - `COIN_TYPE_TEST = 1` (testnet and regtest)
 
-Each script family has its own purpose so that one seed and index never derive
-the same key for two families. Otherwise `pkh` and `wpkh` addresses at the same
-index would carry the same `HASH160(pubkey)` and be linkable on-chain.
-The test-network coin type keeps test keys distinct from mainnet keys.
+Default descriptors give each script family its own purpose so that one seed
+and index never derive the same key for two default families. Otherwise `pkh`
+and `wpkh` addresses at the same index would carry the same `HASH160(pubkey)`
+and be linkable on-chain. Default descriptors also use the network's coin type,
+keeping generated test-network keys distinct from generated mainnet keys.
+
+These separations are properties of the generated default paths, not
+restrictions on every path. The descriptor parser and PSBT key-origin checks
+accept any known purpose and either known coin type on every network. An
+explicitly imported descriptor can therefore reuse another family's purpose or
+the other network's coin type and derive the same keys from the same seed.
 
 PQHD v1 leaf paths MUST satisfy:
 

@@ -865,7 +865,8 @@ const RPCResult decodepsbt_inputs{
             {
                 {RPCResult::Type::STR, "pubkey", "The public key and signature that corresponds to it."},
             }},
-            {RPCResult::Type::STR, "sighash", /*optional=*/true, "The sighash type to be used"},
+            {RPCResult::Type::STR, "sighash", /*optional=*/true, "The sighash type to be used, or an empty string if the declared value is not a recognized sighash type"},
+            {RPCResult::Type::NUM, "sighash_value", /*optional=*/true, "The declared 32-bit sighash value, present only when it is not a recognized sighash type"},
             {RPCResult::Type::OBJ, "redeem_script", /*optional=*/true, "",
             {
                 {RPCResult::Type::STR, "asm", "Disassembly of the redeem script"},
@@ -1105,7 +1106,13 @@ static RPCHelpMan decodepsbt()
 
         // Sighash
         if (input.sighash_type != std::nullopt) {
-            in.pushKV("sighash", SighashToStr((unsigned char)*input.sighash_type));
+            // Look up the complete declared value; only one-byte values can name a type.
+            const int sighash{*input.sighash_type};
+            const std::string name{sighash >= 0 && sighash <= 0xff ? SighashToStr(static_cast<unsigned char>(sighash)) : ""};
+            in.pushKV("sighash", name);
+            if (name.empty()) {
+                in.pushKV("sighash_value", int64_t{static_cast<uint32_t>(sighash)});
+            }
         }
 
         // Redeem script and witness script

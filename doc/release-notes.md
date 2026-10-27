@@ -107,13 +107,19 @@ only Falcon-512 can authorize transaction signatures. Falcon-1024 and the three
 ML-DSA schemes become eligible at the configured AuxPoW activation height, when
 strict Falcon verification also starts. AuxPoW remains disabled on mainnet.
 
-| Scheme | Prefix | Standard | Signature size |
-|--------|--------|----------|----------------|
-| Falcon-512 | 0x07 | NIST Draft FIPS 206 (FN-DSA) | 666 bytes |
-| Falcon-1024 | 0x08 | NIST Draft FIPS 206 (FN-DSA) | 1,280 bytes |
-| ML-DSA-44 | 0x09 | NIST FIPS 204 | 2,420 bytes |
-| ML-DSA-65 | 0x0A | NIST FIPS 204 | 3,309 bytes |
-| ML-DSA-87 | 0x0B | NIST FIPS 204 | 4,627 bytes |
+| Scheme | Prefix | Standard | Signature encoding | Local signing maximum | External-signing estimate |
+|--------|--------|----------|--------------------|-----------------------|---------------------------|
+| Falcon-512 | 0x07 | FIPS 206 (FN-DSA) in preparation | Variable-length compressed, unpadded | 666 bytes | 752 bytes |
+| Falcon-1024 | 0x08 | FIPS 206 (FN-DSA) in preparation | Variable-length compressed, unpadded | 1,280 bytes | 1,462 bytes |
+| ML-DSA-44 | 0x09 | NIST FIPS 204 | Fixed length | 2,420 bytes | 2,420 bytes |
+| ML-DSA-65 | 0x0A | NIST FIPS 204 | Fixed length | 3,309 bytes | 3,309 bytes |
+| ML-DSA-87 | 0x0B | NIST FIPS 204 | Fixed length | 4,627 bytes | 4,627 bytes |
+
+Sizes are detached signatures, including the Falcon header and nonce; a
+transaction signature adds one sighash byte. The external-signing estimates are
+the PQClean output-buffer bounds used when the wallet cannot sign locally.
+For Falcon, neither size column is a consensus length limit. ML-DSA verification
+requires the exact fixed length listed for its parameter set.
 
 Falcon-512 has been the default scheme since genesis (December 27, 2020). Wallet
 address generation follows scheme activation. This release corrects early
@@ -173,10 +179,12 @@ the BIP-32 HD wallet for post-quantum key derivation:
 - **Encrypted seed storage** when wallet encryption is enabled
 - **Separate keys per address type** — each script family has its own path
   purpose (`pkh` 10044, `sh(wpkh)` 10049, `wpkh` 10084, `wsh512` 10087;
-  10007 for custom and multisig descriptors), so addresses
+  10007 for custom and multisig descriptors), so default addresses
   of different types are not linkable through a shared key
-- **Separate test-network keys** — testnet and regtest use coin type 1; mainnet
-  uses 6868
+- **Separate test-network keys** — default descriptors use coin type 1 on
+  testnet and regtest and 6868 on mainnet. Descriptors and PSBT key origins
+  accept either coin type on any network, so an explicitly imported path can
+  derive the other network's keys from the same seed
 
 `setpqhdpolicy` and `setpqhdseed` reapply policy defaults to both receive and
 change descriptor bindings, including when the selected values are unchanged.
@@ -247,8 +255,22 @@ Tidecoin's V2 transport protocol uses ML-KEM-512 (NIST FIPS 203) for
 post-quantum key encapsulation during the peer-to-peer handshake:
 
 - **Enabled by default** (`-v2transport=1`)
-- Post-quantum key encapsulation replaces the X25519 key exchange
+- Post-quantum key encapsulation replaces BIP324's secp256k1 ECDH key exchange
 - 800-byte public keys, 768-byte ciphertexts, 32-byte shared secrets
+
+Encryption is opportunistic. Inbound connections that start with a v1 message
+are still accepted. Regular outbound peers selected from the address manager
+use v2 when both sides advertise support. Address-fetch and explicitly configured
+connections can attempt v2 without prior peer advertisement. An unsuccessful
+outbound v2 attempt can retry with v1 while networking remains active, provided
+it has received no bytes and has sent at least a v1 header's worth of bytes.
+An established v2 connection
+encrypts messages and detects their modification, but the handshake does not
+verify the remote peer's identity: an active attacker can relay between two
+peers without detection unless they compare session IDs (`getpeerinfo`) through
+another channel. The initiator sends its raw 800-byte ML-KEM public key, whose
+encoding has a recognizable structure, so v2 connections are not designed to
+look like random traffic.
 
 `getpeerinfo` reports `detecting` with an empty session ID until the v2 transport
 handshake is complete, including while an outgoing connection waits for the
@@ -410,7 +432,7 @@ Network Parameters
 | Bech32 HRP | tbc | ttbc |
 | Bech32 PQ HRP | q | tq |
 | Block time target | 60 seconds | 60 seconds |
-| Difficulty adjustment | 17-block window | 17-block window |
+| Difficulty adjustment | Legacy retarget every 7,200 blocks (AuxPoW disabled) | Legacy retarget before block 1000; per-block 17-block averaging window from block 1000 |
 | AuxPoW | Disabled | Block 1000 |
 
 Genesis block
@@ -434,6 +456,16 @@ RPC, REST and command-line tools
 ===============================
 
 The new REST endpoint `/rest/spenttxouts/BLOCKHASH` provides spent output queries.
+
+`decodepsbt` looks up the complete declared input sighash value. A value such as
+`0x101` is no longer displayed as `ALL`: any value that is not a recognized
+sighash type shows an empty `sighash` string and the declared 32-bit value in
+the new `sighash_value` field. Recognized types are displayed as before.
+
+The mempool RPC help now states that `vsize`, `ancestorsize`, `descendantsize`
+and `getmempoolinfo` `bytes` are sigops-adjusted using `-bytespersigop`, as are
+the `testmempoolaccept` `vsize`. They can exceed the virtual size reported by
+`decoderawtransaction`. The returned values are unchanged.
 
 New `tidecoin` command
 ----------------------
