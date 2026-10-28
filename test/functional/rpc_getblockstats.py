@@ -221,6 +221,11 @@ class GetblockstatsTest(BitcoinTestFramework):
         self.log.info('Test block height 0')
         genesis_stats = self.nodes[0].getblockstats(0)
         assert_equal(genesis_stats["blockhash"], self.nodes[0].getblockhash(0))
+        genesis = self.nodes[0].getblock(genesis_stats["blockhash"], 2)
+        genesis_value = sum(output["value"] for output in genesis["tx"][0]["vout"])
+        assert_equal(genesis_value, 50)
+        assert_equal(genesis_stats["subsidy"], genesis_value * COIN)
+        assert_equal(self.nodes[0].getblockstats(1, ["subsidy"]), {"subsidy": 40 * COIN})
         assert_equal(genesis_stats["utxo_increase"], 1)
         assert genesis_stats["utxo_size_inc"] > 0
         assert_equal(genesis_stats["utxo_increase_actual"], 0)

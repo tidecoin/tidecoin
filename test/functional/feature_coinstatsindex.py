@@ -54,6 +54,7 @@ class CoinStatsIndexTest(BitcoinTestFramework):
 
     def run_test(self):
         self.wallet = MiniWallet(self.nodes[0])
+        self._test_genesis_stats()
         self._test_coin_stats_index()
         self._test_use_index_option()
         self._test_reorg_index()
@@ -62,7 +63,25 @@ class CoinStatsIndexTest(BitcoinTestFramework):
         self._test_init_index_after_reorg()
 
     def _subsidy(self, height):
+        # Genesis has a fixed 50 TDC output, outside the scheduled subsidy.
+        if height == 0:
+            return Decimal(50)
         return Decimal(_tidecoin_subsidy(height, TIDECOIN_SUBSIDY_INTERVAL)) / COIN
+
+    def _test_genesis_stats(self):
+        self.log.info("Test genesis accounting before any spendable outputs exist")
+        node, index_node = self.nodes
+        genesis = node.getblock(node.getblockhash(0), 2)
+        genesis_value = sum(output['value'] for output in genesis['tx'][0]['vout'])
+        assert_equal(genesis_value, 50)
+        stats = index_node.gettxoutsetinfo('muhash')
+        direct = node.gettxoutsetinfo('muhash')
+        assert_equal(stats['total_unspendable_amount'], genesis_value)
+        assert_equal(stats['block_info']['unspendables']['genesis_block'], genesis_value)
+        assert_equal(stats['block_info']['unspendables']['unclaimed_rewards'], 0)
+        assert_equal(stats['total_amount'], direct['total_amount'], 0)
+        assert_equal(stats['txouts'], direct['txouts'], 0)
+        assert_equal(stats['muhash'], direct['muhash'])
 
     def block_sanity_check(self, block_info, *, height):
         block_subsidy = self._subsidy(height)
@@ -326,6 +345,10 @@ class CoinStatsIndexTest(BitcoinTestFramework):
         # Ensure that removing and re-adding blocks yields consistent results
         block = index_node.getblockhash(99)
         index_node.invalidateblock(block)
+        rolled_back = index_node.gettxoutsetinfo('muhash')
+        assert_equal(rolled_back['height'], 98)
+        assert_equal(rolled_back['total_unspendable_amount'], 50)
+        assert_equal(rolled_back['block_info']['unspendables']['unclaimed_rewards'], 0)
         index_node.reconsiderblock(block)
         res3 = index_node.gettxoutsetinfo(hash_type='muhash', hash_or_height=112)
         assert_equal(res2, res3)

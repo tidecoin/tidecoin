@@ -121,6 +121,14 @@ FUZZ_TARGET(build_and_compare_feerate_diagram)
     auto sim = CompareDiagrams(diagram1, diagram2);
     assert(real == sim);
 
+    // Scaling preserves order. Individual scaled fees fit int64_t while
+    // cumulative fees and cross-diagram differences need not.
+    auto large1{chunks1}, large2{chunks2};
+    for (auto* chunks : {&large1, &large2}) {
+        for (auto& chunk : *chunks) chunk.fee *= int64_t{1} << 32;
+    }
+    assert(CompareChunks(large1, large2) == sim);
+
     // Do explicit evaluation at up to 1000 points, and verify consistency with the result.
     LIMITED_WHILE(fuzzed_data_provider.remaining_bytes(), 1000) {
         int32_t size = fuzzed_data_provider.ConsumeIntegralInRange<int32_t>(0, diagram2.back().size);

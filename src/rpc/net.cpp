@@ -26,6 +26,7 @@
 #include <sync.h>
 #include <univalue.h>
 #include <util/chaintype.h>
+#include <util/overflow.h>
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <util/time.h>
@@ -792,6 +793,9 @@ static RPCHelpMan setban()
 
         if (absolute && banTime < GetTime()) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: Absolute timestamp is in the past");
+        }
+        if (!absolute && banTime > 0 && AdditionOverflow(GetTime(), banTime)) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: Relative ban duration is too large");
         }
 
         if (isSubnet) {

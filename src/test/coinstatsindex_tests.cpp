@@ -91,10 +91,27 @@ BOOST_FIXTURE_TEST_CASE(coinstatsindex_initial_sync, TestChain100Setup)
         LOCK(cs_main);
         genesis_block_index = m_node.chainman->ActiveChain().Genesis();
     }
-    BOOST_CHECK(coin_stats_index.LookUpStats(*genesis_block_index));
+    const auto genesis_stats{coin_stats_index.LookUpStats(*genesis_block_index)};
+    BOOST_REQUIRE(genesis_stats);
+    const CAmount genesis_value{Params().GenesisBlock().vtx[0]->GetValueOut()};
+    BOOST_CHECK_EQUAL(genesis_value, 50 * COIN);
+    BOOST_CHECK_EQUAL(genesis_stats->total_subsidy, genesis_value);
+    BOOST_CHECK_EQUAL(genesis_stats->total_unspendables_genesis_block, genesis_value);
+    BOOST_CHECK_EQUAL(genesis_stats->total_unspendables_unclaimed_rewards, 0);
+    BOOST_CHECK_EQUAL(genesis_stats->nTransactionOutputs, 0);
+    BOOST_REQUIRE(genesis_stats->total_amount);
+    BOOST_CHECK_EQUAL(*genesis_stats->total_amount, 0);
 
     // Check that CoinStatsIndex updates with new blocks.
-    BOOST_CHECK(coin_stats_index.LookUpStats(*block_index));
+    CAmount expected_subsidy{genesis_value};
+    for (int height = 1; height <= block_index->nHeight; ++height) {
+        expected_subsidy += GetBlockSubsidy(height, Params().GetConsensus());
+    }
+    const auto tip_stats{coin_stats_index.LookUpStats(*block_index)};
+    BOOST_REQUIRE(tip_stats);
+    BOOST_CHECK_EQUAL(tip_stats->total_subsidy, expected_subsidy);
+    BOOST_CHECK_EQUAL(tip_stats->total_unspendables_genesis_block, genesis_value);
+    BOOST_CHECK_EQUAL(tip_stats->total_unspendables_unclaimed_rewards, 0);
 
     const CScript script_pub_key{CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG};
     std::vector<CMutableTransaction> noTxns;
@@ -108,7 +125,11 @@ BOOST_FIXTURE_TEST_CASE(coinstatsindex_initial_sync, TestChain100Setup)
         LOCK(cs_main);
         new_block_index = m_node.chainman->ActiveChain().Tip();
     }
-    BOOST_CHECK(coin_stats_index.LookUpStats(*new_block_index));
+    const auto new_stats{coin_stats_index.LookUpStats(*new_block_index)};
+    BOOST_REQUIRE(new_stats);
+    BOOST_CHECK_EQUAL(new_stats->total_subsidy, expected_subsidy + GetBlockSubsidy(new_block_index->nHeight, Params().GetConsensus()));
+    BOOST_CHECK_EQUAL(new_stats->total_unspendables_genesis_block, genesis_value);
+    BOOST_CHECK_EQUAL(new_stats->total_unspendables_unclaimed_rewards, 0);
 
     BOOST_CHECK(block_index != new_block_index);
 

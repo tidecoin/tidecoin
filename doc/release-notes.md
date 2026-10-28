@@ -503,6 +503,27 @@ Logging
 
 Unconditional logging is limited to 1 MiB per hour per source location.
 
+Ban expiry limits
+-----------------
+
+`setban` rejects an explicit relative duration whose expiry would exceed a signed
+64-bit timestamp with RPC error `-8`. Absolute timestamps retain their existing
+range. Configured default durations and other callers cap an overflowing expiry
+at the largest supported timestamp.
+
+Genesis statistics
+------------------
+
+`getblockstats 0` reports the genesis coinbase value of 50 TDC. The optional
+`-coinstatsindex` also accounts for those 50 TDC as unspendable genesis outputs.
+The genesis block, subsidy schedule and UTXO hashes are unchanged.
+
+Development note: testers who enabled `-coinstatsindex` in an earlier release
+candidate must rebuild that index. With the node stopped, remove only
+`indexes/coinstatsindex` from the relevant network's data directory, then restart
+with `-coinstatsindex`. Rebuilding requires historical blocks; pruned nodes may
+need to obtain missing blocks. No index migration or automatic rebuild is added.
+
 Legacy wallet migration recovery
 --------------------------------
 
@@ -558,6 +579,13 @@ RPC is required.
 `getrawmempool`, `getmempoolancestors` and `getmempooldescendants` results. This
 includes fees above 21.47483647 TDC and large positive or negative local fee
 adjustments. Transaction fees and mining selection are unchanged.
+
+`prioritisetransaction` accepts signed 64-bit increments and caps each accumulated
+adjustment at +/-2,100,000,000,000,000 satoshis (`MAX_MONEY`). Repeated calls and
+saved adjustments use the same limit, and live modified fees reflect the capped
+value. Adjustments for transactions not yet in the mempool are still retained.
+Replacement comparisons use exact wider arithmetic for totals spanning multiple
+clusters. Actual transaction fees and the `mempool.dat` format are unchanged.
 
 Some previously accepted connected groups exceeding the new cluster limits will be rejected,
 including when reloading unconfirmed transactions. Conversely, small chains longer than 25 entries

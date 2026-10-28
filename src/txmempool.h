@@ -369,6 +369,8 @@ public:
     bool HasNoInputsOf(const CTransaction& tx) const EXCLUSIVE_LOCKS_REQUIRED(cs);
 
     /** Affect CreateNewBlock prioritisation of transactions */
+    /** Add a signed fee adjustment, capping its accumulated value to +/-MAX_MONEY.
+     * Unknown transaction IDs retain the adjustment for future admission. */
     void PrioritiseTransaction(const Txid& hash, const CAmount& nFeeDelta);
     void ApplyDelta(const Txid& hash, CAmount &nFeeDelta) const EXCLUSIVE_LOCKS_REQUIRED(cs);
     void ClearPrioritisation(const Txid& hash) EXCLUSIVE_LOCKS_REQUIRED(cs);

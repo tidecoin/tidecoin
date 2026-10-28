@@ -11,11 +11,51 @@
 #include <test/util/setup_common.h>
 
 #include <boost/test/unit_test.hpp>
+#include <limits>
 #include <vector>
 
 BOOST_FIXTURE_TEST_SUITE(mempool_tests, TestingSetup)
 
 static constexpr auto REMOVAL_REASON_DUMMY = MemPoolRemovalReason::REPLACED;
+
+BOOST_AUTO_TEST_CASE(priority_fee_limits)
+{
+    auto& pool = *Assert(m_node.mempool);
+    LOCK2(cs_main, pool.cs);
+    TestMemPoolEntryHelper entry;
+    CMutableTransaction tx;
+    tx.vin.resize(1);
+    tx.vout.emplace_back(COIN, CScript() << OP_TRUE);
+    const auto txid{tx.GetHash()};
+    constexpr CAmount max{std::numeric_limits<CAmount>::max()};
+    constexpr CAmount min{std::numeric_limits<CAmount>::min()};
+    const std::vector<std::pair<CAmount, CAmount>> adjustments{
+        {max, MAX_MONEY}, {1, MAX_MONEY}, {-MAX_MONEY, 0},
+        {min, -MAX_MONEY}, {-1, -MAX_MONEY}, {MAX_MONEY, 0},
+        {max, MAX_MONEY}, {min, -MAX_MONEY}, {MAX_MONEY, 0}};
+
+    for (bool in_pool : {false, true}) {
+        if (in_pool) {
+            // Apply a saved adjustment on admission, before any live updates.
+            pool.PrioritiseTransaction(txid, max);
+            AddToMempool(pool, entry.Fee(1000).FromTx(tx));
+            BOOST_CHECK_EQUAL(pool.GetEntry(txid)->GetModifiedFee(), 1000 + MAX_MONEY);
+            pool.PrioritiseTransaction(txid, -MAX_MONEY);
+        }
+        for (const auto& [request, expected] : adjustments) {
+            pool.PrioritiseTransaction(txid, request);
+            CAmount delta{0};
+            pool.ApplyDelta(txid, delta);
+            BOOST_CHECK_EQUAL(delta, expected);
+            BOOST_CHECK_EQUAL(pool.mapDeltas.count(txid), expected != 0);
+            if (in_pool) {
+                BOOST_CHECK_EQUAL(pool.GetEntry(txid)->GetModifiedFee(), 1000 + expected);
+                const auto info{pool.info(txid)};
+                BOOST_CHECK_EQUAL(info.nFeeDelta, expected);
+            }
+        }
+    }
+}
 
 class MemPoolTest final : public CTxMemPool
 {

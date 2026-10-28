@@ -541,7 +541,9 @@ static RPCHelpMan prioritisetransaction()
                     {"fee_delta", RPCArg::Type::NUM, RPCArg::Optional::NO, "The fee value (in satoshis) to add (or subtract, if negative).\n"
             "                  Note, that this value is not a fee rate. It is a value to modify absolute fee of the TX.\n"
             "                  The fee is not actually paid, only the algorithm for selecting transactions into a block\n"
-            "                  considers the transaction as it would have paid a higher (or lower) fee."},
+            "                  considers the transaction as it would have paid a higher (or lower) fee.\n"
+            "                  Signed 64-bit increments are accepted; the accumulated adjustment is capped\n"
+            "                  at +/-" + ToString(MAX_MONEY) + " satoshis, including adjustments for transactions not yet in the mempool."},
                 },
                 RPCResult{
                     RPCResult::Type::BOOL, "", "Returns true"},

@@ -646,12 +646,17 @@ void CTxMemPool::PrioritiseTransaction(const Txid& hash, const CAmount& nFeeDelt
     {
         LOCK(cs);
         CAmount &delta = mapDeltas[hash];
-        delta = SaturatingAdd(delta, nFeeDelta);
+        const CAmount old_delta{delta};
+        // Bound accumulated adjustments, including those loaded from mempool.dat.
+        // A valid base fee is in [0, MAX_MONEY], so modified fees stay in
+        // [-MAX_MONEY, 2*MAX_MONEY]. Cluster and replacement sums then fit int64_t;
+        // complete multi-cluster diagrams use wider arithmetic in CompareChunks.
+        delta = std::clamp(SaturatingAdd(delta, nFeeDelta), -MAX_MONEY, MAX_MONEY);
+        const CAmount applied_delta{delta - old_delta};
         txiter it = mapTx.find(hash);
         if (it != mapTx.end()) {
-            // PrioritiseTransaction calls stack on previous ones. Set the new
-            // transaction fee to be current modified fee + feedelta.
-            it->UpdateModifiedFee(nFeeDelta);
+            // Apply only the change actually retained in mapDeltas.
+            it->UpdateModifiedFee(applied_delta);
             m_txgraph->SetTransactionFee(*it, it->GetModifiedFee());
             ++nTransactionsUpdated;
         }
@@ -662,7 +667,7 @@ void CTxMemPool::PrioritiseTransaction(const Txid& hash, const CAmount& nFeeDelt
             LogInfo("PrioritiseTransaction: %s (%sin mempool) fee += %s, new delta=%s\n",
                       hash.ToString(),
                       it == mapTx.end() ? "not " : "",
-                      FormatMoney(nFeeDelta),
+                      FormatMoney(applied_delta),
                       FormatMoney(delta));
         }
     }

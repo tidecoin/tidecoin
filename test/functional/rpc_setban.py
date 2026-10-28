@@ -9,6 +9,7 @@ from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     p2p_port,
     assert_equal,
+    assert_raises_rpc_error,
 )
 
 class SetBanTests(BitcoinTestFramework):
@@ -77,6 +78,39 @@ class SetBanTests(BitcoinTestFramework):
         self.nodes[1].setban("127.0.0.1", "add")
         banned = self.nodes[1].listbanned()[0]
         assert_equal(banned['ban_duration'], 1234)
+
+        self.log.info("Test ban expiry arithmetic at the signed 64-bit limit")
+        node = self.nodes[1]
+        node.clearbanned()
+        now = 1_700_000_000
+        max_time = 2**63 - 1
+        node.setmocktime(now)
+
+        for address in ["203.0.113.1", "203.0.113.0/24"]:
+            for duration in [max_time - now + 1, max_time]:
+                assert_raises_rpc_error(-8, "Relative ban duration is too large", node.setban, address, "add", duration)
+                assert_equal(node.listbanned(), [])
+            for duration, absolute in [(max_time - now, False), (max_time, True)]:
+                node.setban(address, "add", duration, absolute)
+                banned = node.listbanned()[0]
+                assert_equal(banned['banned_until'], max_time)
+                assert_equal(banned['ban_created'], now)
+                assert_equal(banned['ban_duration'], max_time - now)
+                assert_equal(banned['time_remaining'], max_time - now)
+                node.clearbanned()
+
+        for duration in [0, -1]:
+            node.setban("203.0.113.1", "add", duration)
+            assert_equal(node.listbanned()[0]['banned_until'], now + 1234)
+            node.clearbanned()
+
+        self.log.info("Test an overflowing configured default saturates and persists")
+        self.restart_node(1, [f"-bantime={max_time}"])
+        node.setmocktime(now)
+        node.setban("203.0.113.1", "add")
+        assert_equal(node.listbanned()[0]['banned_until'], max_time)
+        self.restart_node(1)
+        assert_equal(node.listbanned()[0]['banned_until'], max_time)
 
 if __name__ == '__main__':
     SetBanTests(__file__).main()

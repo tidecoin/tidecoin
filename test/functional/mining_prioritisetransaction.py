@@ -10,6 +10,7 @@ import time
 from test_framework.messages import (
     COIN,
     MAX_BLOCK_WEIGHT,
+    MAX_MONEY,
 )
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
@@ -58,12 +59,13 @@ class PrioritiseTransactionTest(BitcoinTestFramework):
         assert_equal(self.nodes[0].getprioritisedtransactions(), {})
 
     def test_priority_integer_range(self):
-        self.log.info("Preserve signed-64 priority increments and saturating accumulation")
+        self.log.info("Preserve signed-64 priority increments with bounded accumulation")
         node = self.nodes[0]
         txid = 'ff' * 32
         maximum, minimum = 2**63 - 1, -(2**63)
-        for delta, expected in [(maximum, maximum), (1, maximum), (-maximum, 0),
-                                (minimum, minimum), (-1, minimum), (maximum, -1), (1, 0)]:
+        for delta, expected in [(maximum, MAX_MONEY), (1, MAX_MONEY), (-MAX_MONEY, 0),
+                                (minimum, -MAX_MONEY), (-1, -MAX_MONEY), (MAX_MONEY, 0),
+                                (maximum, MAX_MONEY), (minimum, -MAX_MONEY), (MAX_MONEY, 0)]:
             node.prioritisetransaction(txid, 0, delta)
             entries = node.getprioritisedtransactions()
             if expected:

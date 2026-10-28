@@ -130,7 +130,8 @@ CoinStatsIndex::CoinStatsIndex(std::unique_ptr<interfaces::Chain> chain, size_t 
 
 bool CoinStatsIndex::CustomAppend(const interfaces::BlockInfo& block)
 {
-    const CAmount block_subsidy{GetBlockSubsidy(block.height, Params().GetConsensus())};
+    // Genesis has a fixed coinbase value outside the scheduled subsidy.
+    const CAmount block_subsidy{block.height == 0 ? Params().GenesisBlock().vtx[0]->GetValueOut() : GetBlockSubsidy(block.height, Params().GetConsensus())};
     m_total_subsidy += block_subsidy;
 
     // Ignore genesis block

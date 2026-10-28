@@ -180,8 +180,8 @@ public:
  * The implied diagram for each starts at (0, 0), then contains for each chunk the cumulative fee
  * and size up to that chunk, and then extends infinitely to the right with a horizontal line.
  *
- * The caller must guarantee that the sum of the FeeFracs in either of the chunks' data set do not
- * overflow (so sum fees < 2^63, and sum sizes < 2^31).
+ * Each chunk must have positive size, and the sum of sizes in either diagram must fit int32_t.
+ * Cumulative fees and differences need not fit int64_t; comparisons use exact wider arithmetic.
  */
 std::partial_ordering CompareChunks(std::span<const FeeFrac> chunks0, std::span<const FeeFrac> chunks1);
 

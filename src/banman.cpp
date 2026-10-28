@@ -10,6 +10,7 @@
 #include <netaddress.h>
 #include <node/interface_ui.h>
 #include <sync.h>
+#include <util/overflow.h>
 #include <util/time.h>
 #include <util/translation.h>
 
@@ -129,7 +130,8 @@ void BanMan::Discourage(const CNetAddr& net_addr)
 
 void BanMan::Ban(const CSubNet& sub_net, int64_t ban_time_offset, bool since_unix_epoch)
 {
-    CBanEntry ban_entry(GetTime());
+    const int64_t now{GetTime()};
+    CBanEntry ban_entry(now);
 
     int64_t normalized_ban_time_offset = ban_time_offset;
     bool normalized_since_unix_epoch = since_unix_epoch;
@@ -137,7 +139,8 @@ void BanMan::Ban(const CSubNet& sub_net, int64_t ban_time_offset, bool since_uni
         normalized_ban_time_offset = m_default_ban_time;
         normalized_since_unix_epoch = false;
     }
-    ban_entry.nBanUntil = (normalized_since_unix_epoch ? 0 : GetTime()) + normalized_ban_time_offset;
+    // Configured defaults and non-RPC callers also need a representable expiry.
+    ban_entry.nBanUntil = normalized_since_unix_epoch ? normalized_ban_time_offset : SaturatingAdd(now, normalized_ban_time_offset);
 
     {
         LOCK(m_banned_mutex);

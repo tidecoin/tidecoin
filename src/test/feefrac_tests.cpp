@@ -7,7 +7,58 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
+#include <limits>
+#include <vector>
+
 BOOST_AUTO_TEST_SUITE(feefrac_tests)
+
+BOOST_AUTO_TEST_CASE(diagram_large_fees)
+{
+    constexpr int64_t max{std::numeric_limits<int64_t>::max()};
+    constexpr int64_t min{std::numeric_limits<int64_t>::min()};
+    const auto check = [](std::vector<FeeFrac> a, std::vector<FeeFrac> b, std::partial_ordering expected) {
+        BOOST_CHECK(CompareChunks(a, b) == expected);
+        BOOST_CHECK(CompareChunks(b, a) == (0 <=> expected));
+        BOOST_CHECK(std::is_eq(CompareChunks(a, a)));
+        BOOST_CHECK(std::is_eq(CompareChunks(b, b)));
+    };
+    // Cumulative sums and differences can overflow independently. Tail checks
+    // must also handle negative totals and INT64_MIN without signed negation.
+    check({{max, 1}, {max, 1}}, {{max, 2}}, std::partial_ordering::greater);
+    check({{min, 1}, {min, 1}}, {{min, 2}}, std::partial_ordering::less);
+    check({{max, 2}}, {{min, 1}}, std::partial_ordering::greater);
+    check({{min, 2}}, {{max, 1}}, std::partial_ordering::less);
+    check({{max, 1}, {min, 1}}, {{0, 2}}, std::partial_ordering::unordered);
+    check({{min, 1}, {min, 1}}, {}, std::partial_ordering::less);
+
+    // Seventy affected clusters can contribute 63 surviving ancestors each.
+    // Their common prefix exceeds int64_t even with MAX_MONEY-sized fees.
+    std::vector<FeeFrac> old_chunks(70, FeeFrac{63 * int64_t{2'100'000'000'000'000}, 63'000});
+    auto new_chunks{old_chunks};
+    old_chunks.insert(old_chunks.end(), 70, FeeFrac{1000, 1000});
+    new_chunks.emplace_back(2'100'000'000'000'000, 70'000);
+    check(new_chunks, old_chunks, std::partial_ordering::greater);
+
+    // Multiplying every fee by a positive factor must preserve diagram order,
+    // including equal/incomparable diagrams and those with negative chunks.
+    FastRandomContext rng{true};
+    for (int trial = 0; trial < 1000; ++trial) {
+        std::vector<FeeFrac> a, b;
+        for (auto* diagram : {&a, &b}) {
+            const auto count{rng.randrange(32)};
+            for (int i = 0; i < count; ++i) {
+                diagram->emplace_back(int64_t(rng.randrange(31)) - 15, int32_t(1 + rng.randrange(1000)));
+            }
+            std::ranges::sort(*diagram, std::greater<ByRatio<FeeFrac>>{});
+        }
+        const auto expected{CompareChunks(a, b)};
+        for (auto* diagram : {&a, &b}) {
+            for (auto& chunk : *diagram) chunk.fee *= int64_t{1} << 59;
+        }
+        check(a, b, expected);
+    }
+}
 
 BOOST_AUTO_TEST_CASE(feefrac_operators)
 {
