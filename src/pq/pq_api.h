@@ -15,6 +15,8 @@
 #include <vector>
 
 extern "C" {
+int tidecoin_falcon512_is_valid_pubkey(const uint8_t* pk, size_t pklen);
+int tidecoin_falcon1024_is_valid_pubkey(const uint8_t* pk, size_t pklen);
 int tidecoin_falcon512_is_noncanonical_legacy(const uint8_t* sig, size_t siglen);
 int tidecoin_falcon512_pubkey_from_sk(const uint8_t* sk, size_t sklen,
                                       uint8_t* pk, size_t pklen);
@@ -191,6 +193,27 @@ inline bool DecodePubKey(std::span<const unsigned char> raw,
     id = info->id;
     pk = raw.subspan(1);
     return true;
+}
+
+/** Validate a complete prefixed public-key encoding, not possession of its private key. */
+inline bool IsValidPubKey(std::span<const unsigned char> prefixed_pubkey)
+{
+    SchemeId id{};
+    std::span<const unsigned char> pk;
+    if (!DecodePubKey(prefixed_pubkey, id, pk)) return false;
+    switch (id) {
+    case SchemeId::FALCON_512:
+        return tidecoin_falcon512_is_valid_pubkey(pk.data(), pk.size()) != 0;
+    case SchemeId::FALCON_1024:
+        return tidecoin_falcon1024_is_valid_pubkey(pk.data(), pk.size()) != 0;
+    case SchemeId::MLDSA_44:
+    case SchemeId::MLDSA_65:
+    case SchemeId::MLDSA_87:
+        // A seed and packed 10-bit values: every correctly sized bit pattern
+        // is an allowed public-key encoding.
+        return true;
+    }
+    return false;
 }
 
 inline bool EncodePubKey(SchemeId id,

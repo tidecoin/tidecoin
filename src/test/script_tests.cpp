@@ -1993,6 +1993,55 @@ BOOST_AUTO_TEST_CASE(script_sighash_v1_512_single_oob)
     BOOST_CHECK(!SignatureHash512(hash, scriptCode, tx, 0, SIGHASH_SINGLE | SIGHASH_ANYONECANPAY, 0));
 }
 
+BOOST_AUTO_TEST_CASE(transaction_signature_era_eligibility)
+{
+    const CKey falcon = GenerateRandomKey(pq::SchemeId::FALCON_512);
+    const CPubKey falcon_pub = falcon.GetPubKey();
+    const CScript falcon_script = GetScriptForRawPubKey(falcon_pub);
+    for (const auto* scheme : pq::kKnownSchemes) {
+        const CKey key = GenerateRandomKey(scheme->id);
+        const CPubKey pubkey = key.GetPubKey();
+        const CScript script = GetScriptForRawPubKey(pubkey);
+        FlatSigningProvider provider;
+        provider.keys.emplace(pubkey.GetID(), key);
+        provider.pubkeys.emplace(pubkey.GetID(), pubkey);
+        provider.keys.emplace(falcon_pub.GetID(), falcon);
+        provider.pubkeys.emplace(falcon_pub.GetID(), falcon_pub);
+        for (const auto version : {SigVersion::BASE, SigVersion::WITNESS_V0, SigVersion::WITNESS_V1_512}) {
+            CMutableTransaction tx;
+            tx.vin.resize(1);
+            tx.vout.emplace_back(900, CScript{} << OP_TRUE);
+            PrecomputedTransactionData data;
+            data.Init(tx, {CTxOut{1000, script}}, true);
+            for (const bool pre : {false, true}) {
+                const bool eligible = !pre || (scheme->id == pq::SchemeId::FALCON_512 && version != SigVersion::WITNESS_V1_512);
+                MutableTransactionSignatureCreator creator(tx, 0, 1000, &data, SIGHASH_ALL, pre);
+                BOOST_CHECK_EQUAL(creator.IsSignatureAllowed(pubkey, version), eligible);
+                std::vector<unsigned char> sig{0xaa};
+                BOOST_CHECK_EQUAL(creator.CreateSig(provider, sig, pubkey.GetID(), script, version), eligible);
+                BOOST_CHECK(creator.Error() == common::PSBTError::OK);
+                BOOST_CHECK_EQUAL(creator.Signed(), eligible);
+                if (eligible) {
+                    BOOST_CHECK(creator.Checker().CheckPostQuantumSignature(sig, ToByteVector(pubkey), script, version));
+                } else {
+                    BOOST_CHECK(sig == std::vector<unsigned char>{0xaa});
+                    // Refusing one candidate must not poison eligible work.
+                    BOOST_REQUIRE(creator.CreateSig(provider, sig, falcon_pub.GetID(), falcon_script, SigVersion::BASE));
+                    BOOST_CHECK(creator.Signed());
+                    BOOST_CHECK(creator.Error() == common::PSBTError::OK);
+                    BOOST_CHECK(creator.Checker().CheckPostQuantumSignature(sig, ToByteVector(falcon_pub), falcon_script, SigVersion::BASE));
+                }
+            }
+            for (const auto* dummy : {&DUMMY_SIGNATURE_CREATOR, &DUMMY_MAXIMUM_SIGNATURE_CREATOR}) {
+                BOOST_CHECK(dummy->IsSignatureAllowed(pubkey, version));
+                std::vector<unsigned char> sig;
+                BOOST_CHECK(dummy->CreateSig(provider, sig, pubkey.GetID(), script, version));
+                BOOST_CHECK(!sig.empty());
+            }
+        }
+    }
+}
+
 BOOST_AUTO_TEST_CASE(script_sighash_v1_512_zero_rejected)
 {
     CKey key;

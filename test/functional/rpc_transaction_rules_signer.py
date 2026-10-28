@@ -102,7 +102,36 @@ class TransactionRulesSignerTest(TransactionRulesTest):
         v1_base = PSBT.from_base64(node.createpsbt([v1_outpoint], {change: Decimal('0.995')}))
         v1_base.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = v1_previous
         v1_request = v1_device.walletprocesspsbt(v1_base.to_base64(), False, finalize=False, rules=POST)['psbt']
+        # Post-rule updating may compact a native-v1 previous transaction. Keep
+        # the full record so a pre-rule request reaches device-result checking.
+        v1_with_full = PSBT.from_base64(v1_request)
+        v1_with_full.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = v1_previous
+        v1_request = v1_with_full.to_base64()
         v1_fresh = node.descriptorprocesspsbt(v1_request, [v1_descriptor], rules=POST)['psbt']
+        v1_partial = node.descriptorprocesspsbt(v1_request, [v1_descriptor], finalize=False, rules=POST)['psbt']
+        for response in (v1_partial, v1_fresh):
+            self.response(response)
+            assert_raises_rpc_error(-25, 'External signer failed', v1_device.walletprocesspsbt, v1_request, rules=PRE)
+            self.accepted(v1_device.walletprocesspsbt(v1_request, rules=POST))
+        for scheme in range(8, 12):
+            later_secret, _ = generate_keypair(wif=True, scheme=str(scheme))
+            later_descriptor = descsum_create(f'wpkh({later_secret})')
+            later_public = node.getdescriptorinfo(later_descriptor)['descriptor']
+            self.state['descriptors']['receive'] = [later_public]
+            self.save()
+            name = f'device_scheme_{scheme}'
+            offline.createwallet(name, disable_private_keys=True, external_signer=True)
+            later_device = offline.get_wallet_rpc(name)
+            later_outpoint, later_previous = self.fund(node.deriveaddresses(later_public)[0])
+            later_base = PSBT.from_base64(node.createpsbt([later_outpoint], {change: Decimal('0.995')}))
+            later_base.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = later_previous
+            later_request = later_device.walletprocesspsbt(later_base.to_base64(), False, finalize=False, rules=POST)['psbt']
+            for finalize in (False, True):
+                response = node.descriptorprocesspsbt(later_request, [later_descriptor], finalize=finalize, rules=POST)['psbt']
+                self.response(response)
+                assert_raises_rpc_error(-25, 'External signer failed', later_device.walletprocesspsbt, later_request, rules=PRE)
+                self.accepted(later_device.walletprocesspsbt(later_request, rules=POST))
+        self.state['descriptors']['receive'] = [v1_public]
         self.response(v1_fresh)
         self.log.info('Rollback during a device call retains post rules through extraction')
         worker = get_rpc_proxy(offline.url + '/wallet/device_v1', offline.index, timeout=60)

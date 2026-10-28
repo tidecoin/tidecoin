@@ -62,7 +62,32 @@ class TxSigningTest(BitcoinTestFramework):
     def candidate(self, raw):
         return self.generateblock(self.nodes[0], ADDRESS_BCRT1_P2WSH_OP_TRUE, [raw], submit=False, sync_fun=self.no_op)
 
+    def test_pubkey_encodings(self):
+        self.log.info("Check supplied public-key encodings in transaction outputs")
+        for scheme in range(7, 12):
+            _, pubkey = generate_keypair(scheme=str(scheme))
+            variants = [(pubkey, True)]
+            if scheme in (7, 8):
+                header = bytearray(pubkey)
+                header[1] = 0
+                variants.append((bytes(header), False))
+                packed = bytearray(pubkey)
+                packed[2] = 0xc0
+                packed[3] = (packed[3] & 3) | 4
+                variants.append((bytes(packed), False))
+            for key, valid in variants:
+                for command in (f"outpubkey=1:{key.hex()}", f"outmultisig=1:1:2:{pubkey.hex()}:{key.hex()}"):
+                    result = subprocess.run(self.get_binaries().tx_argv() + ["-regtest", "-create", f"in={'01' * 32}:0", command],
+                                            text=True, capture_output=True, timeout=60)
+                    assert_equal(result.returncode, 0 if valid else 1)
+                    if valid:
+                        assert_equal(result.stderr, "")
+                        assert_equal(len(tx_from_hex(result.stdout.strip()).vout), 1)
+                    else:
+                        assert "invalid TX output pubkey" in result.stderr, result.stderr
+
     def run_test(self):
+        self.test_pubkey_encodings()
         node, old = self.nodes
         mini = MiniWallet(node)
         self.generate(mini, 101, sync_fun=self.no_op)
@@ -139,6 +164,16 @@ class TxSigningTest(BitcoinTestFramework):
                 self.tool(raw, previous, rules=rules, success=allowed)
                 self.tool(raw, previous + [extra], rules=rules, success=allowed)
                 self.tool(unsigned, previous + [extra], rules=rules, keys=[case["secret"]], success=allowed)
+            # An incomplete pre-rules result must not carry a newly created
+            # later-era signature, even without the tool's optional verification.
+            pre_partial = self.tool(unsigned, previous, rules="pre-auxpow", keys=[case["secret"]], verify=False)
+            checked = node.signrawtransactionwithkey(pre_partial, [], rpc_previous, rules="post-auxpow")
+            assert_equal(checked["complete"], old_allowed)
+            if not old_allowed:
+                # Supplying a private key also learns its wrapped-v0 script;
+                # give the public-only control the same script information.
+                public_only = self.tool(unsigned, rpc_previous, rules="pre-auxpow", keys=[], verify=False)
+                assert_equal(pre_partial, public_only)
             # Existing signatures can be reused without reloading their scripts.
             basic_previous = [{k: v for k, v in previous[0].items() if k not in ("redeemScript", "witnessScript")}]
             self.tool(raw, basic_previous, rules="post-auxpow", keys=[])

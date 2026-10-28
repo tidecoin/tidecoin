@@ -266,6 +266,16 @@ unspent, or that finality, maturity and fee requirements are met. Existing
 partials are checked under these same rules: an owned partial that fails can be
 replaced when signing, while an invalid supplied final stays incomplete.
 
+Under `pre-auxpow`, local signing creates only Falcon-512 signatures for legacy
+and witness-v0 inputs. Use `post-auxpow` for Falcon-1024, ML-DSA or native-v1
+inputs, including on a host with only genesis. An incomplete result can still
+contain useful signatures for eligible inputs or keys. Previously supplied
+partials excluded by the chosen era are preserved while incomplete, but cannot
+displace an eligible alternative during assembly. Changing the era later does
+not create a missing signature. These local signing controls do not restrict
+what an [external device](external-signer.md#signing-responses-and-completion)
+creates internally; the host checks what it returns.
+
 One concrete difference from relay policy is older Falcon-512 encoding:
 `pre-auxpow` processing can complete an old-valid signature containing a
 negative-zero sign or nonzero unused final bits, but current nodes refuse to

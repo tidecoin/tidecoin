@@ -6,8 +6,10 @@ Tidecoin is an independently maintained post-quantum cryptocurrency derived from
 Bitcoin Core. It replaces ECDSA entirely with post-quantum signature schemes.
 Every transaction since genesis
 (December 27, 2020) has been signed with FALCON-512, a lattice-based scheme selected
-by NIST for standardization as FN-DSA (FIPS 206, in preparation). The network has produced over
-2.7 million blocks with zero security incidents.
+by NIST for standardization as FN-DSA (FIPS 206, in preparation). An earlier
+development build validated mainnet history through height 2,761,716 in a replay
+completed on October 10, 2026 (UTC). This is a historical validation result, not a
+live chain height. The network has had zero security incidents.
 
 The Tidecoin 1.x codebase was initially based on Bitcoin Core v30 and has since
 evolved through Tidecoin-specific development and selected updates from later
@@ -18,7 +20,7 @@ and compatibility requirements.
 
 - Ticker: TDC
 - Genesis: December 27, 2020
-- Blocks produced: 2,700,000+
+- Mainnet history replay: validated through height 2,761,716 (October 10, 2026 UTC; earlier development build)
 - Security incidents: 0
 - Max supply: ~21,000,000 TDC
 - Block time: 60 seconds

@@ -18,7 +18,19 @@ Common RPCs that consume or produce descriptors include:
 - `scantxoutset`
 - `getaddressinfo`
 - `listunspent`
-- `createmultisig` / `addmultisigaddress`
+- `createmultisig`
+
+`createmultisig` constructs a multisig address and descriptor from supplied public
+keys; it does not add them to a wallet. To track the outputs, import the descriptor
+with `importdescriptors`. A public-only descriptor can be imported into a
+watch-only wallet. For local signing, the signing wallet must have the relevant
+private keys or PQHD seeds; importing public keys does not supply them. Fixed-key
+descriptors are imported with `active=false`, and their addresses are obtained
+with `deriveaddresses`.
+
+See the [multisig tutorial](multisig-tutorial.md) for a complete descriptor-wallet
+and PSBT workflow, including constructing descriptors directly with
+`getdescriptorinfo` and signing with separate participant wallets.
 
 ## Tidecoin-Specific Differences
 

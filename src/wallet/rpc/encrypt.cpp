@@ -18,7 +18,8 @@ RPCHelpMan walletpassphrase()
                 "This is needed prior to performing transactions related to private keys such as sending Tidecoin\n"
             "\nNote:\n"
             "Issuing the walletpassphrase command while the wallet is already unlocked will set a new unlock\n"
-            "time that overrides the old one.\n",
+            "time that overrides the old one.\n"
+            "Wallet operation failures return error -4, separately from the incorrect-passphrase error -14.\n",
                 {
                     {"passphrase", RPCArg::Type::STR, RPCArg::Optional::NO, "The wallet passphrase"},
                     {"timeout", RPCArg::Type::NUM, RPCArg::Optional::NO, "The time to keep the decryption key in seconds; capped at 100000000 (~3 years)."},
@@ -72,6 +73,12 @@ RPCHelpMan walletpassphrase()
         }
 
         const bool was_locked{pwallet->IsLocked()};
+        const auto restore_lock = [&]() EXCLUSIVE_LOCKS_REQUIRED(pwallet->cs_wallet) {
+            if (was_locked) {
+                if (!pwallet->IsLocked()) pwallet->Lock();
+                pwallet->nRelockTime = 0;
+            }
+        };
         try {
             if (!pwallet->Unlock(strWalletPass)) {
                 // Check if the passphrase has a null character (see #27067 for details)
@@ -107,11 +114,13 @@ RPCHelpMan walletpassphrase()
             // Publish only after scheduling succeeds. On failure, an already
             // unlocked wallet retains its previous deadline and callback.
             pwallet->nRelockTime = relock_time;
+        } catch (const std::runtime_error& e) {
+            // Unlock uses WalletOperationError; keypool/scheduler failures may
+            // still use std::runtime_error. Preserve cleanup for both.
+            restore_lock();
+            throw JSONRPCError(RPC_WALLET_ERROR, e.what());
         } catch (...) {
-            if (was_locked) {
-                if (!pwallet->IsLocked()) pwallet->Lock();
-                pwallet->nRelockTime = 0;
-            }
+            restore_lock();
             throw;
         }
     }
@@ -126,7 +135,8 @@ RPCHelpMan walletpassphrasechange()
 {
     return RPCHelpMan{
         "walletpassphrasechange",
-        "Changes the wallet passphrase from 'oldpassphrase' to 'newpassphrase'.\n",
+        "Changes the wallet passphrase from 'oldpassphrase' to 'newpassphrase'.\n"
+        "Wallet operation failures return error -4, separately from the incorrect-passphrase error -14.\n",
                 {
                     {"oldpassphrase", RPCArg::Type::STR, RPCArg::Optional::NO, "The current passphrase"},
                     {"newpassphrase", RPCArg::Type::STR, RPCArg::Optional::NO, "The new passphrase"},
@@ -163,7 +173,13 @@ RPCHelpMan walletpassphrasechange()
         throw JSONRPCError(RPC_INVALID_PARAMETER, "passphrase cannot be empty");
     }
 
-    if (!pwallet->ChangeWalletPassphrase(strOldWalletPass, strNewWalletPass)) {
+    bool changed;
+    try {
+        changed = pwallet->ChangeWalletPassphrase(strOldWalletPass, strNewWalletPass);
+    } catch (const WalletOperationError& e) {
+        throw JSONRPCError(RPC_WALLET_ERROR, e.what());
+    }
+    if (!changed) {
         // Check if the old passphrase had a null character (see #27067 for details)
         if (strOldWalletPass.find('\0') == std::string::npos) {
             throw JSONRPCError(RPC_WALLET_PASSPHRASE_INCORRECT, "Error: The wallet passphrase entered was incorrect.");
@@ -238,9 +254,11 @@ RPCHelpMan encryptwallet()
                 "Use the walletpassphrase call for this, and then walletlock call.\n"
                 "If the wallet is already encrypted, use the walletpassphrasechange call.\n"
                 "** IMPORTANT **\n"
-                "For security reasons, the encryption process will generate a new PQHD seed, resulting\n"
-                "in the creation of a fresh set of active descriptors. Therefore, it is crucial to\n"
-                "securely back up the newly generated wallet file using the backupwallet RPC.\n",
+                "For non-blank wallets, encryption generates a new PQHD seed and fresh active descriptors.\n"
+                "Blank wallets retain any existing seeds and policy without generating a seed or descriptors.\n"
+                "To provision a blank wallet, unlock it, create or import a seed if needed, then select it\n"
+                "with setpqhdseed or reapply its policy with setpqhdpolicy.\n"
+                "After encryption, make a new wallet backup using the backupwallet RPC.\n",
                 {
                     {"passphrase", RPCArg::Type::STR, RPCArg::Optional::NO, "The pass phrase to encrypt the wallet with. It must be at least 1 character, but should be long."},
                 },
@@ -292,6 +310,9 @@ RPCHelpMan encryptwallet()
         throw JSONRPCError(RPC_WALLET_ENCRYPTION_FAILED, e.what());
     }
 
+    if (pwallet->IsWalletFlagSet(WALLET_FLAG_BLANK_WALLET)) {
+        return "wallet encrypted; No new PQHD seed or descriptors were generated. You need to make a new backup with the backupwallet RPC.";
+    }
     return "wallet encrypted; The keypool has been flushed and a new PQHD seed was generated. You need to make a new backup with the backupwallet RPC.";
 },
     };

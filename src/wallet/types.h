@@ -14,9 +14,17 @@
 #ifndef BITCOIN_WALLET_TYPES_H
 #define BITCOIN_WALLET_TYPES_H
 
+#include <stdexcept>
 #include <type_traits>
 
 namespace wallet {
+/** An unlock or passphrase-change operation failed, independently of credential verification. */
+class WalletOperationError : public std::runtime_error
+{
+public:
+    using std::runtime_error::runtime_error;
+};
+
 /**
  * Address purpose field that has been been stored with wallet sending and
  * receiving addresses since BIP70 payment protocol support was added in

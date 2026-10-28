@@ -79,6 +79,11 @@ class AuxpowMiningTest(BitcoinTestFramework):
         assert auxblock["hash"] != auxblock2["hash"]
         assert_raises_rpc_error(-8, "block hash unknown", submit, auxblock["hash"], "x")
 
+        # Hash parsing errors remain distinct from unknown work and bad proofs.
+        for invalid_hash in ("", "g" * 64, "0" * 63, "0" * 65):
+            assert_raises_rpc_error(-8, "block hash invalid", submit, invalid_hash, "x")
+        assert_raises_rpc_error(-8, "block hash unknown", submit, "0" * 64, "x")
+
         # Invalid auxpow format.
         assert_raises_rpc_error(-1, None, submit, auxblock2["hash"], "x")
 
@@ -148,10 +153,40 @@ class AuxpowMiningTest(BitcoinTestFramework):
             coinbase = tx["vin"][0]["coinbase"]
             assert_equal("02%02x00" % auxblock["height"], coinbase[0:6])
 
+    def test_hash_spelling(self, create, submit, *, rotate_payout):
+        """Hash spelling must not affect submission or the next wallet payout."""
+        previous_address = None
+        for spelling in ("lowercase", "uppercase", "mixed-case"):
+            self.log.info(f"Check {spelling} block hash submission")
+            auxblock = create()
+            block_hash = auxblock["hash"]
+            if spelling == "uppercase":
+                block_hash = block_hash.upper()
+            elif spelling == "mixed-case":
+                block_hash = block_hash[:32].upper() + block_hash[32:]
+            target = reverseHex(auxblock["_target"])
+
+            assert_raises_rpc_error(-1, None, submit, block_hash, "x")
+            assert not submit(block_hash, computeAuxpow(auxblock["hash"], target, False))
+            assert submit(block_hash, computeAuxpow(auxblock["hash"], target, True))
+            self.sync_all()
+            assert_equal(self.nodes[1].getblockcount(), auxblock["height"])
+            assert_equal(self.nodes[1].getbestblockhash(), auxblock["hash"])
+
+            address = getCoinbaseAddr(self.nodes[1], auxblock["hash"])
+            if previous_address is not None:
+                if rotate_payout:
+                    assert address != previous_address
+                else:
+                    assert_equal(address, previous_address)
+            previous_address = address
+        return auxblock["hash"]
+
     def test_getauxblock(self):
         create = self.nodes[0].getauxblock
         submit = self.nodes[0].getauxblock
         self.test_common(create, submit)
+        last_hash = self.test_hash_spelling(create, submit, rotate_payout=True)
 
         # Payout address changes across mined blocks.
         hash1 = mineAuxpowBlockWithMethods(create, submit)
@@ -159,6 +194,7 @@ class AuxpowMiningTest(BitcoinTestFramework):
         self.sync_all()
         addr1 = getCoinbaseAddr(self.nodes[1], hash1)
         addr2 = getCoinbaseAddr(self.nodes[1], hash2)
+        assert addr1 != getCoinbaseAddr(self.nodes[1], last_hash)
         assert addr1 != addr2
 
         info = self.nodes[0].getaddressinfo(addr1)
@@ -180,6 +216,7 @@ class AuxpowMiningTest(BitcoinTestFramework):
 
         submit = self.nodes[0].submitauxblock
         self.test_common(create, submit)
+        self.test_hash_spelling(create, submit, rotate_payout=False)
 
         # Payout address is the one we specify.
         hash1 = mineAuxpowBlockWithMethods(create, submit)

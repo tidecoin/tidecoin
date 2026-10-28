@@ -103,6 +103,9 @@ BOOST_AUTO_TEST_CASE(v1_vectors_master_seed_0_all_schemes_hashes)
         BOOST_REQUIRE(pq::KeyGenFromSeed(/*pqhd_version=*/1, scheme_id, stream_key->Span(), pk, sk));
         BOOST_CHECK_EQUAL(Sha256Hex(pk), expected_pk_sha256);
         BOOST_CHECK_EQUAL(Sha256Hex(sk), expected_sk_sha256);
+        std::vector<unsigned char> prefixed;
+        BOOST_REQUIRE(pq::EncodePubKey(scheme_id, pk, prefixed));
+        BOOST_CHECK(pq::IsValidPubKey(prefixed));
     };
 
     // purpose' and coin_type' are centralized in `src/pq/pqhd_params.h` (see `doc/design/pqhd.md`).

@@ -278,7 +278,7 @@ static std::vector<RPCResult> MempoolEntryDescription()
                 RPCResult{RPCResult::Type::STR_AMOUNT, "modified", "transaction fee with fee deltas used for mining priority, denominated in " + CURRENCY_UNIT},
                 RPCResult{RPCResult::Type::STR_AMOUNT, "ancestor", "transaction fees of in-mempool ancestors (including this one) with fee deltas used for mining priority, denominated in " + CURRENCY_UNIT},
                 RPCResult{RPCResult::Type::STR_AMOUNT, "descendant", "transaction fees of in-mempool descendants (including this one) with fee deltas used for mining priority, denominated in " + CURRENCY_UNIT},
-                RPCResult{RPCResult::Type::STR_AMOUNT, "chunk", "transaction fees of chunk, denominated in " + CURRENCY_UNIT},
+                RPCResult{RPCResult::Type::STR_AMOUNT, "chunk", "transaction fees of this transaction's chunk with fee deltas used for mining priority, denominated in " + CURRENCY_UNIT + "; may be negative"},
             }},
         RPCResult{RPCResult::Type::ARR, "depends", "unconfirmed transactions used as inputs for this transaction",
             {RPCResult{RPCResult::Type::STR_HEX, "transactionid", "parent transaction id"}}},

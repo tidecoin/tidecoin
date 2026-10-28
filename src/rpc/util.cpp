@@ -71,6 +71,8 @@ RPCArg TransactionRulesArg(bool string_result)
     return {"rules", RPCArg::Type::STR, RPCArg::Optional::OMITTED,
             "Script rules: pre-auxpow or post-auxpow. Omitted or null uses the local next-block rules. "
             "An explicit choice overrides the local era for this request only; it does not change network activation or address issuance. "
+            "Local signing creates only signatures allowed by these rules: pre-auxpow permits Falcon-512 in legacy/v0 inputs; post-auxpow also permits the newer schemes and native v1. "
+            "Incomplete results may contain eligible partial signatures. External devices receive no rule-era restriction; the host checks their returned results. "
             "Completion checks scripts with the supplied input data, not destination-chain availability, finality, maturity, fees or admission. "
             "Unlike these RPCs, tidecoin-tx requires an explicit -rules choice for signing and verification. " +
             std::string{string_result

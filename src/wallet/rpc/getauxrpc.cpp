@@ -7,6 +7,7 @@
 #include <rpc/auxpow_miner.h>
 #include <rpc/server.h>
 #include <rpc/util.h>
+#include <uint256.h>
 #include <univalue.h>
 #include <util/check.h>
 #include <sync.h>
@@ -34,7 +35,7 @@ private:
     struct PerWallet
     {
         CScript coinbase_script;
-        std::set<std::string> block_hashes;
+        std::set<uint256> block_hashes;
 
         explicit PerWallet(const CScript& script)
             : coinbase_script(script)
@@ -76,7 +77,7 @@ public:
     {
         const auto it = data.find(pwallet->GetName());
         CHECK_NONFATAL(it != data.end());
-        it->second.block_hashes.insert(hash_hex);
+        it->second.block_hashes.insert(uint256::FromHex(hash_hex).value());
     }
 
     void MarkBlockSubmitted(const CWallet* pwallet, const std::string& hash_hex) EXCLUSIVE_LOCKS_REQUIRED(cs)
@@ -86,7 +87,7 @@ public:
             return;
         }
 
-        if (it->second.block_hashes.count(hash_hex) > 0) {
+        if (it->second.block_hashes.count(uint256::FromHex(hash_hex).value()) > 0) {
             data.erase(it);
         }
     }

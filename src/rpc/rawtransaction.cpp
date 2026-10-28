@@ -1698,7 +1698,7 @@ static RPCHelpMan analyzepsbt()
                             {
                                 {RPCResult::Type::ARR, "pubkeys", /*optional=*/true, "",
                                 {
-                                    {RPCResult::Type::STR_HEX, "keyid", "Public key ID, hash160 of the public key, of a public key whose BIP 32 derivation path is missing"},
+                                    {RPCResult::Type::STR_HEX, "keyid", "Public key ID (HASH160 of the serialized public key) of a required public key missing from the PSBT"},
                                 }},
                                 {RPCResult::Type::ARR, "signatures", /*optional=*/true, "",
                                 {

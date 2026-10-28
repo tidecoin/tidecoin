@@ -81,13 +81,13 @@ public:
     //! Lock wallet.
     virtual bool lock() = 0;
 
-    //! Unlock wallet.
+    //! Unlock wallet. Return false if credentials cannot be verified; propagate wallet::WalletOperationError on operation failures.
     virtual bool unlock(const SecureString& wallet_passphrase) = 0;
 
     //! Return whether wallet is locked.
     virtual bool isLocked() = 0;
 
-    //! Change wallet passphrase.
+    //! Change wallet passphrase. Return false if old credentials cannot be verified; propagate wallet::WalletOperationError on operation failures.
     virtual bool changeWalletPassphrase(const SecureString& old_wallet_passphrase,
         const SecureString& new_wallet_passphrase) = 0;
 

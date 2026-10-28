@@ -34,6 +34,10 @@ class FastRandomContext;
 
 struct ConnmanTestMsg : public CConnman {
     using CConnman::CConnman;
+    using CConnman::InactivityCheck;
+    using CConnman::SocketSendData;
+
+    void SetSendBufferSize(unsigned int size) { nSendBufferMaxSize = size; }
 
     void SetMsgProc(NetEventsInterface* msgproc)
     {

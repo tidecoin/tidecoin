@@ -6,7 +6,7 @@ Tidecoin is an independently maintained post-quantum cryptocurrency derived from
 
 Tidecoin is a decentralized peer-to-peer cryptocurrency engineered from block zero to resist attacks from both classical and quantum computers. While Bitcoin and virtually all major blockchains rely on ECDSA or Schnorr signatures over secp256k1 — which Shor's algorithm will break once sufficiently powerful quantum computers exist — Tidecoin replaces ECDSA entirely with post-quantum signature schemes from the NIST PQC process.
 
-The network has been in continuous operation since December 27, 2020, with over 2.7 million blocks produced. No security incident, consensus failure, or cryptographic vulnerability has been reported. Tidecoin uses finalized NIST standards where available and NIST-selected schemes still in standardization where appropriate.
+The network has been in continuous operation since December 27, 2020. An earlier development build validated mainnet history through height 2,761,716 in a replay completed on October 10, 2026 (UTC). This is a historical validation result, not a live chain height. No security incident, consensus failure, or cryptographic vulnerability has been reported. Tidecoin uses finalized NIST standards where available and NIST-selected schemes still in standardization where appropriate.
 
 | | |
 |---|---|
@@ -71,7 +71,7 @@ See the [whitepaper design positioning](doc/whitepaper.md#13-design-positioning)
 | Metric | Value |
 |--------|-------|
 | Years of operation | 5+ (since December 2020) |
-| Blocks produced | ~2,380,000+ |
+| Mainnet history replay | Validated through height 2,761,716 (October 10, 2026 UTC; earlier development build) |
 | Security incidents | 0 |
 | Consensus failures | 0 |
 

@@ -10,6 +10,9 @@
 #include <script/parsing.h>
 #include <span.h>
 #include <sync.h>
+#include <test/data/falcon512_messages.json.h>
+#include <test/util/falcon.h>
+#include <test/util/json.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
@@ -1457,14 +1460,100 @@ BOOST_AUTO_TEST_CASE(message_sign)
     BOOST_CHECK_MESSAGE(!MessageSign(privkey, message, generated_signature),
         "Sign with an invalid private key");
 
-    privkey.MakeNewKey(pq::SchemeId::FALCON_512);
-    BOOST_REQUIRE_MESSAGE(privkey.IsValid(), "Confirm the private key is valid");
+    for (const auto scheme : {pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_1024,
+                             pq::SchemeId::MLDSA_44, pq::SchemeId::MLDSA_65, pq::SchemeId::MLDSA_87}) {
+        privkey.MakeNewKey(scheme);
+        BOOST_REQUIRE(privkey.IsValid());
+        BOOST_REQUIRE(MessageSign(privkey, message, generated_signature));
+        const auto pubkey = privkey.GetPubKey();
+        const auto address = EncodeDestination(PKHash(pubkey));
+        BOOST_CHECK_EQUAL(MessageVerify(address, generated_signature, message), MessageVerificationResult::OK);
+        BOOST_CHECK_EQUAL(MessageVerify(address, generated_signature, message + "!"), MessageVerificationResult::ERR_PUBKEY_NOT_RECOVERED);
 
-    BOOST_CHECK_MESSAGE(MessageSign(privkey, message, generated_signature),
-        "Sign with a valid private key");
+        const auto bytes = DecodeBase64(generated_signature);
+        BOOST_REQUIRE(bytes);
+        const auto sig_len = bytes->size() - (pubkey.size() - 1);
+        std::vector<unsigned char> signature(bytes->begin(), bytes->begin() + sig_len);
+        // Current messages use strict signatures for every scheme. Newer
+        // schemes have no relaxed verifier, even when passed the legacy flag.
+        BOOST_CHECK(pubkey.Verify(MessageHash(message), signature, /*legacy_mode=*/false));
+        BOOST_CHECK(pubkey.Verify(MessageHash(message), signature, /*legacy_mode=*/true));
+        for (size_t padding : {1U, 16U}) {
+            auto padded = signature;
+            padded.resize(signature.size() + padding, 0);
+            BOOST_CHECK(!pubkey.Verify(MessageHash(message), padded, /*legacy_mode=*/false));
+            BOOST_CHECK(!pubkey.Verify(MessageHash(message), padded, /*legacy_mode=*/true));
+            padded.insert(padded.end(), pubkey.begin() + 1, pubkey.end());
+            BOOST_CHECK_EQUAL(MessageVerify(address, EncodeBase64(padded), message), MessageVerificationResult::ERR_PUBKEY_NOT_RECOVERED);
+        }
+    }
+}
 
-    const std::string address = EncodeDestination(PKHash(privkey.GetPubKey()));
-    BOOST_CHECK_EQUAL(MessageVerify(address, generated_signature, message), MessageVerificationResult::OK);
+BOOST_AUTO_TEST_CASE(message_verify_legacy_falcon512)
+{
+    const auto vectors = read_json(json_tests::falcon512_messages);
+    for (const auto& row : vectors.getValues()) {
+        BOOST_TEST_CONTEXT(row["description"].get_str()) {
+            const auto& message = row["message"].get_str();
+            const auto hash = MessageHash(message);
+            const auto encoded = DecodeBase64(row["signature"].get_str());
+            BOOST_REQUIRE(encoded);
+            constexpr size_t PK_SIZE{897};
+            BOOST_REQUIRE_GT(encoded->size(), PK_SIZE);
+            std::vector<unsigned char> pk{static_cast<unsigned char>(pq::SchemeId::FALCON_512)};
+            pk.insert(pk.end(), encoded->end() - PK_SIZE, encoded->end());
+            const CPubKey pubkey{pk.begin(), pk.end()};
+            const auto address = EncodeDestination(PKHash(pubkey));
+            const std::vector<unsigned char> signature(encoded->begin(), encoded->end() - PK_SIZE);
+            BOOST_REQUIRE(pubkey.Verify(hash, signature, /*legacy_mode=*/true));
+            BOOST_CHECK_EQUAL(pubkey.Verify(hash, signature, /*legacy_mode=*/false), row["strict"].get_bool());
+
+            const auto check = [&](const std::vector<unsigned char>& sig, bool valid) {
+                auto blob = sig;
+                blob.insert(blob.end(), pk.begin() + 1, pk.end());
+                CPubKey recovered;
+                BOOST_CHECK_EQUAL(recovered.Recover(hash, blob), valid);
+                if (valid) BOOST_CHECK(recovered == pubkey);
+                BOOST_CHECK_EQUAL(MessageVerify(address, EncodeBase64(blob), message),
+                    valid ? MessageVerificationResult::OK : MessageVerificationResult::ERR_PUBKEY_NOT_RECOVERED);
+            };
+            check(signature, true);
+            if (row["strict"].get_bool()) {
+                const auto parsed = test::ParseFalcon512(signature);
+                BOOST_REQUIRE(parsed);
+                BOOST_REQUIRE(!parsed->zero_sign_bits.empty());
+                BOOST_REQUIRE_GT(parsed->unused_bits, 0U);
+                for (unsigned variant : {1U, 2U, 3U}) {
+                    auto alternate = signature;
+                    if (variant & 1) test::SetFalconBit(alternate, parsed->zero_sign_bits.front());
+                    if (variant & 2) alternate.back() |= 1;
+                    BOOST_CHECK(pubkey.Verify(hash, alternate, /*legacy_mode=*/true));
+                    BOOST_CHECK(!pubkey.Verify(hash, alternate, /*legacy_mode=*/false));
+                    check(alternate, true);
+                }
+            }
+            for (size_t size : {signature.size() + 1, size_t{666}}) {
+                BOOST_REQUIRE_GT(size, signature.size());
+                auto padded = signature;
+                padded.resize(size, 0);
+                BOOST_CHECK(!pubkey.Verify(hash, padded, /*legacy_mode=*/true));
+                BOOST_CHECK(!pubkey.Verify(hash, padded, /*legacy_mode=*/false));
+                check(padded, false);
+            }
+            auto malformed = signature;
+            malformed.pop_back();
+            check(malformed, false);
+            malformed = signature;
+            malformed[0] = 0;
+            check(malformed, false);
+            BOOST_CHECK_EQUAL(MessageVerify(address, row["signature"].get_str(), message + "!"), MessageVerificationResult::ERR_PUBKEY_NOT_RECOVERED);
+            auto wrong_key = *encoded;
+            wrong_key[wrong_key.size() - PK_SIZE] = 0;
+            BOOST_CHECK_EQUAL(MessageVerify(address, EncodeBase64(wrong_key), message), MessageVerificationResult::ERR_PUBKEY_NOT_RECOVERED);
+            const auto other_address = EncodeDestination(PKHash(CKeyID{}));
+            BOOST_CHECK_EQUAL(MessageVerify(other_address, row["signature"].get_str(), message), MessageVerificationResult::ERR_NOT_SIGNED);
+        }
+    }
 }
 
 BOOST_AUTO_TEST_CASE(message_verify)

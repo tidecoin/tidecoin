@@ -59,6 +59,7 @@
 namespace wallet {
 RPCHelpMan importdescriptors();
 RPCHelpMan walletpassphrase();
+RPCHelpMan walletpassphrasechange();
 RPCHelpMan walletlock();
 // Inspect transaction state without adding runtime fault hooks to the wallet.
 struct WalletReconciliationTestAccess {
@@ -385,7 +386,7 @@ BOOST_AUTO_TEST_CASE(unlock_rpc_failure_restores_lock_and_timeout)
                 catch (const UniValue& error) {
                     failed = true;
                     BOOST_CHECK_EQUAL(error["code"].getInt<int>(), -4);
-                } catch (const std::runtime_error&) { failed = true; }
+                }
                 BOOST_CHECK(failed);
                 BOOST_CHECK(Fault(*wallet).hit);
                 BOOST_CHECK_EQUAL(wallet->IsLocked(), initially_locked);
@@ -706,20 +707,41 @@ BOOST_AUTO_TEST_CASE(passphrase_failures_preserve_lock_and_disk_state)
     for (bool locked : {false, true}) {
         for (const Failure& point : std::vector<Failure>{{"begin"}, {"write", DBKeys::MASTER_KEY}, {"commit"}}) {
             const auto path{m_args.GetDataDirBase() / fs::PathFromString(strprintf("passphrase-%u", index++))};
-            auto wallet{Open(path)};
+            std::shared_ptr<CWallet> wallet{Open(path)};
             {
                 LOCK(wallet->cs_wallet);
                 wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS);
                 wallet->SetupDescriptorScriptPubKeyMans();
             }
             BOOST_REQUIRE(wallet->EncryptWallet(old_pass));
-            if (!locked) BOOST_REQUIRE(wallet->Unlock(old_pass));
+            CScheduler scheduler;
+            WalletContext context;
+            context.args = &m_args;
+            context.chain = m_node.chain.get();
+            context.scheduler = &scheduler;
+            AddWallet(context, wallet);
+            JSONRPCRequest request;
+            request.context = &context;
+            BOOST_REQUIRE(request.params.read("[\"old passphrase\", 600]"));
+            if (!locked) walletpassphrase().HandleRequest(request);
+            const auto timeout{wallet->nRelockTime};
+            const auto records{ReadRecords(wallet->GetDatabase())};
             BOOST_CHECK(!wallet->ChangeWalletPassphrase(SecureString{"wrong"}, new_pass));
             BOOST_CHECK_EQUAL(wallet->IsLocked(), locked);
             Fault(*wallet) = point;
-            BOOST_CHECK(!wallet->ChangeWalletPassphrase(old_pass, new_pass));
+            BOOST_CHECK_EXCEPTION(wallet->ChangeWalletPassphrase(old_pass, new_pass), WalletOperationError,
+                [](const auto& e) { return std::string_view{e.what()} == "Unable to save the new wallet passphrase"; });
+            BOOST_CHECK(Fault(*wallet).hit);
+            Fault(*wallet) = point;
+            BOOST_REQUIRE(request.params.read("[\"old passphrase\", \"new passphrase\"]"));
+            BOOST_CHECK_EXCEPTION(walletpassphrasechange().HandleRequest(request), UniValue,
+                [](const auto& e) { return e["code"].template getInt<int>() == RPC_WALLET_ERROR; });
             BOOST_CHECK(Fault(*wallet).hit);
             BOOST_CHECK_EQUAL(wallet->IsLocked(), locked);
+            BOOST_CHECK_EQUAL(wallet->nRelockTime, timeout);
+            BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+            BOOST_CHECK(!wallet->GetDatabase().MakeBatch()->HasActiveTxn());
+            RemoveWallet(context, wallet, std::nullopt);
             wallet.reset();
             wallet = Open(path);
             BOOST_CHECK(!wallet->Unlock(new_pass));
@@ -730,6 +752,38 @@ BOOST_AUTO_TEST_CASE(passphrase_failures_preserve_lock_and_disk_state)
             BOOST_CHECK(!wallet->Unlock(old_pass));
             BOOST_REQUIRE(wallet->Unlock(new_pass));
         }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(passphrase_derivation_failure_is_operational)
+{
+    for (bool locked : {false, true}) {
+        auto wallet{Open(m_args.GetDataDirBase() / (locked ? "derive-locked" : "derive-unlocked"))};
+        WITH_LOCK(wallet->cs_wallet, wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS));
+        WITH_LOCK(wallet->cs_wallet, wallet->SetupDescriptorScriptPubKeyMans());
+        BOOST_REQUIRE(wallet->EncryptWallet(SecureString{"old"}));
+        if (!locked) BOOST_REQUIRE(wallet->Unlock(SecureString{"old"}));
+        const auto records{ReadRecords(wallet->GetDatabase())};
+        const auto rounds{wallet->mapMasterKeys.begin()->second.nDeriveIterations};
+        bool hit{false};
+        // Invalidate derivation parameters only after the old key is verified.
+        // No modified parameters are ever written to disk.
+        boost::signals2::scoped_connection connection{wallet->NotifyStatusChanged.connect([&](CWallet* w) {
+            LOCK(w->cs_wallet);
+            if (!w->IsLocked()) {
+                w->mapMasterKeys.begin()->second.nDeriveIterations = 0;
+                hit = true;
+            }
+        })};
+        BOOST_CHECK_EXCEPTION(wallet->ChangeWalletPassphrase(SecureString{"old"}, SecureString{"new"}), WalletOperationError,
+            [](const auto& e) { return std::string_view{e.what()} == "Unable to derive or encrypt the new wallet master key"; });
+        connection.disconnect();
+        wallet->mapMasterKeys.begin()->second.nDeriveIterations = rounds;
+        BOOST_CHECK(hit);
+        BOOST_CHECK_EQUAL(wallet->IsLocked(), locked);
+        BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+        BOOST_REQUIRE(wallet->Unlock(SecureString{"old"}));
+        BOOST_REQUIRE(wallet->ChangeWalletPassphrase(SecureString{"old"}, SecureString{"new"}));
     }
 }
 
@@ -1947,7 +2001,7 @@ BOOST_AUTO_TEST_CASE(pqhd_cache_seed_mismatch_rejected_without_rewrite)
 {
     for (bool encrypted : {false, true}) {
         const auto path = m_args.GetDataDirBase() / (encrypted ? "cache-encrypted" : "cache-plain");
-        auto wallet = Open(path);
+        std::shared_ptr<CWallet> wallet{Open(path)};
         WITH_LOCK(wallet->cs_wallet, wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS));
         WITH_LOCK(wallet->cs_wallet, wallet->SetupDescriptorScriptPubKeyMans());
         if (encrypted) BOOST_REQUIRE(wallet->EncryptWallet(SecureString{"pass"}));
@@ -1987,7 +2041,7 @@ BOOST_AUTO_TEST_CASE(pqhd_cache_seed_mismatch_rejected_without_rewrite)
                 BOOST_REQUIRE(batch.TxnBegin());
                 auto update = WITH_LOCK(manager->cs_desc_man, return manager->GetWalletDescriptor());
                 BOOST_REQUIRE(manager->UpdateWalletDescriptor(update, &batch));
-                BOOST_CHECK_THROW(wallet->Unlock(SecureString{"pass"}), std::runtime_error);
+                BOOST_CHECK_THROW(wallet->Unlock(SecureString{"pass"}), WalletOperationError);
                 BOOST_REQUIRE(batch.TxnAbort());
             }
             BOOST_CHECK(wallet->IsLocked());
@@ -1999,7 +2053,22 @@ BOOST_AUTO_TEST_CASE(pqhd_cache_seed_mismatch_rejected_without_rewrite)
             FlatSigningProvider provider;
             std::vector<CScript> scripts;
             BOOST_CHECK(!WITH_LOCK(manager->cs_desc_man, return manager->ExpandPublicFromCache(0, scripts, provider)));
-            BOOST_CHECK_THROW(wallet->Unlock(SecureString{"pass"}), std::runtime_error);
+            BOOST_CHECK_THROW(wallet->Unlock(SecureString{"pass"}), WalletOperationError);
+            WalletContext context;
+            context.args = &m_args;
+            context.chain = m_node.chain.get();
+            AddWallet(context, wallet);
+            JSONRPCRequest request;
+            request.context = &context;
+            BOOST_REQUIRE(request.params.read("[\"pass\", 600]"));
+            BOOST_CHECK_EXCEPTION(walletpassphrase().HandleRequest(request), UniValue,
+                [](const auto& e) { return e["code"].template getInt<int>() == RPC_WALLET_ERROR; });
+            BOOST_REQUIRE(request.params.read("[\"pass\", \"new\"]"));
+            BOOST_CHECK_EXCEPTION(walletpassphrasechange().HandleRequest(request), UniValue,
+                [](const auto& e) { return e["code"].template getInt<int>() == RPC_WALLET_ERROR; });
+            BOOST_CHECK(wallet->IsLocked());
+            BOOST_CHECK_EQUAL(wallet->nRelockTime, 0);
+            RemoveWallet(context, wallet, std::nullopt);
         } else {
             BOOST_CHECK(wallet->LoadWallet() == DBErrors::CORRUPT);
         }
@@ -2740,7 +2809,7 @@ BOOST_AUTO_TEST_CASE(locked_pqhd_load_defers_creation_until_unlock)
 {
     const auto path{m_args.GetDataDirBase() / "locked-reconciliation"};
     PrepareLockedSeedOnly(path);
-    auto wallet{Unloaded(path)};
+    std::shared_ptr<CWallet> wallet{Unloaded(path)};
     const auto records{ReadRecords(wallet->GetDatabase())};
     BOOST_REQUIRE(wallet->LoadWallet() == DBErrors::LOAD_OK);
     BOOST_CHECK(wallet->IsLocked());
@@ -2750,6 +2819,15 @@ BOOST_AUTO_TEST_CASE(locked_pqhd_load_defers_creation_until_unlock)
     BOOST_CHECK(!wallet->Unlock(SecureString{"wrong"}));
     BOOST_CHECK(state == WalletReconciliationTestAccess::Snapshot(*wallet));
 
+    CScheduler scheduler;
+    WalletContext context;
+    context.args = &m_args;
+    context.chain = m_node.chain.get();
+    context.scheduler = &scheduler;
+    AddWallet(context, wallet);
+    JSONRPCRequest request;
+    request.context = &context;
+
     // Failed deferred creation during unlock or passphrase change must roll
     // back all managers and bindings, keep the wallet locked, and permit retry.
     for (const Failure& point : std::vector<Failure>{{"begin"}, {"write", DBKeys::WALLETDESCRIPTOR},
@@ -2758,12 +2836,19 @@ BOOST_AUTO_TEST_CASE(locked_pqhd_load_defers_creation_until_unlock)
             BOOST_TEST_CONTEXT(point.operation << " " << point.record << " change_passphrase=" << change_passphrase) {
                 Fault(*wallet) = point;
                 if (change_passphrase) {
-                    BOOST_CHECK_THROW(wallet->ChangeWalletPassphrase(SecureString{"pass"}, SecureString{"new"}), std::runtime_error);
+                    BOOST_CHECK_THROW(wallet->ChangeWalletPassphrase(SecureString{"pass"}, SecureString{"new"}), WalletOperationError);
                 } else {
-                    BOOST_CHECK_THROW(wallet->Unlock(SecureString{"pass"}), std::runtime_error);
+                    BOOST_CHECK_THROW(wallet->Unlock(SecureString{"pass"}), WalletOperationError);
                 }
                 BOOST_REQUIRE(Fault(*wallet).hit);
+                Fault(*wallet) = point;
+                BOOST_REQUIRE(request.params.read(change_passphrase ? "[\"pass\", \"new\"]" : "[\"pass\", 600]"));
+                const auto rpc = change_passphrase ? walletpassphrasechange() : walletpassphrase();
+                BOOST_CHECK_EXCEPTION(rpc.HandleRequest(request), UniValue,
+                    [](const auto& e) { return e["code"].template getInt<int>() == RPC_WALLET_ERROR; });
+                BOOST_REQUIRE(Fault(*wallet).hit);
                 BOOST_CHECK(wallet->IsLocked());
+                BOOST_CHECK_EQUAL(wallet->nRelockTime, 0);
                 BOOST_CHECK(state == WalletReconciliationTestAccess::Snapshot(*wallet));
                 BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
                 BOOST_CHECK(!Database(*wallet).HasActiveTxn());
@@ -2783,6 +2868,7 @@ BOOST_AUTO_TEST_CASE(locked_pqhd_load_defers_creation_until_unlock)
         BOOST_CHECK(created == ReadRecords(wallet->GetDatabase()));
         BOOST_CHECK_EQUAL(wallet->GetAllScriptPubKeyMans().size(), managers);
     }
+    RemoveWallet(context, wallet, std::nullopt);
     wallet.reset();
     wallet = Open(path);
     BOOST_CHECK(wallet->IsLocked());

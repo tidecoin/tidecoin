@@ -263,8 +263,9 @@ Encrypted individual private keys, when present, are checked as well. The same
 validation protects passphrase changes: invalid candidate keys or damaged seed
 records must not cause the existing master-key record to be replaced.
 
-`encryptwallet` commits encryption of the existing keys and seeds before
-creating a fresh PQHD seed and default descriptors in a separate transaction.
+`encryptwallet` commits encryption of the existing keys and seeds. For a
+non-blank wallet, it then creates a fresh PQHD seed and default descriptors in a
+separate transaction.
 The fresh seed is temporarily available for derivation during setup; an abort
 removes it and its descriptor managers and restores the previous wallet state.
 The new policy and active bindings take effect only on commit. A setup failure
@@ -279,6 +280,17 @@ database error, unlock, run `createpqhdseed`, then pass its `seed_id` to
 keys controlling existing coins; the wallet retains those older descriptors.
 The database rewrite is attempted even when setup fails. Calling `encryptwallet`
 again is rejected because the wallet is already encrypted.
+
+A blank wallet skips replacement-seed setup. Its existing seed identities and
+policy are retained, and encryption creates neither a seed nor descriptors.
+Unlocking a freshly seeded blank wallet again in the same session also does not
+provision descriptors. To provision them explicitly, unlock, run
+`createpqhdseed` or `importpqhdseed` if no seed exists, then select the intended
+seed with `setpqhdseed` or reapply its policy with `setpqhdpolicy`. These explicit
+operations create the eligible policy descriptors. Normal load/unlock
+reconciliation can also provision missing descriptors later, as described in
+§10, but reloading is not required for this workflow. Make a new backup after
+encryption and after adding or selecting a new seed.
 
 For `createwallet` with a passphrase, encryption precedes initial seed/descriptor
 setup. If that setup fails, the RPC returns a creation error (`-4`), retains the
@@ -682,12 +694,14 @@ If an output type has no active binding, the policy descriptor can still be foun
 or created on demand when eligible. Absence of an active binding is therefore not
 a persistent instruction to disable that policy output type.
 
-Successful first encryption generates a new policy seed and selects its default
-descriptors. It can consequently replace
+Successful first encryption of a non-blank wallet generates a new policy seed
+and selects its default descriptors. It can consequently replace
 custom active bindings. Install/reactivate custom descriptors after encryption
 if they are to remain the issuance choice. Historical descriptors remain in the
 wallet; importing an older seed/path deliberately reuses that older key material.
 Failed replacement setup keeps the previous active bindings, as described in §9.1.
+Blank-wallet encryption skips this replacement and preserves existing seeds and
+policy; use explicit seed/policy selection to provision its descriptors.
 
 To generate and select fresh key material explicitly, unlock an encrypted wallet
 first and run:

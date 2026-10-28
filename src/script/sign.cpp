@@ -65,6 +65,12 @@ MutableTransactionSignatureCreator::MutableTransactionSignatureCreator(const CMu
 {
 }
 
+bool MutableTransactionSignatureCreator::IsSignatureAllowed(const CPubKey& pubkey, SigVersion sigversion) const
+{
+    return !m_allow_legacy || (sigversion != SigVersion::WITNESS_V1_512 &&
+                              pubkey.IsValid() && pubkey[0] == pq::kSchemePrefixFalcon512);
+}
+
 bool MutableTransactionSignatureCreator::CreateSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const CKeyID& address, const CScript& scriptCode, SigVersion sigversion) const
 {
     assert(sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0 || sigversion == SigVersion::WITNESS_V1_512);
@@ -72,6 +78,10 @@ bool MutableTransactionSignatureCreator::CreateSig(const SigningProvider& provid
     CKey key;
     if (!provider.GetKey(address, key))
         return false;
+
+    // Also guard direct creator calls. Ineligibility is not a request-wide
+    // error: other keys or inputs may still provide a supported solution.
+    if (m_allow_legacy && !IsSignatureAllowed(key.GetPubKey(), sigversion)) return false;
 
     const auto refuse = [&](common::PSBTError error) { m_error = error; return false; };
     // Refuse SINGLE ((nHashType & 0x1f) == SIGHASH_SINGLE, the same test the
@@ -146,15 +156,19 @@ static bool GetPubKey(const SigningProvider& provider, const SignatureData& sigd
 static bool CreateSig(const BaseSignatureCreator& creator, SignatureData& sigdata, const SigningProvider& provider, std::vector<unsigned char>& sig_out, const CPubKey& pubkey, const CScript& scriptcode, SigVersion sigversion)
 {
     CKeyID keyid = pubkey.GetID();
-    const auto it = sigdata.signatures.find(keyid);
-    if (it != sigdata.signatures.end()) {
-        sig_out = it->second.second;
-        return true;
-    }
-    if (creator.CreateSig(provider, sig_out, keyid, scriptcode, sigversion)) {
-        auto i = sigdata.signatures.emplace(keyid, SigPair(pubkey, sig_out));
-        assert(i.second);
-        return true;
+    // Keep excluded partials as data, but do not let one displace an eligible
+    // alternative when choosing a multisig or Miniscript satisfaction.
+    if (creator.IsSignatureAllowed(pubkey, sigversion)) {
+        const auto it = sigdata.signatures.find(keyid);
+        if (it != sigdata.signatures.end()) {
+            sig_out = it->second.second;
+            return true;
+        }
+        if (creator.CreateSig(provider, sig_out, keyid, scriptcode, sigversion)) {
+            auto i = sigdata.signatures.emplace(keyid, SigPair(pubkey, sig_out));
+            assert(i.second);
+            return true;
+        }
     }
     // Could not make signature or signature not found, add keyid to missing
     if (creator.Error() == common::PSBTError::OK) sigdata.missing_sigs.push_back(keyid);

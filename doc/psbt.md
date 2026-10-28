@@ -140,6 +140,21 @@ owner's key it can be replaced. Foreign entries are preserved. Explicit sighash
 requests and required previous-output data still apply. A supplied invalid final
 remains incomplete; processing does not clear it to automatically re-sign it.
 
+Local signing under `pre-auxpow` creates only Falcon-512 signatures for supported
+legacy and witness-v0 inputs. Falcon-1024, ML-DSA and native witness-v1 signing
+require `post-auxpow`. This also applies when the rules are selected by the local
+chain because the argument was omitted. Eligible inputs and keys can still be
+signed in a mixed request; `complete: false` does not mean that nothing was signed.
+
+A cached signature excluded by the selected era is retained in an incomplete
+PSBT, but is not chosen to satisfy an input. An eligible threshold or alternative
+can therefore complete even when another key or cached signature is ineligible.
+Successful finalization performs the usual removal of partial fields. Selecting
+another era later can make a preserved signature usable; it cannot supply a new
+signature that was never created. Public metadata updates and dummy size
+estimation remain available. External devices receive the whole PSBT without an
+era restriction; see the [device boundary](external-signer.md#signing-responses-and-completion).
+
 For example, `pre-auxpow` processing can complete an older valid Falcon-512
 encoding with a negative-zero coefficient sign or nonzero unused final bits.
 Current relay policy refuses these encodings even before activation. Obtain
@@ -278,4 +293,4 @@ admission always follows the current chain. See the
 
 #### Multisig with multiple Tidecoin instances
 
-For a quick start see [Basic M-of-N multisig example using descriptor wallets and PSBTs](./descriptors.md#basic-multisig-example).
+For a quick start see the [multisig tutorial using descriptor wallets and PSBTs](multisig-tutorial.md).

@@ -42,7 +42,7 @@ Tidecoin was conceived in direct response to these realities. Its genesis block,
 
 This references the breakthrough by the University of Science and Technology of China, whose photonic quantum computer Jiuzhang demonstrated quantum computational advantage -- an event that underscored the urgency of quantum-safe cryptography.
 
-Since that genesis block, Tidecoin has produced over 2.7 million blocks across more than five years of continuous operation, with every single transaction secured by post-quantum signatures. No security incident, consensus failure, or cryptographic vulnerability has been reported.
+Since that genesis block, Tidecoin has operated continuously for more than five years, with every single transaction secured by post-quantum signatures. An earlier development build validated mainnet history through height 2,761,716 in a replay completed on October 10, 2026 (UTC). This is a historical validation result, not a live chain height. No security incident, consensus failure, or cryptographic vulnerability has been reported.
 
 ---
 

@@ -34,6 +34,52 @@ static SOCKET CreateSocket()
     return s;
 }
 
+BOOST_AUTO_TEST_CASE(socket_urgent_data_respects_requested_reads)
+{
+    const SOCKET listen_socket{CreateSocket()};
+    Sock listener{listen_socket};
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    BOOST_REQUIRE_EQUAL(listener.Bind(reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
+    socklen_t length{sizeof(address)};
+    BOOST_REQUIRE_EQUAL(listener.GetSockName(reinterpret_cast<sockaddr*>(&address), &length), 0);
+    BOOST_REQUIRE_EQUAL(listener.Listen(1), 0);
+    Sock sender{CreateSocket()};
+    BOOST_REQUIRE_EQUAL(sender.Connect(reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
+    const SOCKET receive_socket = accept(listen_socket, nullptr, nullptr);
+    BOOST_REQUIRE(receive_socket != INVALID_SOCKET);
+    auto receiver = std::make_shared<Sock>(receive_socket);
+    BOOST_REQUIRE(receiver->IsSelectable());
+    BOOST_REQUIRE(receiver->SetNonBlocking());
+
+    const char byte{'x'};
+    BOOST_REQUIRE_EQUAL(sender.Send(&byte, 1, MSG_OOB), 1);
+    // Establish that the exceptional condition is pending before testing the
+    // send-only wait. Otherwise the old select backend could pass by timing.
+    fd_set exceptional;
+    FD_ZERO(&exceptional);
+    FD_SET(receive_socket, &exceptional);
+    timeval timeout{5, 0};
+    BOOST_REQUIRE_EQUAL(select(receive_socket + 1, nullptr, nullptr, &exceptional, &timeout), 1);
+
+    Sock::EventsPerSock events{{receiver, Sock::Events{Sock::SEND}}};
+    BOOST_REQUIRE(receiver->WaitMany(100ms, events));
+    BOOST_CHECK_EQUAL(events.at(receiver).occurred & Sock::ERR, 0);
+    BOOST_CHECK_EQUAL(events.at(receiver).occurred & Sock::RECV, 0);
+    BOOST_CHECK(events.at(receiver).occurred & Sock::SEND);
+
+    // Normal data remains readable once receiving is requested again.
+    char received{};
+    BOOST_REQUIRE_EQUAL(receiver->Recv(&received, 1, MSG_OOB), 1);
+    BOOST_REQUIRE_EQUAL(sender.Send(&byte, 1, 0), 1);
+    events.at(receiver).requested = Sock::RECV;
+    BOOST_REQUIRE(receiver->WaitMany(5s, events));
+    BOOST_REQUIRE(events.at(receiver).occurred & Sock::RECV);
+    BOOST_CHECK_EQUAL(receiver->Recv(&received, 1, 0), 1);
+    BOOST_CHECK_EQUAL(received, byte);
+}
+
 BOOST_AUTO_TEST_CASE(constructor_and_destructor)
 {
     const SOCKET s = CreateSocket();

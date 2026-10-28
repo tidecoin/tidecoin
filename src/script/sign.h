@@ -60,6 +60,9 @@ public:
     virtual const BaseSignatureChecker& Checker() const =0;
     virtual common::PSBTError Error() const { return common::PSBTError::OK; }
 
+    /** Whether this key/version may contribute a signature. Dummy creators permit all. */
+    virtual bool IsSignatureAllowed(const CPubKey& pubkey, SigVersion sigversion) const { return true; }
+
     /** Create a singular (non-script) signature. */
     virtual bool CreateSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const CKeyID& keyid, const CScript& scriptCode, SigVersion sigversion) const =0;
 };
@@ -71,6 +74,7 @@ class MutableTransactionSignatureCreator : public BaseSignatureCreator
     unsigned int nIn;
     int nHashType;
     CAmount amount;
+    // The supported rule eras enable strict PQ and witness v1 together.
     const bool m_allow_legacy;
     const MutableTransactionSignatureChecker checker;
     const PrecomputedTransactionData* m_txdata;
@@ -91,6 +95,7 @@ public:
     bool Signed() const { return m_signed; }
     void SetPSBTConstraints(std::optional<int> declared, bool existing_match) { m_declared_sighash = declared; m_existing_signatures_match = existing_match; }
     void SetAmountAvailability(bool own, bool all) { m_amount_known = own; m_all_amounts_known = all; }
+    bool IsSignatureAllowed(const CPubKey& pubkey, SigVersion sigversion) const override;
     bool CreateSig(const SigningProvider& provider, std::vector<unsigned char>& vchSig, const CKeyID& keyid, const CScript& scriptCode, SigVersion sigversion) const override;
 };
 

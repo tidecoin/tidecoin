@@ -46,6 +46,8 @@ class WalletPQHDEncryptionTest(BitcoinTestFramework):
 
     def run_test(self):
         node = self.nodes[0]
+        self.check_blank_encryption()
+        self.check_passphrase_operation_errors()
         self.check_failed_post_encryption_setup()
         self.check_generated_seeds()
         self.check_generated_seed_write_failure()
@@ -53,9 +55,18 @@ class WalletPQHDEncryptionTest(BitcoinTestFramework):
         wallet = node.get_wallet_rpc('authenticated')
         address = wallet.getnewaddress('', 'legacy')
         wallet.importpqhdseed('11' * 32)
-        wallet.encryptwallet('real password')
+        old_seed_ids = {seed['seed_id'] for seed in wallet.listpqhdseeds()}
+        result = wallet.encryptwallet('real password')
+        assert 'a new PQHD seed was generated' in result
+        assert 'backupwallet' in result
+        new_seed_ids = {seed['seed_id'] for seed in wallet.listpqhdseeds()}
+        assert old_seed_ids < new_seed_ids
+        assert_equal(len(new_seed_ids - old_seed_ids), 1)
+        new_seed_id = (new_seed_ids - old_seed_ids).pop()
+        assert_equal(seed_defaults(wallet), (new_seed_id, new_seed_id))
         descriptor = next(d['desc'] for d in wallet.listdescriptors()['descriptors']
                           if d['active'] and not d['internal'] and d['desc'].startswith('wpkh('))
+        assert new_seed_id in descriptor
         wallet.walletpassphrase('real password', 120)
         expected = wallet.deriveaddresses(descriptor, [10, 10])
         assert node.verifymessage(address, wallet.signmessage(address, 'before'), 'before')
@@ -128,6 +139,108 @@ class WalletPQHDEncryptionTest(BitcoinTestFramework):
         assert_equal(wallet.deriveaddresses(descriptor, [10, 10]), expected)
         assert node.verifymessage(address, wallet.signmessage(address, 'recovered'), 'recovered')
 
+    def check_blank_encryption(self):
+        node = self.nodes[0]
+        self.log.info('Blank-wallet encryption retains seeds and policy without provisioning descriptors')
+        for seeded in [False, True]:
+            name = f'blank-encryption-{seeded}'
+            node.createwallet(name, blank=True)
+            wallet = node.get_wallet_rpc(name)
+            if seeded:
+                wallet.createpqhdseed()
+            seeds = wallet.listpqhdseeds()
+            assert_equal(len(seeds), int(seeded))
+            assert_equal(wallet.listdescriptors()['descriptors'], [])
+
+            def policy_and_flags():
+                snapshot = Path(self.options.tmpdir) / f'{name}.backup'
+                wallet.backupwallet(str(snapshot))
+                with closing(sqlite3.connect(snapshot)) as db:
+                    return {key: value for key, value in db.execute('SELECT key, value FROM main')
+                            if key in (ser_string(b'pqhdpolicy'), ser_string(b'flags'))}
+
+            state = policy_and_flags()
+            assert ser_string(b'flags') in state
+            assert_equal(ser_string(b'pqhdpolicy') in state, seeded)
+            result = wallet.encryptwallet('pass')
+            assert 'No new PQHD seed or descriptors were generated' in result
+            assert 'backupwallet' in result
+            expected_seeds = [dict(seed, encrypted=True) for seed in seeds]
+            assert_equal(wallet.listpqhdseeds(), expected_seeds)
+            assert_equal(wallet.listdescriptors()['descriptors'], [])
+            assert_equal(wallet.getwalletinfo()['unlocked_until'], 0)
+            assert_equal(policy_and_flags(), state)
+
+            # Unlocking in the same session does not provision a freshly seeded blank wallet.
+            wallet.walletpassphrase('pass', 120)
+            assert_equal(wallet.listpqhdseeds(), expected_seeds)
+            assert_equal(wallet.listdescriptors()['descriptors'], [])
+            assert_equal(policy_and_flags(), state)
+            if seeded:
+                seed_id = seeds[0]['seed_id']
+                wallet.setpqhdseed(seed_id)
+                assert_equal(wallet.listpqhdseeds(), expected_seeds)
+                for address in (wallet.getnewaddress(address_type='legacy'), wallet.getrawchangeaddress('legacy')):
+                    assert_equal(wallet.getaddressinfo(address)['pqhd_seedid'], seed_id)
+            wallet.unloadwallet()
+
+    def check_passphrase_operation_errors(self):
+        node = self.nodes[0]
+        self.log.info('Passphrase RPCs distinguish write failures from incorrect credentials')
+        for deferred, initially_locked in [(True, True), (False, True), (False, False)]:
+            name = f'passphrase-errors-{deferred}-{initially_locked}'
+            node.createwallet(name, blank=deferred, passphrase='old')
+            wallet = node.get_wallet_rpc(name)
+            wallet.walletpassphrase('old', 3600)
+            if deferred:
+                wallet.createpqhdseed()
+                assert_equal(wallet.listdescriptors()['descriptors'], [])
+            wallet.unloadwallet()
+            path = node.wallets_path / name / 'wallet.dat'
+            saved_keys = encryption_records(path)
+            prefix = ser_string(b'walletdescriptor' if deferred else b'mkey')
+            with closing(sqlite3.connect(path)) as db, db:
+                db.execute(f"""CREATE TRIGGER fail_passphrase_write BEFORE INSERT ON main
+                    WHEN substr(NEW.key, 1, {len(prefix)}) = X'{prefix.hex()}'
+                    BEGIN SELECT RAISE(FAIL, 'injected passphrase write failure'); END""")
+            node.loadwallet(name)
+            if not initially_locked:
+                wallet.walletpassphrase('old', 3600)
+            deadline = wallet.getwalletinfo()['unlocked_until']
+            descriptors = wallet.listdescriptors()['descriptors']
+            seeds = wallet.listpqhdseeds()
+            assert_raises_rpc_error(-14, 'passphrase entered was incorrect', wallet.walletpassphrase, 'wrong', 3600)
+            assert_raises_rpc_error(-14, 'passphrase entered was incorrect', wallet.walletpassphrasechange, 'wrong', 'new')
+            message = 'writing descriptor failed' if deferred else 'Unable to save the new wallet passphrase'
+            if deferred:
+                assert_raises_rpc_error(-4, message, wallet.walletpassphrase, 'old', 3600)
+            assert_raises_rpc_error(-4, message, wallet.walletpassphrasechange, 'old', 'new')
+            assert_equal(wallet.getwalletinfo()['unlocked_until'], deadline)
+            assert_equal(wallet.listdescriptors()['descriptors'], descriptors)
+            assert_equal(wallet.listpqhdseeds(), seeds)
+            wallet.unloadwallet()
+            assert_equal(encryption_records(path), saved_keys)
+            with closing(sqlite3.connect(path)) as db, db:
+                db.execute('DROP TRIGGER fail_passphrase_write')
+            node.loadwallet(name)
+            # A restart still uses the old saved key. Retry provisioning and
+            # changing the passphrase after the write failure is resolved.
+            assert_raises_rpc_error(-14, 'passphrase entered was incorrect', wallet.walletpassphrase, 'new', 3600)
+            wallet.walletpassphrase('old', 3600)
+            descriptors = wallet.listdescriptors()['descriptors']
+            assert descriptors
+            wallet.walletlock()
+            wallet.walletpassphrase('old', 3600)
+            assert_equal(wallet.listdescriptors()['descriptors'], descriptors)
+            wallet.walletpassphrasechange('old', 'new')
+            wallet.unloadwallet()
+            node.loadwallet(name)
+            assert_raises_rpc_error(-14, 'passphrase entered was incorrect', wallet.walletpassphrase, 'old', 3600)
+            wallet.walletpassphrase('new', 3600)
+            address = wallet.getnewaddress(address_type='legacy')
+            assert node.verifymessage(address, wallet.signmessage(address, 'passphrase retry'), 'passphrase retry')
+            wallet.unloadwallet()
+
     def check_failed_post_encryption_setup(self):
         node = self.nodes[0]
         self.log.info('Failed post-encryption setup keeps the saved encrypted wallet usable')
@@ -196,9 +309,15 @@ class WalletPQHDEncryptionTest(BitcoinTestFramework):
                 wallet = node.get_wallet_rpc(name)
                 if encrypted:
                     seeds = wallet.listpqhdseeds()
+                    assert_equal(len(seeds), int(not blank))
                     assert_raises_rpc_error(-13, 'must be unlocked', wallet.createpqhdseed)
                     assert_equal(wallet.listpqhdseeds(), seeds)
                     wallet.walletpassphrase('pass', 120)
+                    assert_equal(wallet.listpqhdseeds(), seeds)
+                    wallet.unloadwallet()
+                    node.loadwallet(name)
+                    wallet.walletpassphrase('pass', 120)
+                    assert_equal(wallet.listpqhdseeds(), seeds)
                 old_address = None if blank else wallet.getnewaddress(address_type='legacy')
                 descriptors = wallet.listdescriptors()['descriptors']
                 defaults = seed_defaults(wallet)

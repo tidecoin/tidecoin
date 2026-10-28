@@ -169,9 +169,8 @@ public:
      * by checking size, one can observe whether Set() or deserialization has
      * failed.
      *
-     * This does not check for more than that. In particular, it does not verify
-     * that the coordinates correspond to a point on the curve (see IsFullyValid()
-     * for that instead).
+     * This does not validate the scheme's internal public-key encoding; use
+     * IsFullyValid() for that instead.
      *
      * Note that this is consensus critical as CheckPostQuantumSignature() calls it!
      */
@@ -186,7 +185,7 @@ public:
         return IsValid() && pq::SchemeFromPrefix(vch[0]) != nullptr;
     }
 
-    //! fully validate whether this is a valid public key (more expensive than IsValid())
+    //! Validate the full public-key encoding, not possession of a matching private key.
     bool IsFullyValid() const;
 
 
@@ -202,7 +201,7 @@ public:
     bool Verify512(const uint512& hash, const std::vector<unsigned char>& vchSig, bool legacy_mode = false) const;
 
 
-    //! Recover a public key from a signature.
+    //! Recover a message-signing public key, including legacy Falcon-512 signatures.
     bool Recover(const uint256& hash, const std::vector<unsigned char>& vchSig);
 
 };

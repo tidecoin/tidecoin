@@ -10,6 +10,7 @@ from test_framework.address import address_to_scriptpubkey
 from test_framework.authproxy import JSONRPCException
 from test_framework.descriptors import descsum_create
 from test_framework.messages import COIN
+from test_framework.psbt import PSBT, PSBT_IN_PARTIAL_SIG
 from test_framework.script_util import keys_to_multisig_script
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
@@ -38,6 +39,7 @@ class RpcCreateMultiSigTest(BitcoinTestFramework):
     def run_test(self):
         node0, node1, _node2 = self.nodes
         self.wallet = MiniWallet(test_node=node0)
+        self.test_pubkey_encodings()
 
         self.log.info('Generating blocks ...')
         self.generate(self.wallet, 149)
@@ -70,6 +72,47 @@ class RpcCreateMultiSigTest(BitcoinTestFramework):
                 assert "redeemScript exceeds size limit" in e.error["message"]
                 break
             assert_equal(res['redeemScript'], expected_ms_script.hex())
+
+    def test_pubkey_encodings(self):
+        self.log.info('Check full public-key encodings at RPC, descriptor and PSBT entry points')
+        node = self.nodes[0]
+        original = node.createpsbt([{"txid": "00" * 31 + "01", "vout": 0}], {self.wallet.get_address(): 1})
+        for scheme in range(7, 12):
+            _, pubkey = generate_keypair(scheme=str(scheme))
+            valid = [pubkey]
+            invalid = []
+            if scheme in (7, 8):
+                header = bytearray(pubkey)
+                header[1] = 0
+                invalid.append(bytes(header))
+                for coefficient in (12289, 16383):
+                    packed = bytearray(pubkey)
+                    packed[2] = coefficient >> 6
+                    packed[3] = (packed[3] & 3) | ((coefficient & 63) << 2)
+                    invalid.append(bytes(packed))
+            else:
+                # No coefficient values are excluded in an ML-DSA public key.
+                valid += [bytes([scheme]) + bytes([fill]) * (len(pubkey) - 1) for fill in (0, 255)]
+            for key in valid + invalid:
+                accepted = key in valid
+                keyhex = key.hex()
+                if accepted:
+                    node.createmultisig(1, [keyhex], "bech32")
+                else:
+                    assert_raises_rpc_error(-5, "must be cryptographically valid", node.createmultisig, 1, [keyhex], "bech32")
+                for desc in (f"pkh({keyhex})", f"wpkh({keyhex})", f"wsh(multi(1,{keyhex},{pubkey.hex()}))"):
+                    if accepted:
+                        canonical = node.getdescriptorinfo(desc)["descriptor"]
+                        assert_equal(node.getdescriptorinfo(canonical)["descriptor"], canonical)
+                    else:
+                        assert_raises_rpc_error(-5, "is invalid", node.getdescriptorinfo, desc)
+                psbt = PSBT.from_base64(original)
+                psbt.i[0].map[bytes([PSBT_IN_PARTIAL_SIG]) + key] = b"\x01"
+                if accepted:
+                    decoded = node.decodepsbt(psbt.to_base64())
+                    assert_equal(decoded["inputs"][0]["partial_signatures"], {keyhex: "01"})
+                else:
+                    assert_raises_rpc_error(-22, "Invalid pubkey", node.decodepsbt, psbt.to_base64())
 
     def test_multisig_script_limit(self):
         node1 = self.nodes[1]

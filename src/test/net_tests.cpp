@@ -98,6 +98,82 @@ BOOST_AUTO_TEST_CASE(cnode_listen_port)
     BOOST_CHECK(port == altPort);
 }
 
+BOOST_AUTO_TEST_CASE(paused_send_timeout)
+{
+    // Keep the socket open but unable to drain until the test allows it.
+    struct PausedSock : ZeroSock {
+        bool paused{true};
+        ssize_t Send(const void*, size_t len, int) const override
+        {
+            if (!paused) return len;
+#ifdef WIN32
+            WSASetLastError(WSAEWOULDBLOCK);
+#else
+            errno = EWOULDBLOCK;
+#endif
+            return -1;
+        }
+    private:
+        PausedSock& operator=(Sock&&) override
+        {
+            assert(false && "Move of Sock into PausedSock not allowed.");
+            return *this;
+        }
+    };
+    auto& connman = static_cast<ConnmanTestMsg&>(*m_node.connman);
+    connman.SetSendBufferSize(1000);
+    connman.SetPeerConnectTimeout(1s);
+    const auto start = GetTime<std::chrono::seconds>();
+    auto sock = std::make_shared<PausedSock>();
+    CNode node{0, sock, CAddress{}, 0, 0, CAddress{}, "", ConnectionType::INBOUND, false};
+    node.fSuccessfullyConnected = true;
+    node.SetCommonVersion(MIN_PEER_PROTO_VERSION);
+    const auto advance = [&](std::chrono::seconds delta) {
+        SetMockTime(start + delta);
+        // Ordinary traffic timeouts must not be the reason for disconnecting.
+        node.m_last_send = node.m_last_recv = start + delta;
+    };
+    const auto enqueue = [&] {
+        CSerializedNetMsg msg;
+        msg.m_type = NetMsgType::INV;
+        msg.data.resize(2000);
+        connman.PushMessage(&node, std::move(msg));
+    };
+    advance(2s);
+    enqueue();
+    BOOST_REQUIRE(node.fPauseSend);
+    BOOST_CHECK(node.m_pause_send_since.load() == start + 2s);
+    advance(600s);
+    enqueue();
+    WITH_LOCK(node.cs_vSend, connman.SocketSendData(node));
+    BOOST_CHECK(node.m_pause_send_since.load() == start + 2s);
+    BOOST_CHECK(!connman.InactivityCheck(node));
+    advance(2s + TIMEOUT_INTERVAL);
+    BOOST_CHECK(!connman.InactivityCheck(node));
+    advance(3s + TIMEOUT_INTERVAL);
+    BOOST_CHECK(connman.InactivityCheck(node));
+
+    // Draining ends the pause; the next pause receives a fresh deadline.
+    sock->paused = false;
+    WITH_LOCK(node.cs_vSend, connman.SocketSendData(node));
+    BOOST_REQUIRE(!node.fPauseSend);
+    BOOST_CHECK(!connman.InactivityCheck(node));
+    sock->paused = true;
+    advance(1500s);
+    enqueue();
+    BOOST_CHECK(node.m_pause_send_since.load() == start + 1500s);
+    BOOST_CHECK(!connman.InactivityCheck(node));
+
+    // Exercise the transition in SocketSendData independently of PushMessage.
+    node.fPauseSend = false;
+    advance(1600s);
+    WITH_LOCK(node.cs_vSend, connman.SocketSendData(node));
+    BOOST_REQUIRE(node.fPauseSend);
+    BOOST_CHECK(node.m_pause_send_since.load() == start + 1600s);
+    advance(1601s + TIMEOUT_INTERVAL);
+    BOOST_CHECK(connman.InactivityCheck(node));
+}
+
 BOOST_AUTO_TEST_CASE(cnode_simple_test)
 {
     NodeId id = 0;

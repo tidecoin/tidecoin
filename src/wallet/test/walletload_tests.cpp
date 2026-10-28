@@ -137,6 +137,57 @@ BOOST_FIXTURE_TEST_CASE(wallet_load_legacy_keys, TestingSetup)
     BOOST_CHECK(legacy->HaveKey(pubkey.GetID()));
 }
 
+BOOST_FIXTURE_TEST_CASE(wallet_load_watchonly_malformed_pubkeys, TestingSetup)
+{
+    const CPubKey valid = GenerateRandomKey(pq::SchemeId::FALCON_512).GetPubKey();
+    std::vector<CPubKey> keys{valid};
+    for (const auto* scheme : {&pq::kFalcon512Info, &pq::kFalcon1024Info}) {
+        for (const bool bad_header : {false, true}) {
+            std::vector<unsigned char> bytes(scheme->pubkey_bytes + 1, 0);
+            bytes[0] = scheme->prefix;
+            bytes[1] = bad_header ? 0 : scheme->id == pq::SchemeId::FALCON_512 ? 9 : 10;
+            if (!bad_header) {
+                bytes[2] = 0xc0;
+                bytes[3] = 0x04; // First coefficient is 12289.
+            }
+            keys.emplace_back(bytes);
+            BOOST_REQUIRE(keys.back().IsValid());
+            BOOST_REQUIRE(!keys.back().IsFullyValid());
+        }
+    }
+    auto database = std::make_unique<MockableDatabase>();
+    std::vector<CScript> watched;
+    {
+        WalletBatch batch(*database);
+        CKeyMetadata metadata;
+        metadata.nCreateTime = 1;
+        for (const auto& key : keys) {
+            watched.push_back(GetScriptForRawPubKey(key));
+            BOOST_REQUIRE(batch.WriteWatchOnly(watched.back(), metadata));
+        }
+        watched.push_back(GetScriptForMultisig(1, {valid, keys.back()}));
+        BOOST_REQUIRE(batch.WriteWatchOnly(watched.back(), metadata));
+    }
+    // Reload the records twice: full validation may suppress optional key
+    // extraction, but must never discard the original watched scripts.
+    auto records = database->m_records;
+    for (int reload = 0; reload < 2; ++reload) {
+        auto db = std::make_unique<MockableDatabase>(records);
+        const auto* db_view = db.get();
+        CWallet wallet(m_node.chain.get(), "", std::move(db));
+        BOOST_REQUIRE_EQUAL(wallet.LoadWallet(), DBErrors::LOAD_OK);
+        const auto* legacy = wallet.GetLegacyDataSPKM();
+        BOOST_REQUIRE(legacy);
+        for (const auto& script : watched) BOOST_CHECK(legacy->HaveWatchOnly(script));
+        for (const auto& key : keys) {
+            CPubKey extracted;
+            BOOST_CHECK_EQUAL(legacy->GetPubKey(key.GetID(), extracted), key == valid);
+            if (key == valid) BOOST_CHECK(extracted == valid);
+        }
+        records = db_view->m_records;
+    }
+}
+
 BOOST_FIXTURE_TEST_CASE(wallet_load_rejects_plaintext_pqhd_seed_in_encrypted_wallet, TestingSetup)
 {
     std::unique_ptr<WalletDatabase> database = CreateMockableWalletDatabase();

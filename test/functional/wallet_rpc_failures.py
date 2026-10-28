@@ -41,7 +41,7 @@ class WalletRPCFailuresTest(BitcoinTestFramework):
                 BEGIN SELECT RAISE(FAIL, 'injected descriptor update failure'); END""")
             db.commit()
         node.loadwallet('unlock-failure')
-        assert_raises_rpc_error(-1, 'writing descriptor failed', wallet.walletpassphrase, 'test password', 1)
+        assert_raises_rpc_error(-4, 'writing descriptor failed', wallet.walletpassphrase, 'test password', 1)
         assert_equal(wallet.getwalletinfo()['unlocked_until'], 0)
         assert_raises_rpc_error(-13, 'Please enter the wallet passphrase', wallet.signmessage, address, 'failed unlock')
 

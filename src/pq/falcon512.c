@@ -337,6 +337,15 @@ int tidecoin_falcon512_verify(const uint8_t* sig, size_t siglen,
     return PQCLEAN_FALCON512_CLEAN_crypto_sign_verify(sig, siglen, m, mlen, pk);
 }
 
+int tidecoin_falcon512_is_valid_pubkey(const uint8_t* pk, size_t pklen)
+{
+    if (pklen != PQCLEAN_FALCON512_CLEAN_CRYPTO_PUBLICKEYBYTES || pk[0] != 9) {
+        return 0;
+    }
+    uint16_t h[512];
+    return PQCLEAN_FALCON512_CLEAN_modq_decode(h, 9, pk + 1, pklen - 1) == pklen - 1;
+}
+
 int tidecoin_falcon512_pubkey_from_sk(const uint8_t* sk, size_t sklen,
                                       uint8_t* pk, size_t pklen)
 {

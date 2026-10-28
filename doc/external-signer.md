@@ -120,6 +120,12 @@ final cannot establish completion, regardless of the device's `complete` field.
 
 This option is not a device protocol extension. The subprocess still receives
 `signtx <base64 PSBT>`, without an era argument or a proprietary PSBT rule field.
+The device receives the whole PSBT; the host's per-input target selection is not
+transmitted as a device restriction either. Selected rules govern local signing
+and host verification of returned results, but cannot prevent an external process
+from creating a signature internally. Rejecting a response cannot undo that
+creation. Mixed requests remain supported under the existing protocol and host
+checks; there is no blanket refusal based on their mix of schemes or script forms.
 Device signing capabilities must be checked separately; the host selection does
 not make a device support an additional scheme or era. Object results report the
 host's effective `rules` and warn about an explicit mismatch with its local chain.

@@ -246,6 +246,19 @@ From `https://raw.githubusercontent.com/tidecoin/tidecoin/master/src/api.h`:
 
 The current local signer retries until a compressed signature is at most 666 bytes for Falcon-512 or 1280 bytes for Falcon-1024. This applies to both message lengths and to legacy Falcon-512 signing, making the wallet's local signing estimates upper bounds. Signatures are never padded, and the transaction sighash byte is additional. The shared retry loop returns failure after 10,000 unsuccessful attempts. External-signing estimates retain the larger PQClean bounds. Verification does not impose the local signing bounds as consensus maxima.
 
+Signed messages have no transaction height. `CPubKey::Recover`, used by
+`MessageVerify` and `verifymessage`, first checks a message signature using the
+strict verifier. For Falcon-512 only, it then tries the legacy verifier. This
+preserves compatibility with signatures accepted by v0.18.3, including its wider
+combined norm bound, negative-zero coefficients and nonzero unused final bits.
+Both paths reject appended bytes, including zero padding. Falcon-1024 and ML-DSA
+use only their strict verifiers. The result does not change at AuxPoW activation
+or rollback, and no transaction-verification rule is changed by this fallback.
+Current message signing continues to produce strict-compatible signatures; the
+fallback is for older accepted signatures and encodings. The fixed message test
+vectors include a synthetic wider-norm example, not a signature captured from a
+historical wallet.
+
 ---
 
 ## 9. Verification: Key Format Compatibility

@@ -263,7 +263,7 @@ public:
 
 };
 
-void TestPassphraseChangeDeferredCreationFailure(interfaces::Node& node)
+void TestPassphraseOperationFailure(interfaces::Node& node, AskPassphraseDialog::Mode mode, bool deferred)
 {
     // Reload an encrypted seed-only wallet, leaving descriptor creation for
     // the unlock performed while checking the old passphrase.
@@ -276,23 +276,31 @@ void TestPassphraseChangeDeferredCreationFailure(interfaces::Node& node)
     seed.fill(0x42);
     WITH_LOCK(wallet->cs_wallet, QVERIFY(wallet->ImportPQHDSeed(seed)));
     QVERIFY(wallet->Lock());
-    const auto records = wallet::GetMockableDatabase(*wallet).m_records;
+    auto records = wallet::GetMockableDatabase(*wallet).m_records;
     wallet = std::make_shared<CWallet>(node.context()->chain.get(), "passphrase-change", CreateMockableWalletDatabase(records));
     wallet->m_keypool_size = 1;
     QVERIFY(wallet->LoadWallet() == wallet::DBErrors::LOAD_OK);
     QVERIFY(wallet->IsLocked());
     QVERIFY(wallet->GetAllScriptPubKeyMans().empty());
+    if (!deferred) {
+        QVERIFY(wallet->Unlock(SecureString{"old"}));
+        QVERIFY(wallet->Lock());
+        records = wallet::GetMockableDatabase(*wallet).m_records;
+    }
+    const auto manager_count = wallet->GetAllScriptPubKeyMans().size();
     std::unique_ptr<const PlatformStyle> style(PlatformStyle::instantiate("other"));
     MiniGUI gui(node, style.get());
     gui.initModelForWallet(node, wallet, style.get());
 
     for (bool fail : {true, false}) {
         wallet::GetMockableDatabase(*wallet).m_pass = !fail;
-        AskPassphraseDialog dialog(AskPassphraseDialog::ChangePass, nullptr);
+        AskPassphraseDialog dialog(mode, nullptr);
         dialog.setModel(gui.walletModel.get());
         dialog.findChild<QLineEdit*>("passEdit1")->setText("old");
-        dialog.findChild<QLineEdit*>("passEdit2")->setText("new");
-        dialog.findChild<QLineEdit*>("passEdit3")->setText("new");
+        if (mode == AskPassphraseDialog::ChangePass) {
+            dialog.findChild<QLineEdit*>("passEdit2")->setText("new");
+            dialog.findChild<QLineEdit*>("passEdit3")->setText("new");
+        }
         QString message;
         // Tie the callback to the dialog so an escaping exception cancels it.
         QTimer::singleShot(0, &dialog, [&message] {
@@ -308,20 +316,26 @@ void TestPassphraseChangeDeferredCreationFailure(interfaces::Node& node)
         } catch (const std::runtime_error& e) {
             QFAIL(e.what());
         }
-        QVERIFY(wallet->IsLocked());
+        QCOMPARE(wallet->IsLocked(), fail || mode == AskPassphraseDialog::ChangePass);
         if (fail) {
-            QVERIFY(message.contains("Unable to commit deferred PQHD descriptors"));
+            QVERIFY(message.contains(deferred ? "Unable to commit deferred PQHD descriptors" : "Unable to save the new wallet passphrase"));
+            QVERIFY(!message.contains("incorrect"));
             QCOMPARE(dialog.result(), int(QDialog::Rejected));
             QVERIFY(wallet::GetMockableDatabase(*wallet).m_records == records);
-            QVERIFY(wallet->GetAllScriptPubKeyMans().empty());
+            QCOMPARE(wallet->GetAllScriptPubKeyMans().size(), manager_count);
         } else {
-            QVERIFY(message.contains("Wallet passphrase was successfully changed."));
+            if (mode == AskPassphraseDialog::ChangePass) {
+                QVERIFY(message.contains("Wallet passphrase was successfully changed."));
+            } else {
+                QVERIFY(message.isEmpty());
+            }
             QCOMPARE(dialog.result(), int(QDialog::Accepted));
             QVERIFY(wallet->CanGetAddresses());
         }
     }
-    QVERIFY(!wallet->Unlock(SecureString{"old"}));
-    QVERIFY(wallet->Unlock(SecureString{"new"}));
+    const bool changed{mode == AskPassphraseDialog::ChangePass};
+    QVERIFY(!wallet->Unlock(SecureString{changed ? "old" : "new"}));
+    QVERIFY(wallet->Unlock(SecureString{changed ? "new" : "old"}));
 }
 
 class EncryptionSetupFailDatabase : public wallet::MockableDatabase
@@ -863,7 +877,9 @@ void TestGUI(interfaces::Node& node)
     test.m_node.wallet_loader = wallet_loader.get();
     node.setContext(&test.m_node);
 
-    TestPassphraseChangeDeferredCreationFailure(node);
+    TestPassphraseOperationFailure(node, AskPassphraseDialog::Unlock, /*deferred=*/true);
+    TestPassphraseOperationFailure(node, AskPassphraseDialog::ChangePass, /*deferred=*/true);
+    TestPassphraseOperationFailure(node, AskPassphraseDialog::ChangePass, /*deferred=*/false);
     TestEncryptionSetupFailure(node);
 
     // "Full" GUI tests, use descriptor wallet

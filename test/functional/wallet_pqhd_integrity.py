@@ -73,7 +73,7 @@ class PQHDIntegrityTest(BitcoinTestFramework):
                 wallet = node.get_wallet_rpc(name)
                 # Persisted public data is usable until a mismatch is detected.
                 wallet.deriveaddresses(descriptor, [0, 0])
-                assert_raises_rpc_error(-1, 'cache does not match', wallet.walletpassphrase, 'pass', 60)
+                assert_raises_rpc_error(-4, 'cache does not match', wallet.walletpassphrase, 'pass', 60)
                 assert_equal(wallet.getwalletinfo()['unlocked_until'], 0)
                 # Resolve the affected descriptor (cache ordering is independent
                 # of output type) and check that detection blocks public reuse.
@@ -81,7 +81,7 @@ class PQHDIntegrityTest(BitcoinTestFramework):
                 affected = deser_string(BytesIO(swapped[ser_string(b'walletdescriptor') + affected_id])).decode()
                 affected = descsum_create(affected.split('#')[0])
                 assert_raises_rpc_error(-4, 'cache does not match', wallet.deriveaddresses, affected, [0, 0])
-                assert_raises_rpc_error(-1, 'cache does not match', wallet.walletpassphrase, 'pass', 60)
+                assert_raises_rpc_error(-4, 'cache does not match', wallet.walletpassphrase, 'pass', 60)
                 wallet.unloadwallet()
             else:
                 assert_raises_rpc_error(-4, 'Wallet corrupted', node.loadwallet, name)

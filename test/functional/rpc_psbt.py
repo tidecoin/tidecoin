@@ -35,7 +35,7 @@ from test_framework.psbt import (
     PSBT_IN_NON_WITNESS_UTXO,
     PSBT_IN_WITNESS_UTXO,
 )
-from test_framework.script import CScript, OP_TRUE, SIGHASH_ALL, SIGHASH_ANYONECANPAY
+from test_framework.script import CScript, OP_TRUE, SIGHASH_ALL, SIGHASH_ANYONECANPAY, hash160
 from test_framework.script_util import MIN_STANDARD_TX_NONWITNESS_SIZE
 from test_framework.segwit_addr import decode_segwit_address, encode_segwit_address
 from test_framework.test_framework import BitcoinTestFramework
@@ -1284,7 +1284,7 @@ class PSBTTest(BitcoinTestFramework):
         self.connect_nodes(0, 2)
         self.connect_nodes(1, 2)
 
-        key, _ = generate_keypair(wif=True)
+        key, pubkey = generate_keypair(wif=True)
         descriptor = descsum_create(f"wpkh({key})")
         address = self.nodes[0].deriveaddresses(descriptor)[0]
 
@@ -1303,6 +1303,11 @@ class PSBTTest(BitcoinTestFramework):
         decoded = self.nodes[2].decodepsbt(alt_psbt)
         test_psbt_input_keys(decoded['inputs'][0], ['witness_utxo', 'non_witness_utxo'])
 
+        # Missing pubkeys are HASH160 identifiers of absent keys, not origin paths.
+        analyzed = self.nodes[2].analyzepsbt(alt_psbt)
+        assert_equal(analyzed['inputs'][0]['missing']['pubkeys'], [hash160(pubkey).hex()])
+        assert_equal(analyzed['next'], 'updater')
+
         # Test that the psbt is not finalized and has no bip32_derivs in Tidecoin PQ mode.
         assert_raises_rpc_error(
             -8,
@@ -1317,6 +1322,12 @@ class PSBTTest(BitcoinTestFramework):
         processed_psbt = self.nodes[2].descriptorprocesspsbt(psbt=psbt, descriptors=[descriptor], sighashtype="ALL", finalize=False)
         decoded = self.nodes[2].decodepsbt(processed_psbt['psbt'])
         test_psbt_input_keys(decoded['inputs'][0], ['witness_utxo', 'non_witness_utxo', 'partial_signatures'])
+
+        # The partial supplies the literal public key without any origin metadata.
+        assert_equal(list(decoded['inputs'][0]['partial_signatures']), [pubkey.hex()])
+        analyzed = self.nodes[2].analyzepsbt(processed_psbt['psbt'])
+        assert 'pubkeys' not in analyzed['inputs'][0].get('missing', {})
+        assert_equal(analyzed['next'], 'finalizer')
 
         # If psbt not finalized, test that result does not have hex
         assert "hex" not in processed_psbt

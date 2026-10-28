@@ -14,7 +14,8 @@ from test_framework.falcon import falcon512_alternates
 from test_framework.messages import CTransaction, CTxOut, tx_from_hex
 from test_framework.psbt import (
     PSBT, PSBT_IN_NON_WITNESS_UTXO, PSBT_IN_PARTIAL_SIG, PSBT_IN_REDEEM_SCRIPT,
-    PSBT_IN_WITNESS_SCRIPT, PSBT_IN_WITNESS_UTXO,
+    PSBT_IN_WITNESS_SCRIPT, PSBT_IN_WITNESS_UTXO, PSBT_IN_FINAL_SCRIPTSIG, PSBT_IN_FINAL_SCRIPTWITNESS,
+    PSBT_OUT_WITNESS_SCRIPT,
 )
 from test_framework.util import assert_equal, assert_not_equal, assert_raises_rpc_error
 from test_framework.wallet_util import generate_keypair
@@ -77,23 +78,38 @@ class TransactionRulesTest(WitnessV1PSBTTest):
                         prevout[field] = scripts[key].hex()
                 raw = base.tx.serialize().hex()
                 # All five schemes and four script forms through all four local signers.
-                for call in (
-                    lambda rules: offline.descriptorprocesspsbt(base.to_base64(), [descriptor], rules=rules),
-                    lambda rules: owner.walletprocesspsbt(base.to_base64(), rules=rules),
-                    lambda rules: offline.signrawtransactionwithkey(raw, [secret], [prevout], rules=rules),
-                    lambda rules: owner.signrawtransactionwithwallet(raw, [prevout], rules=rules),
+                eligible = scheme == 7 and template != 'wsh512(pk({}))'
+                for is_psbt, call in (
+                    (True, lambda **opts: offline.descriptorprocesspsbt(base.to_base64(), [descriptor], **opts)),
+                    (True, lambda **opts: owner.walletprocesspsbt(base.to_base64(), **opts)),
+                    (False, lambda **opts: offline.signrawtransactionwithkey(raw, [secret], [prevout], **opts)),
+                    (False, lambda **opts: owner.signrawtransactionwithwallet(raw, [prevout], **opts)),
                 ):
-                    result = call(POST)
+                    result = call(rules=POST)
                     self.metadata(result, POST)
                     self.accepted(result)
-                    pre = call(PRE)
-                    self.metadata(pre, PRE)
-                    assert_equal(pre['complete'], scheme == 7 and template != 'wsh512(pk({}))')
-                    if pre['complete']:
-                        self.accepted(pre)
-                automatic = owner.walletprocesspsbt(base.to_base64())
-                self.metadata(automatic, PRE, explicit=False)
-                assert_equal(automatic['complete'], scheme == 7 and template != 'wsh512(pk({}))')
+                    for selection in ({'rules': PRE}, {}):
+                        for finalize in ((True, False) if is_psbt else (True,)):
+                            pre = call(**selection, **({'finalize': finalize} if is_psbt else {}))
+                            self.metadata(pre, PRE, explicit=bool(selection))
+                            if finalize:
+                                assert_equal(pre['complete'], eligible)
+                            if is_psbt:
+                                fields = PSBT.from_base64(pre['psbt']).i[0].map
+                                if not eligible:
+                                    assert not any(isinstance(k, bytes) and k[0] == PSBT_IN_PARTIAL_SIG for k in fields)
+                                    assert PSBT_IN_FINAL_SCRIPTSIG not in fields
+                                    assert PSBT_IN_FINAL_SCRIPTWITNESS not in fields
+                                elif not finalize:
+                                    assert bytes([PSBT_IN_PARTIAL_SIG]) + pubkey in fields
+                                # No private key: an excluded signature must not
+                                # become usable merely by changing the rule era.
+                                checked = offline.finalizepsbt(pre['psbt'], rules=POST)
+                            else:
+                                checked = offline.signrawtransactionwithkey(pre['hex'], [], [prevout], rules=POST)
+                            assert_equal(checked['complete'], eligible)
+                            if eligible:
+                                self.accepted(checked)
                 cases.append((scheme, template, secret, pubkey, descriptor, public, base, prevout, filled))
         assert_equal(offline.getblockcount(), 0)
         self.check_contract(cases[0], owner)
@@ -101,6 +117,7 @@ class TransactionRulesTest(WitnessV1PSBTTest):
         self.check_alternate_encodings(cases, owner)
         self.check_cleanup_and_missing(cases, owner)
         self.check_multisig(cases, owner)
+        self.check_mixed_eligibility(cases, owner)
         self.check_workflow()
         self.check_boundaries(cases[0])
 
@@ -271,6 +288,16 @@ class TransactionRulesTest(WitnessV1PSBTTest):
         node, offline = self.nodes
         v1 = next(case for case in cases if case[1] == 'wsh512(pk({}))')
         _, _, _, _, descriptor, public, base, prevout, filled = v1
+        # Public input/output metadata stays available before activation, without
+        # invoking a signer or changing address-issuance policy.
+        metadata = offline.descriptorprocesspsbt(base.to_base64(), [public], finalize=False, rules=PRE)['psbt']
+        assert_equal(PSBT.from_base64(metadata).i[0].map[PSBT_IN_WITNESS_SCRIPT].hex(), prevout['witnessScript'])
+        output_base = node.createpsbt([{k: prevout[k] for k in ('txid', 'vout')}],
+                                     {node.deriveaddresses(public)[0]: Decimal('0.99')})
+        for result in (offline.descriptorprocesspsbt(output_base, [public], finalize=False, rules=PRE),
+                       owner.walletprocesspsbt(output_base, sign=False, finalize=False, rules=PRE)):
+            output = PSBT.from_base64(result['psbt']).o[0].map
+            assert_equal(output[PSBT_OUT_WITNESS_SCRIPT].hex(), prevout['witnessScript'])
         partial = owner.walletprocesspsbt(base.to_base64(), finalize=False, rules=POST)['psbt']
         with_full = PSBT.from_base64(partial)
         with_full.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = base.i[0].map[PSBT_IN_NON_WITNESS_UTXO]
@@ -324,6 +351,74 @@ class TransactionRulesTest(WitnessV1PSBTTest):
         self.accepted(offline.descriptorprocesspsbt(partial['psbt'], [two], rules=POST))
         assert owner.importdescriptors([{'desc': private, 'timestamp': 'now'}])[0]['success']
         self.accepted(owner.walletprocesspsbt(base.to_base64(), rules=POST))
+
+    def check_mixed_eligibility(self, cases, owner):
+        node, offline = self.nodes
+        falcon = next(case for case in cases if case[0] == 7)
+        mldsa = next(case for case in cases if case[0] == 9)
+        falcon_key = bytes([PSBT_IN_PARTIAL_SIG]) + falcon[3]
+        mldsa_key = bytes([PSBT_IN_PARTIAL_SIG]) + mldsa[3]
+        marker = b'\xfaretained'
+        self.log.info('Mixed thresholds and alternatives ignore excluded cached candidates in either key order')
+        for reverse in (False, True):
+            for required in (1, 2, 'alternative'):
+                def descriptor(f, m):
+                    keys = [m, f] if reverse else [f, m]
+                    inner = f'or_i(pk({keys[0]}),pk({keys[1]}))' if required == 'alternative' else f'multi({required},{keys[0]},{keys[1]})'
+                    return descsum_create(f'wsh({inner})')
+
+                private = descriptor(falcon[2], mldsa[2])
+                public = node.getdescriptorinfo(private)['descriptor']
+                outpoint, previous = self.fund(node.deriveaddresses(public)[0])
+                base = PSBT.from_base64(node.createpsbt([outpoint], {self.destination: Decimal('0.99')}))
+                base.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = previous
+                base.i[0].map[marker] = b'input'
+                base.g.map[marker] = b'global'
+                one = descriptor(falcon[2], mldsa[3].hex())
+                two = descriptor(falcon[3].hex(), mldsa[2])
+                assert owner.importdescriptors([{'desc': private, 'timestamp': 'now'}])[0]['success']
+                cached = offline.descriptorprocesspsbt(base.to_base64(), [two], finalize=False, rules=POST)['psbt']
+                original = PSBT.from_base64(cached).i[0].map[mldsa_key]
+                for value in (base.to_base64(), cached):
+                    for finalize in (False, True):
+                        for result in (
+                            offline.descriptorprocesspsbt(value, [one], finalize=finalize, rules=PRE),
+                            owner.walletprocesspsbt(value, finalize=finalize, rules=PRE),
+                        ):
+                            parsed = PSBT.from_base64(result['psbt'])
+                            fields = parsed.i[0].map
+                            assert_equal(parsed.g.map[marker], b'global')
+                            assert_equal(fields[marker], b'input')
+                            if not finalize or required == 2:
+                                assert falcon_key in fields
+                                assert_equal(mldsa_key in fields, value == cached)
+                                if value == cached:
+                                    assert_equal(fields[mldsa_key], original)
+                            finished = offline.finalizepsbt(result['psbt'], rules=PRE)
+                            assert_equal(finished['complete'], required != 2)
+                            if required != 2:
+                                self.accepted(finished)
+                            # The preserved eligible partial can finish later with
+                            # the other signer under the appropriate rules.
+                            self.accepted(offline.descriptorprocesspsbt(result['psbt'], [two], rules=POST))
+
+        self.log.info('Mixed inputs retain eligible work without creating excluded signatures')
+        mixed_cases = [falcon, mldsa, next(case for case in cases if case[1] == 'wsh512(pk({}))')]
+        inputs = [{k: case[7][k] for k in ('txid', 'vout')} for case in mixed_cases]
+        mixed = PSBT.from_base64(node.createpsbt(inputs, {self.destination: Decimal('2.98')}))
+        for index, case in enumerate(mixed_cases):
+            mixed.i[index].map = dict(case[6].i[0].map)
+            mixed.i[index].map[marker] = bytes([index])
+        for result in (owner.walletprocesspsbt(mixed.to_base64(), finalize=False, rules=PRE),
+                       offline.descriptorprocesspsbt(mixed.to_base64(), [case[4] for case in mixed_cases], finalize=False, rules=PRE)):
+            assert not result['complete']
+            parsed = PSBT.from_base64(result['psbt'])
+            for index, case in enumerate(mixed_cases):
+                fields = parsed.i[index].map
+                assert_equal(fields[marker], bytes([index]))
+                assert_equal(bytes([PSBT_IN_PARTIAL_SIG]) + case[3] in fields, index == 0)
+            assert not offline.finalizepsbt(result['psbt'], rules=POST)['complete']
+            self.accepted(owner.walletprocesspsbt(result['psbt'], rules=POST))
 
     def check_workflow(self):
         node, offline = self.nodes

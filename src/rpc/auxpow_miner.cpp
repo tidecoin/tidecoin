@@ -169,7 +169,7 @@ bool AuxpowMiner::submitAuxBlock(const JSONRPCRequest& request, const std::strin
     ss >> *pow;
 
     shared_block->auxpow = std::shared_ptr<CAuxPow>(std::move(pow));
-    CHECK_NONFATAL(shared_block->GetHash().GetHex() == hash_hex);
+    CHECK_NONFATAL(shared_block->GetHash() == uint256::FromHex(hash_hex).value());
 
     return chainman.ProcessNewBlock(shared_block, /*force_processing=*/true, /*min_pow_checked=*/true, nullptr);
 }

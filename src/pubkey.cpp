@@ -60,7 +60,11 @@ bool CPubKey::Recover(const uint256 &hash, const std::vector<unsigned char>& vch
         const std::span<const unsigned char> prefixed_pk_span{prefixed_pubkey.data(), prefixed_pubkey.size()};
         const std::span<const unsigned char> sig_span{vchSig.data(), sig_len};
 
-        if (pq::VerifyPrefixed(msg32, sig_span, prefixed_pk_span, /*legacy_mode=*/false)) {
+        // Signed messages have no activation height. Preserve compatibility
+        // with the legacy Falcon-512 verifier after trying the strict rules.
+        if (pq::VerifyPrefixed(msg32, sig_span, prefixed_pk_span, /*legacy_mode=*/false) ||
+            (scheme->id == pq::SchemeId::FALCON_512 &&
+             pq::VerifyPrefixed(msg32, sig_span, prefixed_pk_span, /*legacy_mode=*/true))) {
             Set(prefixed_pk_span.begin(), prefixed_pk_span.end());
             return true;
         }
@@ -70,5 +74,5 @@ bool CPubKey::Recover(const uint256 &hash, const std::vector<unsigned char>& vch
 }
 
 bool CPubKey::IsFullyValid() const {
-    return IsValid();
+    return IsValid() && pq::IsValidPubKey(std::span<const unsigned char>{begin(), size()});
 }

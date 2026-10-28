@@ -166,6 +166,15 @@ a fresh seed, then back up. If encrypted `createwallet` initialization failed,
 first load the retained blank file with `loadwallet`. See
 [PQHD storage and state](design/pqhd.md#9-wallet-storage-and-state).
 
+Encrypting a blank wallet does not generate a seed or descriptors. Any saved
+seed and policy are retained; unlocking again in that session does not itself
+provision a freshly seeded blank wallet. To initialize addresses, unlock with
+`walletpassphrase`, create or import a seed if needed, then use `setpqhdseed` or
+reapply the existing policy with `setpqhdpolicy`. These explicit operations
+provision the eligible descriptors without requiring a reload. Make a new backup
+after encryption and after adding or selecting a new seed. First encryption of
+a non-blank wallet instead performs replacement-seed setup, as described above.
+
 ### `importpqhdseed`
 
 Import a 32-byte PQHD master seed (idempotent for existing seeds).

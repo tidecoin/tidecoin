@@ -714,7 +714,9 @@ public:
     // Used to prevent deleting the passphrase from memory when it is still in use.
     RecursiveMutex m_relock_mutex;
 
+    /** Return false when credentials cannot be verified; throw WalletOperationError on operation failures. */
     bool Unlock(const SecureString& strWalletPassphrase);
+    /** Return false when old credentials cannot be verified; throw WalletOperationError on operation failures. */
     bool ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase, const SecureString& strNewWalletPassphrase);
     bool EncryptWallet(const SecureString& strWalletPassphrase);
 

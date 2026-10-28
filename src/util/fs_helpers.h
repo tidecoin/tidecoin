@@ -14,6 +14,10 @@
 #include <limits>
 #include <optional>
 
+#ifndef WIN32
+#include <sys/types.h>
+#endif
+
 #ifdef __APPLE__
 enum class FSType {
     EXFAT,
@@ -43,12 +47,34 @@ bool FileCommit(FILE* file);
  */
 void DirectoryCommit(const fs::path& dirname);
 
-bool TruncateFile(FILE* file, unsigned int length);
+bool TruncateFile(FILE* file, uint64_t length);
+
+/** File positioning with 64-bit offsets, including Windows and 32-bit Unix. */
+inline int FileSeek64(FILE* file, int64_t offset, int origin)
+{
+#if defined(WIN32)
+    return _fseeki64(file, offset, origin);
+#else
+    static_assert(sizeof(off_t) >= sizeof(int64_t), "64-bit file offsets required");
+    return fseeko(file, offset, origin);
+#endif
+}
+
+inline int64_t FileTell64(FILE* file)
+{
+#if defined(WIN32)
+    return _ftelli64(file);
+#else
+    static_assert(sizeof(off_t) >= sizeof(int64_t), "64-bit file offsets required");
+    return ftello(file);
+#endif
+}
+
 /** Try to raise the descriptor limit to min_fd (nonnegative), without exceeding
  * the hard limit. Return the available limit, saturated at INT_MAX, including
  * infinity. If the initial query fails, return min_fd; Windows returns 2048. */
 int RaiseFileDescriptorLimit(int min_fd);
-void AllocateFileRange(FILE* file, unsigned int offset, unsigned int length);
+void AllocateFileRange(FILE* file, uint64_t offset, unsigned int length);
 
 /**
  * Rename src to dest.

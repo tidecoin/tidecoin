@@ -20,7 +20,7 @@ struct PSBTInputAnalysis {
     std::optional<PSBTError> issue;
     std::string issue_message;
 
-    std::vector<CKeyID> missing_pubkeys; //!< Pubkeys whose BIP32 derivation path is missing
+    std::vector<CKeyID> missing_pubkeys; //!< KeyIDs of required public keys missing from supplied signing data
     std::vector<CKeyID> missing_sigs;    //!< Pubkeys whose signatures are missing
     uint160 missing_redeem_script;       //!< Hash160 of redeem script, if missing
     std::vector<unsigned char> missing_witness_script;      //!< SHA256 (v0) or SHA512 (v1) of missing witness script; empty if none

@@ -90,6 +90,14 @@ to cached signatures, new signing, verification and extraction throughout the
 request. The six object results include `rules` and, for explicit local-era
 mismatches, `warnings`. The two string results retain their format.
 
+Local pre-AuxPoW signing creates only Falcon-512 signatures for supported
+legacy/v0 inputs. Newer schemes and native-v1 inputs require post-AuxPoW rules,
+including when processing offline. Eligible partial work in a mixed request is
+retained. Cached signatures excluded by the selected era remain in incomplete
+PSBTs but do not displace eligible alternatives during assembly. An incomplete
+result can contain signatures. External devices receive the entire PSBT without
+an era restriction; the host verifies their returned results under its selection.
+
 These arguments do not change consensus, activation, address issuance, ordinary
 sending, or admission. Completion checks scripts with the required input data;
 it does not promise destination acceptance. No PSBT format or external-device
@@ -145,6 +153,14 @@ address generation follows scheme activation. This release corrects early
 acceptance of additional schemes in transaction and block validation; current
 public-key prefix and length parsing is unchanged.
 
+RPCs, descriptors, PSBT partial-signature parsing and `tidecoin-tx` check supplied
+Falcon public keys for the correct inner header and canonical coefficient
+encoding. A correctly sized key with malformed contents is rejected. ML-DSA
+public keys retain their prefix and length checks. These checks validate the
+encoding, not possession of a matching private key. Existing script spending
+rules are unchanged, and legacy watch-only scripts remain tracked even when an
+embedded key cannot be extracted as a valid public key.
+
 Legacy and strict Falcon verification
 --------------------------------------
 
@@ -185,6 +201,12 @@ failure if the retry limit is exhausted. External-signing estimates retain
 the larger PQClean bounds, and verification still accepts valid compressed
 signatures above the local signing bounds.
 
+Signed-message verification accepts Falcon-512 signatures accepted by the legacy
+verifier, including its wider norm bound and older encoding variants. It tries
+strict verification first and falls back only for Falcon-512, independently of
+chain height. Other schemes remain strict. Appended padding is still rejected;
+current message signing and transaction verification rules are unchanged.
+
 PQHD Wallet
 ============
 
@@ -212,14 +234,20 @@ older descriptors and their funds remain tracked. An encrypted wallet must be
 unlocked when missing policy descriptors need to be created. The RPC help and
 PQHD RPC documentation describe these effects.
 
-Wallet encryption saves the encrypted existing keys and seeds before setting up
-a new seed and descriptors. If that setup fails, its changes are rolled back and
-the wallet remains encrypted and locked. The error reports this state; the
-supplied passphrase still unlocks the saved wallet and its existing descriptors.
+Wallet encryption saves the encrypted existing keys and seeds. For non-blank
+wallets, it then sets up a new seed and descriptors. If that setup fails, its
+changes are rolled back and the wallet remains encrypted and locked. The error
+reports this state; the supplied passphrase still unlocks the saved wallet and
+its existing descriptors.
 Existing active descriptors continue to supply addresses; no replacement seed
 was installed. After resolving the write error, unlock, run `createpqhdseed`,
 and select its returned `seed_id` with `setpqhdseed` to use fresh key material.
 Make a new wallet backup. Existing coins retain their original keys.
+
+Blank-wallet encryption retains any existing seeds and policy without generating
+a seed or descriptors. Its result reports this and still requests a new backup.
+To provision addresses, unlock, create or import a seed if needed, then use
+`setpqhdseed` or reapply the existing policy with `setpqhdpolicy`.
 
 `createpqhdseed` generates and saves a random 32-byte PQHD seed inside the wallet,
 returning only its ID. It leaves existing defaults and active descriptors
@@ -252,6 +280,13 @@ native only: `sh(wsh512(...))` descriptors are rejected, including when loading
 wallet records, and have no signing or PSBT support. `decodescript` no longer
 suggests P2SH wrappers for native v1. Known wrapped-v1 recipients and change
 addresses are refused at every height. See [descriptors](descriptors.md).
+
+`walletpassphrase` and `walletpassphrasechange` distinguish wallet operation
+failures from incorrect passphrases. Database writes, deferred descriptor setup
+and other wallet operation failures return error `-4` with their specific reason;
+incorrect passphrases retain error `-14`. If saving a new passphrase fails, the
+previous saved passphrase remains valid. The GUI displays the operation failure
+instead of reporting an incorrect passphrase.
 
 Native witness v1 addresses are 112 or 113 characters long. At that length the
 Bech32m checksum guarantees detecting changes of up to three characters, not
@@ -362,6 +397,10 @@ later work request observes a different chain tip, or the node restarts.
 Refreshing work does not expire older templates, and no count, age or memory limit
 is imposed on this cache.
 
+`submitauxblock` and `getauxblock` accept lowercase, uppercase and mixed-case
+hexadecimal spellings of the same block hash. Successful `getauxblock`
+submissions advance the wallet's payout address regardless of hash spelling.
+
 Mining and IPC reliability
 --------------------------
 
@@ -464,6 +503,24 @@ Networking and transaction relay
   and the number retained per peer.
 - NAT-PMP/PCP enabled by default for automatic port mapping.
 - Extended `-proxy` syntax for per-network proxy configuration.
+- On Windows, macOS and BSD, TCP urgent data no longer causes reads while
+  receiving from a peer is paused.
+- Connections whose send queues remain paused for more than 20 minutes are
+  disconnected, including peers using older protocol versions.
+
+Block and undo storage
+======================
+
+Block and undo file positions use 64-bit values. File positioning and truncation
+also support large offsets on Windows and supported 32-bit Unix builds. This
+prevents position overflow when an undo file grows beyond 4 GiB and the earlier
+2 GiB positioning failure on those platforms.
+
+These changes preserve existing position encodings and require no additional
+database migration. They do not repair undo records already overwritten or
+truncated by an older build; those require `-reindex` with a corrected build.
+Store block data on a filesystem supporting files larger than 4 GiB; FAT32's
+file-size limit remains a limitation.
 
 RPC, REST and command-line tools
 ===============================

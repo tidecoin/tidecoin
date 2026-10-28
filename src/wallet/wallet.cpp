@@ -705,7 +705,7 @@ bool CWallet::Unlock(const SecureString& strWalletPassphrase)
 {
     CKeyingMaterial plain_master_key;
 
-    {
+    try {
         LOCK(cs_wallet);
         for (const auto& [_, master_key] : mapMasterKeys)
         {
@@ -716,6 +716,8 @@ bool CWallet::Unlock(const SecureString& strWalletPassphrase)
                 return true;
             }
         }
+    } catch (const std::runtime_error& e) {
+        throw WalletOperationError(e.what());
     }
     return false;
 }
@@ -725,19 +727,27 @@ bool CWallet::ChangeWalletPassphrase(const SecureString& strOldWalletPassphrase,
     LOCK2(m_relock_mutex, cs_wallet);
     const bool was_locked{IsLocked()};
     CKeyingMaterial plain_master_key;
-    for (auto& [master_key_id, master_key] : mapMasterKeys) {
-        if (!DecryptMasterKey(strOldWalletPassphrase, master_key, plain_master_key)) continue;
-        if (!Unlock(plain_master_key)) continue;
-        // Restore the lock before any fallible calibration or persistence work.
-        if (was_locked) Lock();
-        CMasterKey updated{master_key};
-        if (!EncryptMasterKey(strNewWalletPassphrase, plain_master_key, updated)) return false;
-        if (!RunWithinTxn(GetDatabase(), "wallet passphrase change", [&](WalletBatch& batch) {
-                return batch.WriteMasterKey(master_key_id, updated);
-            })) return false;
-        master_key = std::move(updated);
-        WalletLogPrintf("Wallet passphrase changed to an nDeriveIterations of %u\n", master_key.nDeriveIterations);
-        return true;
+    try {
+        for (auto& [master_key_id, master_key] : mapMasterKeys) {
+            if (!DecryptMasterKey(strOldWalletPassphrase, master_key, plain_master_key)) continue;
+            if (!Unlock(plain_master_key)) continue;
+            // Restore the lock before any fallible calibration or persistence work.
+            if (was_locked) Lock();
+            CMasterKey updated{master_key};
+            if (!EncryptMasterKey(strNewWalletPassphrase, plain_master_key, updated)) {
+                throw WalletOperationError("Unable to derive or encrypt the new wallet master key");
+            }
+            if (!RunWithinTxn(GetDatabase(), "wallet passphrase change", [&](WalletBatch& batch) {
+                    return batch.WriteMasterKey(master_key_id, updated);
+                })) {
+                throw WalletOperationError("Unable to save the new wallet passphrase");
+            }
+            master_key = std::move(updated);
+            WalletLogPrintf("Wallet passphrase changed to an nDeriveIterations of %u\n", master_key.nDeriveIterations);
+            return true;
+        }
+    } catch (const std::runtime_error& e) {
+        throw WalletOperationError(e.what());
     }
 
     return false;
