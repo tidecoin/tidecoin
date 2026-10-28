@@ -1,7 +1,10 @@
-Tidecoin v1.0.0rc2 Release Notes
+Tidecoin v1.0.0rc3 Release Notes
 ===============================
 
-Downloads:
+This is the third release candidate for Tidecoin 1.0.0; version 1.0.0 final has
+not been released.
+
+Published builds:
 
   <https://github.com/tidecoin/tidecoin/releases>
 
@@ -32,6 +35,22 @@ block files. This can take time, but does not require downloading those blocks
 again if all required files are present. A node that has pruned blocks must
 restart with `-reindex` and download any missing blocks. `-reindex-chainstate`
 alone is insufficient for this migration.
+
+Testnet restart
+---------------
+
+This candidate is intended for the coordinated testnet restart. Existing
+testnet history is not a supported upgrade path. Stop the old testnet node,
+retain its wallet backups and data separately, and start the candidate with a
+fresh data directory and new test wallets. Connect initially only to the peers
+agreed by the testnet operators. Do not copy old testnet blocks, chainstate,
+indexes or peer records into the new directory.
+
+The candidate keeps testnet's existing genesis block, message-start bytes and
+ports; upgrading the executable alone does not distinguish the restarted chain
+from the old one. Operators must coordinate the software, peer set and restart.
+AuxPoW and the associated script rules activate at block 1,000 on the restarted
+chain. Mainnet data and activation settings are unchanged.
 
 Offline transaction utility
 ---------------------------
@@ -212,12 +231,6 @@ encrypted blank file is retained and the error explains recovery. Resolve the
 write error, then use `loadwallet`, `walletpassphrase`, `createpqhdseed` and
 `setpqhdseed`, followed by a backup. Repeating `createwallet` does not overwrite
 the retained file.
-
-Default descriptor paths changed after 1.0.0rc2, which derived every address
-type from `10007h/6868h`. Wallets created by rc1 or rc2 keep their existing
-descriptors; their seeds' older keys are recovered only by importing those
-descriptors. Move funds received by an rc wallet to a wallet created by this
-release.
 
 Native witness v1 descriptors (`wsh512`) are not usable before
 AuxPoW activation: their outputs can be spent without a signature until the
@@ -467,6 +480,63 @@ and `getmempoolinfo` `bytes` are sigops-adjusted using `-bytespersigop`, as are
 the `testmempoolaccept` `vsize`. They can exceed the virtual size reported by
 `decoderawtransaction`. The returned values are unchanged.
 
+PSBT signing and witness-v1 hash types
+-------------------------------------
+
+Witness-v1 signatures without ANYONECANPAY commit to all spent amounts and
+locking scripts, in input order. External v1 signers must use this message
+format. ANYONECANPAY signatures omit these aggregate fields. Witness-v1 SINGLE
+without a corresponding output is rejected, including with ANYONECANPAY. These
+rules apply when native witness v1 activates.
+
+External signing now requires the full previous transaction before requesting a
+new legacy signature, including legacy P2SH inputs. Requests missing that data
+are refused before contacting the signing device, with an explicit request to
+supply `non_witness_utxo`. GUI per-input errors show mode details only for
+signing-mode refusals. Native witness inputs and P2SH-wrapped v0
+inputs retain their existing data requirements, and unchanged verified finals
+remain usable with sufficient previous-output data. Existing legacy finals also
+require the matching full previous transaction; an output summary alone is not
+enough to report completion or extract the transaction. Wallet processing fills
+that record from known transactions when available. PSBT analysis omits fee and
+size estimates when required previous-transaction data is missing. Finalized
+wrapped-v0 inputs remain usable with output summaries, using the redeem program
+in the final scriptSig. `decodepsbt` remains a diagnostic dump whose fee is
+calculated from supplied records without verifying them.
+Newly returned legacy partial signatures and finals enforce the
+same previous-transaction requirement. This does not independently establish
+every other input amount used in a displayed fee.
+
+PSBT analysis retains missing public-key and script details alongside signing-mode
+issues, while continuing to omit requests for signatures until the issue is fixed.
+
+New signatures refuse SINGLE when the input has no corresponding output.
+PSBT inspection uses per-input declarations, while signing requires explicit
+matching consent for nondefault modes on signing targets. Public wallet updates
+can deliberately declare modes, including ALL; combining preserves declarations.
+This also applies when the signer's own partial signature is already in the
+PSBT: reusing one made in another mode is refused with a sighash mismatch, as
+creating a new one would be. Partial signatures that cannot verify are ignored
+when signing, so they no longer block it; the signer replaces its own, and other
+keys' entries are left in the PSBT.
+Raw signing tracks missing amounts separately and preserves known node amounts.
+Qt displays missing/zero fees and excessive totals correctly.
+
+Active witness-v1 nonempty signature arguments are restricted to hash-type
+bytes 01, 02, 03, 81, 82 and 83. Other bytes
+cause SIG_HASHTYPE, including unused arguments of an executed multisig opcode.
+Empty signatures, legacy and witness-v0 verification remain unchanged. Activation
+heights are unchanged. Include the v1 message and hash-type changes in the planned
+testnet relaunch; deploying after that relaunch requires a further
+coordinated restart. Existing testnet history is not a supported migration path.
+
+Mempool admission and relay also require the six defined hash-type bytes for
+nonempty legacy and witness-v0 signature arguments. This policy does not change
+block validity, existing-final verification, or raw signing, and requires no
+activation or chain restart. Transactions from other software using undefined
+bytes will no longer relay through upgraded nodes, but may still appear in valid
+blocks. Empty signatures retain their existing behavior.
+
 New `tidecoin` command
 ----------------------
 
@@ -632,60 +702,3 @@ the Bitcoin Core developers for their foundational work.
 The post-quantum cryptographic integration, PQHD wallet, ML-KEM transport,
 YespowerTIDE mining, AuxPoW infrastructure, and script extensions were
 developed by the Tidecoin contributors.
-
-### PSBT signing and witness-v1 hash types
-
-Compared with rc1, witness-v1 signatures without ANYONECANPAY now commit to all
-spent amounts and locking scripts, in input order. External v1 signers must use
-the updated message format; signatures made with the rc1 format for these inputs
-must be regenerated. ANYONECANPAY signatures do not gain these aggregate fields.
-Witness-v1 SINGLE without a corresponding output is now rejected, including with
-ANYONECANPAY. These are consensus changes for active witness v1.
-
-External signing now requires the full previous transaction before requesting a
-new legacy signature, including legacy P2SH inputs. Requests missing that data
-are refused before contacting the signing device, with an explicit request to
-supply `non_witness_utxo`. GUI per-input errors show mode details only for
-signing-mode refusals. Native witness inputs and P2SH-wrapped v0
-inputs retain their existing data requirements, and unchanged verified finals
-remain usable with sufficient previous-output data. Existing legacy finals also
-require the matching full previous transaction; an output summary alone is not
-enough to report completion or extract the transaction. Wallet processing fills
-that record from known transactions when available. PSBT analysis omits fee and
-size estimates when required previous-transaction data is missing. Finalized
-wrapped-v0 inputs remain usable with output summaries, using the redeem program
-in the final scriptSig. `decodepsbt` remains a diagnostic dump whose fee is
-calculated from supplied records without verifying them.
-Newly returned legacy partial signatures and finals enforce the
-same previous-transaction requirement. This does not independently establish
-every other input amount used in a displayed fee.
-
-PSBT analysis retains missing public-key and script details alongside signing-mode
-issues, while continuing to omit requests for signatures until the issue is fixed.
-
-New signatures refuse SINGLE when the input has no corresponding output.
-PSBT inspection uses per-input declarations, while signing requires explicit
-matching consent for nondefault modes on signing targets. Public wallet updates
-can deliberately declare modes, including ALL; combining preserves declarations.
-This also applies when the signer's own partial signature is already in the
-PSBT: reusing one made in another mode is refused with a sighash mismatch, as
-creating a new one would be. Partial signatures that cannot verify are ignored
-when signing, so they no longer block it; the signer replaces its own, and other
-keys' entries are left in the PSBT.
-Raw signing tracks missing amounts separately and preserves known node amounts.
-Qt displays missing/zero fees and excessive totals correctly.
-
-Active witness-v1 nonempty signature arguments are restricted to hash-type
-bytes 01, 02, 03, 81, 82 and 83. Other bytes
-cause SIG_HASHTYPE, including unused arguments of an executed multisig opcode.
-Empty signatures, legacy and witness-v0 verification remain unchanged. Activation
-heights are unchanged. Include the v1 message and hash-type changes in the planned
-testnet relaunch; deploying after that relaunch requires a further
-coordinated restart. Existing testnet history is not a supported migration path.
-
-Mempool admission and relay also require the six defined hash-type bytes for
-nonempty legacy and witness-v0 signature arguments. This policy does not change
-block validity, existing-final verification, or raw signing, and requires no
-activation or chain restart. Transactions from other software using undefined
-bytes will no longer relay through upgraded nodes, but may still appear in valid
-blocks. Empty signatures retain their existing behavior.

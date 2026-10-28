@@ -4,15 +4,34 @@ Tidecoin is independently maintained software derived from Bitcoin Core.
 This changelog documents notable changes to Tidecoin, including post-quantum
 integration, Tidecoin-specific development, and selected upstream updates.
 
-## v1.0.0 (2026-03-02)
+## v1.0.0rc3 (Unreleased)
 
-First major release line (`1.x`) rebased on Bitcoin Core v30 with full
-post-quantum cryptographic integration.
+Third test candidate for the first major release line (`1.x`), initially based on
+Bitcoin Core v30 and maintained independently. Version 1.0.0 final has not been
+released. See the [release notes](doc/release-notes.md) for upgrade instructions,
+activation settings, RPC changes and the complete candidate description.
+
+### Candidate corrections
+
+- Preserve pre-activation Falcon-512 block verification compatible with 0.18.3,
+  while requiring canonical signature encoding for relay
+- Keep strict Falcon signatures unpadded and bound locally generated sizes
+- Separate default PQHD keys by script family and network
+- Preserve encrypted-wallet loading across activation and recover cleanly from
+  failed wallet initialization or post-encryption setup
+- Add explicit pre/post-AuxPoW rule selection for offline transaction processing
+- Correct PSBT previous-output checks, partial-signature reuse and fee estimates
+- Correct activation rollback handling, mining template refreshes and RPC reporting
+- Apply compiler checks to the C implementations and make PQ source reconstruction
+  and script-fixture generation reproducible
+- Bound local priority adjustments, compare replacement diagrams without fee-total
+  overflow, check ban expiry arithmetic and report the actual genesis issuance
 
 ### Post-Quantum Signatures
 
 - Integrate Falcon-512 as the default signature scheme since genesis
-- Add Falcon-1024, ML-DSA-44, ML-DSA-65, ML-DSA-87 (5 NIST-standardized schemes)
+- Add Falcon-1024, ML-DSA-44, ML-DSA-65, ML-DSA-87 (five NIST-selected schemes;
+  ML-DSA is FIPS 204, while Falcon's FN-DSA standard is in preparation)
 - Implement scheme registry with prefix bytes 0x07-0x0B
 - Add legacy Falcon verification mode (relaxed norm bound, header 0x39)
 - Add strict PQClean verification mode (gated by `SCRIPT_VERIFY_PQ_STRICT`, post-AuxPoW)
@@ -34,7 +53,8 @@ post-quantum cryptographic integration.
 
 ### ML-KEM-512 Encrypted Transport
 
-- Replace X25519 key exchange with ML-KEM-512 (NIST FIPS 203) in V2 transport
+- Replace BIP324's secp256k1 ECDH exchange with ML-KEM-512 (NIST FIPS 203)
+  in V2 transport; encryption is opportunistic and does not establish peer identity
 - Enable V2 PQ transport by default (`-v2transport=1`)
 - Add ML-KEM V2 Python library for functional test coverage
 
@@ -59,7 +79,8 @@ post-quantum cryptographic integration.
 - Add YespowerTIDE proof-of-work (N=2048, r=8, CPU-only)
 - Set Tidecoin chain parameters: 60s blocks, 40 TDC reward, quartering schedule
 - Set genesis block (Dec 27, 2020): photonic quantum supremacy headline
-- Configure difficulty adjustment: 17-block window, asymmetric limits
+- Preserve the legacy 7,200-block retarget before AuxPoW activation; use a
+  17-block window with asymmetric limits after activation
 - Parallelize header PoW validation for faster initial sync
 - Expand signature cache to 64 MiB
 - Fix subsidy calculation for quartering with doubling intervals

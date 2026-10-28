@@ -4,6 +4,8 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 export LC_ALL=C
+set -euo pipefail
+
 TOPDIR=${TOPDIR:-$(git rev-parse --show-toplevel)}
 BUILDDIR=${BUILDDIR:-$TOPDIR/build}
 BINDIR=${BINDIR:-$BUILDDIR/bin}
@@ -14,7 +16,11 @@ EXAMPLE_CONF_FILE=${EXAMPLE_CONF_FILE:-$SHARE_EXAMPLES_DIR/tidecoin.conf}
 [ ! -x "$TIDECOIND" ] && echo "$TIDECOIND not found or not executable." && exit 1
 
 DIRTY=""
-VERSION_OUTPUT=$($TIDECOIND --version)
+GENERATE_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/tidecoin-conf.XXXXXX")
+trap 'rm -rf -- "$GENERATE_TMPDIR"' EXIT
+# Read help before opening the output, without using the operator's settings.
+VERSION_OUTPUT=$("$TIDECOIND" -datadir="$GENERATE_TMPDIR" -noconf -nosettings --version)
+HELP_OUTPUT=$("$TIDECOIND" -datadir="$GENERATE_TMPDIR" -noconf -nosettings --help)
 if [[ $VERSION_OUTPUT == *"dirty"* ]]; then
   DIRTY="${DIRTY}${TIDECOIND}\n"
 fi
@@ -49,7 +55,7 @@ EOF
 # parse the output from tidecoind --help
 # adding newlines is a bit funky to ensure portability for BSD
 # see here for more details: https://stackoverflow.com/a/24575385
-${TIDECOIND} --help \
+printf '%s\n\n' "$HELP_OUTPUT" \
     | sed '1,/Options:/d' \
     | sed -E '/^[[:space:]]{2}-help/,/^[[:space:]]*$/d' \
     | sed -E 's/^[[:space:]]{2}\-/#/' \

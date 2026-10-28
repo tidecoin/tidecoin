@@ -27,7 +27,7 @@ DEFAULT_MANIFEST = ROOT / "src/pq/VERSIONS.toml"
 DEFAULT_CACHE_DIR = Path("/tmp/pqclean-vendor-cache")
 
 
-def relative_path(value: str) -> str:
+def relative_path(value: object) -> str:
     if not isinstance(value, str) or not value or any(c in value for c in "\\\n\r\t\0"):
         raise RuntimeError(f"Invalid relative path: {value!r}")
     path = PurePosixPath(value)
@@ -36,7 +36,7 @@ def relative_path(value: str) -> str:
     return value
 
 
-def local_path(root: Path, value: str) -> Path:
+def local_path(root: Path, value: object) -> Path:
     path = root / relative_path(value)
     if not path.resolve().is_relative_to(root.resolve()):
         raise RuntimeError(f"Path leaves source tree: {value}")
@@ -77,7 +77,7 @@ def required_text(table: dict, key: str) -> str:
     return value
 
 
-def commit_id(value: str) -> str:
+def commit_id(value: object) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
         raise RuntimeError("Expected a 40-character lowercase commit ID")
     return value
@@ -227,9 +227,9 @@ def load_snapshot(snapshot: dict, root: Path) -> dict[str, bytes]:
     for name in files:
         if not any(name == path or name.startswith(path + "/") for path in selections):
             raise RuntimeError(f"Unexplained origin archive file: {name}")
-    for path in selections:
-        if not any(name == path or name.startswith(path + "/") for name in files):
-            raise RuntimeError(f"Missing origin archive selection: {path}")
+    for selection in selections:
+        if not any(name == selection or name.startswith(selection + "/") for name in files):
+            raise RuntimeError(f"Missing origin archive selection: {selection}")
     return files
 
 
@@ -362,7 +362,7 @@ def process_components(manifest: dict, root: Path, selected: set[str] | None = N
     ignored = set(manifest.get("settings", {}).get("ignored_upstream_files", []))
     pending = {}
     prepared = []
-    owned = set()
+    owned: set[str] = set()
     for component in components:
         before = origin_files(component, snapshots[component["upstream_commit"]], ignored)
         after = local_files(component, root, ignored)

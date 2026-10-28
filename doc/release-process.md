@@ -8,6 +8,30 @@ Release Process
 * Update release candidate version in `CMakeLists.txt` (`CLIENT_VERSION_RC`).
 * Update manpages (after rebuilding the binaries), see [gen-manpages.py](/contrib/devtools/README.md#gen-manpagespy).
 * Update tidecoin.conf and commit changes if they exist, see [gen-tidecoin-conf.sh](/contrib/devtools/README.md#gen-tidecoin-confsh).
+* Align `doc/release-notes.md`, `CHANGELOG.md` and the supported-version status
+  with the candidate. Do not describe an unpublished candidate as a final release.
+  At tagging, replace the candidate's `Unreleased` changelog marker with the
+  actual tag date.
+* Verify `--version` for all seven release executables, including the optional
+  GUI and the `tidecoin` launcher. Regenerate all seven manpages from the same
+  build and check that the sample configuration matches that daemon's help.
+  A GUI build needs a font-capable platform; on a headless host use
+  `QT_QPA_PLATFORM=xcb xvfb-run -a python3 contrib/devtools/gen-manpages.py`.
+* Check the installer and bundle metadata. Human-readable versions must include
+  the RC suffix; platform fields requiring numeric versions retain their numeric
+  form. Artifact names must identify the candidate consistently.
+* Run the full default unit and functional suites on the final source state.
+  Also explicitly enable all 15 gated wallet suites with
+  `TIDECOIN_RUN_WALLET_TESTS=1`; a default CTest pass does not run them. Run the
+  applicable compiler-instrumented checks, PQ source reconstruction, fixture
+  coverage and lints. Record the build configuration and any skipped checks.
+* Keep test logs, temporary node data and review evidence outside the source
+  repository. Check outgoing history as well as the final tree for research
+  files before pushing release commits or tags.
+* For the planned testnet restart, verify the current network parameters and
+  coordinate fresh data directories and initial peers with the operators. The
+  existing testnet genesis and message-start bytes do not isolate an old chain
+  automatically. See [testnet restart](release-notes.md#testnet-restart).
 
 ### Before every major and minor release
 

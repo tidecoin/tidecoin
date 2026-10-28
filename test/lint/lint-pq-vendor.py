@@ -11,10 +11,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "contrib/devtools"))
-from check_pq_vendor import DEFAULT_MANIFEST, read_manifest
 
 
 def main() -> int:
+    from check_pq_vendor import DEFAULT_MANIFEST, read_manifest
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
     args = parser.parse_args()

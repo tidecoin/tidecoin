@@ -127,7 +127,10 @@ A small script to automatically create manpages in ../../doc/man by running the 
 This requires help2man which can be found at: https://www.gnu.org/software/help2man/
 
 This script assumes a build directory named `build` as suggested by example build documentation.
-To use it with a different build directory, set `BUILDDIR`.
+It reads daemon/GUI help with a temporary data directory, configuration disabled
+and persistent settings disabled. When the GUI was built, use a font-capable platform. On a headless host run
+`QT_QPA_PLATFORM=xcb xvfb-run -a python3 contrib/devtools/gen-manpages.py`.
+To use a different build directory, set `BUILDDIR`.
 For example:
 
 ```bash
@@ -149,6 +152,8 @@ gen-tidecoin-conf.sh
 
 Generates a tidecoin.conf file in `share/examples/` by parsing the output from `tidecoind --help`. This script is run during the
 release process to include a tidecoin.conf with the release binaries and can also be run by users to generate a file locally.
+Help is read with a temporary data directory, configuration disabled and persistent settings disabled.
+A failed help/version command stops generation before the existing output is opened.
 When generating a file as part of the release process, make sure to commit the changes after running the script.
 
 This script assumes a build directory named `build` as suggested by example build documentation.

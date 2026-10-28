@@ -38,8 +38,8 @@ std::partial_ordering CompareChunks(std::span<const FeeFrac> chunks0, std::span<
         const auto& next = chunk[dia][next_index[dia]];
         Point point{accum[dia]};
         if (next.fee < 0) {
-            // Unsigned subtraction also handles INT64_MIN without negating it.
-            point.fee -= uint64_t{0} - uint64_t(next.fee);
+            // Form the magnitude without negating INT64_MIN or unsigned wraparound.
+            point.fee -= uint64_t(-(next.fee + 1)) + 1;
         } else {
             point.fee += uint64_t(next.fee);
         }

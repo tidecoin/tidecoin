@@ -2,11 +2,13 @@
 
 ## Supported Versions
 
-The latest release on the `master` branch is supported with security updates.
+The `master` branch is maintained. Version 1.0.0rc3 is a release candidate for
+testing; version 1.0.0 final has not been released.
 
 | Version | Supported |
 |---------|-----------|
-| v1.0.0  | Yes       |
+| `master` | Yes, development branch |
+| v1.0.0rc3 | Release candidate (testing only) |
 
 ## Reporting a Vulnerability
 

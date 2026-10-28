@@ -63,7 +63,7 @@ def check(build_dir: Path) -> list[str]:
             continue
         seen.add(relative)
         args = entry.get("arguments") or shlex.split(entry["command"])
-        enabled = set()
+        enabled: set[str] = set()
         ndebug = False
         warnings_as_errors = False
         options = iter(args)
@@ -111,8 +111,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         errors = check(args.build_dir)
-    except (OSError, ValueError, KeyError) as error:
-        errors = [str(error)]
+    except (OSError, ValueError, KeyError) as exception:
+        errors = [str(exception)]
     for error in errors:
         print(error, file=sys.stderr)
     return int(bool(errors))
