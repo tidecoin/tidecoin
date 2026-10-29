@@ -190,6 +190,7 @@ target_json_data_sources(test_tidecoin
   data/base58_encode_decode.json
   data/blockfilters.json
   data/falcon512_messages.json
+  data/falcon512_legacy_wif.json
   data/key_io_invalid.json
   data/key_io_valid.json
   data/script_assets_test.json

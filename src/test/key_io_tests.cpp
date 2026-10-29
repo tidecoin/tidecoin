@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <test/data/falcon512_legacy_wif.json.h>
 #include <test/data/key_io_invalid.json.h>
 #include <test/data/key_io_valid.json.h>
 
@@ -169,11 +170,110 @@ BOOST_AUTO_TEST_CASE(key_io_pq_privkey_roundtrip_all_schemes)
         key.MakeNewKey(scheme);
         BOOST_REQUIRE_MESSAGE(key.IsValid(), "key invalid for scheme " << static_cast<int>(scheme));
 
-        const std::string encoded = EncodeSecret(key);
-        CKey decoded = DecodeSecret(encoded);
-        BOOST_REQUIRE_MESSAGE(decoded.IsValid(), "decode failed for scheme " << static_cast<int>(scheme));
-        BOOST_CHECK_MESSAGE(key == decoded, "roundtrip mismatch for scheme " << static_cast<int>(scheme));
+        for (const auto chain : {ChainType::MAIN, ChainType::TESTNET, ChainType::REGTEST}) {
+            SelectParams(chain);
+            const std::string encoded = EncodeSecret(key);
+            CKey decoded = DecodeSecret(encoded);
+            BOOST_REQUIRE_MESSAGE(decoded.IsValid(), "decode failed for scheme " << static_cast<int>(scheme));
+            BOOST_CHECK_MESSAGE(key == decoded, "roundtrip mismatch for scheme " << static_cast<int>(scheme));
+            BOOST_CHECK(key.GetPubKey() == decoded.GetPubKey());
+        }
     }
+    SelectParams(ChainType::MAIN);
+}
+
+BOOST_AUTO_TEST_CASE(key_io_historical_wif)
+{
+    // Exported with the pinned v0.18.3 EncodeSecret body, not EncodeSecretLegacy.
+    // See data/README.md for fixture provenance.
+    UniValue fixture;
+    BOOST_REQUIRE(fixture.read(json_tests::falcon512_legacy_wif));
+    const auto raw_secret = ParseHex(fixture["raw_secret"].get_str());
+    const auto pub_bytes = ParseHex(fixture["pubkey"].get_str());
+    const CPubKey pubkey{pub_bytes};
+    BOOST_REQUIRE_EQUAL(raw_secret.size(), 1281);
+    BOOST_REQUIRE_EQUAL(pubkey.size(), 898);
+    BOOST_REQUIRE(pubkey.IsFullyValid());
+    for (const auto& network : fixture["networks"].getValues()) {
+        SelectParams(ChainTypeFromString(network["chain"].get_str()).value());
+        const std::string wif = network["wif"].get_str();
+        const CKey key = DecodeSecret(wif);
+        BOOST_REQUIRE(key.IsValid());
+        BOOST_CHECK_EQUAL(HexStr(key), HexStr(raw_secret));
+        BOOST_CHECK(key.GetPubKey() == pubkey);
+        BOOST_CHECK_EQUAL(EncodeDestination(PKHash(key.GetPubKey())), network["p2pkh"].get_str());
+        BOOST_CHECK_EQUAL(EncodeSecretLegacy(key), wif);
+        BOOST_CHECK(DecodeSecret(EncodeSecret(key)).GetPubKey() == pubkey);
+
+        // Private-only raw Falcon input, with or without the historical marker.
+        auto raw_data = Params().Base58Prefix(CChainParams::SECRET_KEY);
+        raw_data.insert(raw_data.end(), raw_secret.begin(), raw_secret.end());
+        for (const bool marker : {false, true}) {
+            if (marker) raw_data.push_back(1);
+            const CKey raw_key = DecodeSecret(EncodeBase58Check(raw_data));
+            BOOST_REQUIRE(raw_key.IsValid());
+            BOOST_CHECK(raw_key.GetPubKey() == pubkey);
+        }
+
+        const uint256 hash = uint256::ONE;
+        std::vector<unsigned char> signature;
+        for (const bool legacy : {false, true}) {
+            BOOST_REQUIRE(key.Sign(hash, signature, true, 0, legacy));
+            BOOST_CHECK(pubkey.Verify(hash, signature, legacy));
+        }
+    }
+    SelectParams(ChainType::MAIN);
+}
+
+BOOST_AUTO_TEST_CASE(key_io_historical_wif_rejects_inconsistent_data)
+{
+    SelectParams(ChainType::MAIN);
+    UniValue fixture;
+    BOOST_REQUIRE(fixture.read(json_tests::falcon512_legacy_wif));
+    const std::string wif = fixture["networks"][0]["wif"].get_str();
+    std::vector<unsigned char> data;
+    BOOST_REQUIRE(DecodeBase58Check(wif, data, 3000));
+    BOOST_REQUIRE_EQUAL(data.size(), 2180); // Network byte + 2179-byte historical payload.
+    constexpr size_t marker_pos{1 + 1281};
+    constexpr size_t pub_pos{marker_pos + 1};
+    const auto rejects = [](const std::vector<unsigned char>& bytes) {
+        BOOST_CHECK(!DecodeSecret(EncodeBase58Check(bytes)).IsValid());
+    };
+    auto altered = data;
+    altered[0] = 180; // Valid testnet WIF, wrong network here.
+    rejects(altered);
+    altered = data;
+    altered[marker_pos] = 0;
+    rejects(altered);
+    altered = data;
+    altered[pub_pos] = 10; // Wrong Falcon inner header.
+    rejects(altered);
+    altered = data;
+    altered[pub_pos + 1] = 0xff;
+    altered[pub_pos + 2] |= 0xfc; // Coefficient 16383, outside mod-q encoding.
+    rejects(altered);
+    altered = data;
+    altered.pop_back();
+    rejects(altered);
+    altered = data;
+    altered.push_back(0);
+    rejects(altered);
+    altered = data;
+    altered.insert(altered.begin() + pub_pos, 7); // Mistaken rc-only layout.
+    rejects(altered);
+
+    CKey other;
+    other.MakeNewKey(pq::SchemeId::FALCON_512);
+    const CPubKey other_pub = other.GetPubKey();
+    BOOST_REQUIRE(other_pub.IsFullyValid());
+    altered = data;
+    std::copy(other_pub.begin() + 1, other_pub.end(), altered.begin() + pub_pos);
+    rejects(altered); // Well-formed embedded key, wrong private/public pair.
+    altered.insert(altered.begin() + pub_pos, 7);
+    rejects(altered); // Also reject mismatched keys in the old rc-only form.
+    std::string bad_checksum = wif;
+    bad_checksum.back() = bad_checksum.back() == '1' ? '2' : '1';
+    BOOST_CHECK(!DecodeSecret(bad_checksum).IsValid());
 }
 
 BOOST_AUTO_TEST_CASE(key_io_pq_legacy_wif_roundtrip)
@@ -190,6 +290,7 @@ BOOST_AUTO_TEST_CASE(key_io_pq_legacy_wif_roundtrip)
     CKey decoded = DecodeSecret(legacy);
     BOOST_REQUIRE(decoded.IsValid());
     BOOST_CHECK(key == decoded);
+    BOOST_CHECK(key.GetPubKey() == decoded.GetPubKey());
 
     // Legacy WIF for non-Falcon schemes should be rejected.
     CKey mldsa;

@@ -82,6 +82,16 @@ scheme prefix byte.
 `KEY` may be a WIF private key when private key material is intended to be
 embedded in the descriptor input.
 
+The default WIF format contains the scheme-prefixed private key. Historical
+v0.18.3 Falcon-512 WIFs are also accepted: their Base58Check payload, after the
+network prefix, is 1281 raw private-key bytes, the byte `01`, and 897 raw
+public-key bytes. Neither key in that historical payload has a Tidecoin scheme
+prefix. Import validates the embedded public key and requires it to match the
+public key derived from the private bytes; inconsistent pairs are rejected.
+
+`dumpprivkey TARGET {"format":"legacy"}` exports this v0.18.3 layout for
+Falcon-512. The default `privonly` export remains available for all five schemes.
+
 ### 3) PQHD key expression
 
 Tidecoin descriptor wallets use `pqhd(...)`:

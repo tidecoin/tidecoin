@@ -15,6 +15,7 @@
 
 CKey DecodeSecret(const std::string& str);
 std::string EncodeSecret(const CKey& key);
+//! v0.18.3 WIF: raw Falcon-512 secret, 0x01, raw public key (no scheme prefixes).
 std::string EncodeSecretLegacy(const CKey& key);
 
 std::string EncodeDestination(const CTxDestination& dest);

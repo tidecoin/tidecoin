@@ -63,7 +63,7 @@ RPCHelpMan dumpprivkey()
         {
             {"target", RPCArg::Type::STR, RPCArg::Optional::NO, "The address or descriptor."},
             {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "", {
-                {"format", RPCArg::Type::STR, RPCArg::Default{"privonly"}, "Output format: privonly or legacy (Falcon-512 only)."},
+                {"format", RPCArg::Type::STR, RPCArg::Default{"privonly"}, "Output format: privonly (scheme-prefixed private key) or legacy (v0.18.3 raw private key, 0x01, raw public key; Falcon-512 only)."},
                 {"index", RPCArg::Type::NUM, RPCArg::Default{0}, "Index for ranged descriptors."},
             }},
         },

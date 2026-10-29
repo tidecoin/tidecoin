@@ -161,6 +161,13 @@ encoding, not possession of a matching private key. Existing script spending
 rules are unchanged, and legacy watch-only scripts remain tracked even when an
 embedded key cannot be extracted as a valid public key.
 
+Historical Falcon-512 WIF import and `dumpprivkey`'s `legacy` export use the
+v0.18.3 layout: raw private key, `01`, and raw public key, without Tidecoin scheme
+prefixes inside the payload. Import requires a valid embedded public key that
+matches the key derived from the private bytes, before any wallet records are
+saved. The default private-only export is unchanged. These checks apply to new
+imports; they do not repair inconsistent key pairs already saved in a wallet.
+
 Legacy and strict Falcon verification
 --------------------------------------
 

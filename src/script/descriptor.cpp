@@ -1365,7 +1365,7 @@ std::vector<std::unique_ptr<PubkeyProvider>> ParsePubkeyInner(uint32_t key_exp_i
             ret.emplace_back(std::make_unique<ConstPubkeyProvider>(key_exp_index, pubkey));
             return ret;
         }
-        error = "Pubkey must be raw PQ prefixed hex (WIF private keys are not supported)";
+        error = "Key must be a valid PQ prefixed public key or WIF private key";
         return {};
     }
 
