@@ -807,6 +807,103 @@ BOOST_FIXTURE_TEST_CASE(psbt_modes_and_cleanup, BasicTestingSetup)
     }
 }
 
+BOOST_FIXTURE_TEST_CASE(psbt_partial_rule_exclusion_is_not_missing_data, BasicTestingSetup)
+{
+    constexpr unsigned pre{STANDARD_SCRIPT_VERIFY_FLAGS & ~(SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_SHA512)};
+    constexpr unsigned post{pre | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512 | SCRIPT_VERIFY_SHA512};
+    for (const auto scheme : {pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_1024, pq::SchemeId::MLDSA_44, pq::SchemeId::MLDSA_65, pq::SchemeId::MLDSA_87}) {
+        CKey key;
+        key.MakeNewKey(scheme);
+        const auto pubkey = key.GetPubKey();
+        const auto keyid = pubkey.GetID();
+        FlatSigningProvider provider;
+        provider.keys.emplace(keyid, key);
+        provider.pubkeys.emplace(keyid, pubkey);
+        const CScript script = CScript{} << ToByteVector(pubkey) << OP_CHECKSIG;
+        provider.scripts.emplace(CScriptID(script), script);
+        for (const int kind : {0, 1, 2}) {
+            CMutableTransaction previous;
+            previous.vout.emplace_back(1000, kind == 0 ? script : kind == 1 ?
+                GetScriptForDestination(WitnessV0ScriptHash(script)) : GetScriptForDestination(WitnessV1ScriptHash512(script)));
+            auto psbt = MakeMinimalPSBT();
+            psbt.tx->vin[0].prevout = COutPoint(previous.GetHash(), 0);
+            psbt.inputs[0].non_witness_utxo = MakeTransactionRef(previous);
+            if (kind) psbt.inputs[0].witness_script = script;
+            const auto data = PrecomputePSBTData(psbt);
+            BOOST_REQUIRE(SignPSBTInput(provider, psbt, 0, &data, SIGHASH_NONE, nullptr, false, post) == PSBTError::OK);
+            psbt.inputs[0].sighash_type.reset();
+            const auto signatures = psbt.inputs[0].partial_sigs;
+            const bool excluded = scheme != pq::SchemeId::FALCON_512 || kind == 2;
+            auto checks = CheckPSBTPartialSignatures(psbt, 0, DUMMY_SIGNING_PROVIDER, data, pre);
+            BOOST_CHECK(checks.invalid.empty());
+            BOOST_CHECK(checks.excluded.contains(keyid) == excluded);
+            BOOST_CHECK(VerifyPSBTPartialSignature(psbt, 0, signatures.at(keyid), data, post));
+            auto declaration = psbt;
+            BOOST_CHECK(DeclarePSBTSighash(declaration, SIGHASH_ALL, pre) == (excluded ? PSBTError::OK : PSBTError::SIGHASH_MISMATCH));
+            BOOST_CHECK(declaration.inputs[0].partial_sigs == signatures);
+            declaration.inputs[0].sighash_type = SIGHASH_NONE;
+            BOOST_CHECK(DeclarePSBTSighash(declaration, SIGHASH_ALL, pre) == PSBTError::SIGHASH_MISMATCH);
+
+            // Missing data is not an excuse to ignore an eligible mode conflict.
+            auto unknown = psbt;
+            unknown.inputs[0].non_witness_utxo.reset();
+            unknown.inputs[0].witness_utxo.SetNull();
+            const auto missing_data = PrecomputePSBTData(unknown);
+            checks = CheckPSBTPartialSignatures(unknown, 0, DUMMY_SIGNING_PROVIDER, missing_data, post);
+            BOOST_CHECK(checks.invalid.empty());
+            BOOST_CHECK(checks.excluded.empty());
+            BOOST_CHECK(!VerifyPSBTPartialSignature(unknown, 0, signatures.at(keyid), missing_data, post));
+            BOOST_CHECK(DeclarePSBTSighash(unknown, SIGHASH_ALL, post) == PSBTError::SIGHASH_MISMATCH);
+            checks = CheckPSBTPartialSignatures(unknown, 0, DUMMY_SIGNING_PROVIDER, missing_data, pre);
+            // The public key identifies its scheme even without a previous output.
+            BOOST_CHECK(checks.excluded.contains(keyid) == (scheme != pq::SchemeId::FALCON_512));
+
+            auto bad = psbt;
+            bad.inputs[0].partial_sigs.at(keyid).second = {1, SIGHASH_ALL};
+            checks = CheckPSBTPartialSignatures(bad, 0, DUMMY_SIGNING_PROVIDER, data, post);
+            BOOST_CHECK(checks.invalid.contains(keyid));
+            BOOST_CHECK(checks.excluded.empty());
+            if (kind == 1) {
+                auto no_script = psbt;
+                no_script.inputs[0].witness_script.clear();
+                checks = CheckPSBTPartialSignatures(no_script, 0, DUMMY_SIGNING_PROVIDER, data, post);
+                BOOST_CHECK(checks.invalid.empty());
+                BOOST_CHECK(checks.excluded.empty());
+                // Scripts supplied by the wallet restore full checking.
+                checks = CheckPSBTPartialSignatures(no_script, 0, provider, data, pre);
+                BOOST_CHECK(checks.excluded.contains(keyid) == excluded);
+            }
+            if (excluded) {
+                const auto analysis = node::AnalyzePSBT(psbt, pre);
+                BOOST_CHECK(analysis.next == PSBTRole::UPDATER);
+                BOOST_CHECK(analysis.inputs[0].missing_sigs.empty());
+                BOOST_CHECK(analysis.inputs[0].excluded_sigs == std::vector<CKeyID>{keyid});
+                BOOST_CHECK(psbt.inputs[0].partial_sigs == signatures);
+
+                // An excluded candidate's mode must not impose SINGLE's
+                // output requirement on other work in this input.
+                auto single = psbt;
+                single.tx->vout.clear();
+                single.inputs[0].partial_sigs.at(keyid).second.back() = SIGHASH_SINGLE;
+                const auto single_data = PrecomputePSBTData(single);
+                BOOST_CHECK(SignPSBTInput(DUMMY_SIGNING_PROVIDER, single, 0, &single_data, SIGHASH_ALL, nullptr, false, pre, PSBTInputIntent::INSPECT) == PSBTError::INCOMPLETE);
+                BOOST_CHECK(single.inputs[0].partial_sigs.contains(keyid));
+            }
+            if (kind == 2) {
+                // A known v1 program is still undecidable under post rules
+                // when another input's amount is missing (without ANYONECANPAY).
+                auto missing_amount = psbt;
+                missing_amount.tx->vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+                missing_amount.inputs.emplace_back();
+                const auto incomplete_data = PrecomputePSBTData(missing_amount);
+                checks = CheckPSBTPartialSignatures(missing_amount, 0, DUMMY_SIGNING_PROVIDER, incomplete_data, post);
+                BOOST_CHECK(checks.invalid.empty());
+                BOOST_CHECK(checks.excluded.empty());
+            }
+        }
+    }
+}
+
 BOOST_FIXTURE_TEST_CASE(psbt_signing_refusals_and_declarations, BasicTestingSetup)
 {
     constexpr unsigned flags{STANDARD_SCRIPT_VERIFY_FLAGS | SCRIPT_VERIFY_PQ_STRICT | SCRIPT_VERIFY_WITNESS_V1_512};
@@ -889,8 +986,8 @@ BOOST_FIXTURE_TEST_CASE(psbt_signing_refusals_and_declarations, BasicTestingSetu
         BOOST_CHECK(node::AnalyzePSBT(partial, flags).inputs[0].issue == PSBTError::SIGHASH_MISMATCH);
         partial.inputs[0].sighash_type.reset();
         BOOST_CHECK(!FinalizePSBT(partial, flags));
-        BOOST_CHECK(DeclarePSBTSighash(partial, SIGHASH_ALL) == PSBTError::SIGHASH_MISMATCH);
-        BOOST_REQUIRE(DeclarePSBTSighash(partial, SIGHASH_NONE) == PSBTError::OK);
+        BOOST_CHECK(DeclarePSBTSighash(partial, SIGHASH_ALL, flags) == PSBTError::SIGHASH_MISMATCH);
+        BOOST_REQUIRE(DeclarePSBTSighash(partial, SIGHASH_NONE, flags) == PSBTError::OK);
         BOOST_CHECK(FinalizePSBT(partial, flags));
     }
     auto left = MakeMinimalPSBT();
@@ -902,7 +999,7 @@ BOOST_FIXTURE_TEST_CASE(psbt_signing_refusals_and_declarations, BasicTestingSetu
     BOOST_CHECK(!left.Merge(right));
     BOOST_CHECK(left.inputs[0].sighash_type == SIGHASH_NONE);
     auto public_psbt = MakeMinimalPSBT(); // Declaration does not require a UTXO or key.
-    BOOST_CHECK(DeclarePSBTSighash(public_psbt, SIGHASH_ALL) == PSBTError::OK);
+    BOOST_CHECK(DeclarePSBTSighash(public_psbt, SIGHASH_ALL, flags) == PSBTError::OK);
     BOOST_CHECK(public_psbt.inputs[0].sighash_type == SIGHASH_ALL);
 }
 

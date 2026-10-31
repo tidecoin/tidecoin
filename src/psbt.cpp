@@ -403,18 +403,24 @@ bool PSBTInputHasSigningUTXO(const PartiallySignedTransaction& psbt, size_t inde
            (!is_p2sh && version == 1 && program.size() == WITNESS_V1_SCRIPTHASH_512_SIZE && (flags & SCRIPT_VERIFY_WITNESS_V1_512));
 }
 
-/** Whether a partial signature verifies for this input, given its redeem and
- *  witness scripts; std::nullopt when the available data cannot decide. */
-static std::optional<bool> CheckPartialSignature(const PartiallySignedTransaction& psbt, size_t index, const CScript& redeem_script, const CScript& witness_script,
+enum class PartialSignatureStatus { VALID, INVALID, EXCLUDED, UNKNOWN };
+
+/** Classify a partial without confusing a rule exclusion with missing data. */
+static PartialSignatureStatus CheckPartialSignature(const PartiallySignedTransaction& psbt, size_t index, const CScript& redeem_script, const CScript& witness_script,
                                                  const SigPair& signature, const PrecomputedTransactionData& txdata, unsigned int flags)
 {
-    if (signature.second.empty()) return false;
+    if (signature.second.empty()) return PartialSignatureStatus::INVALID;
+    const CPubKey& pubkey{signature.first};
+    if (!pubkey.IsValid()) return PartialSignatureStatus::INVALID;
+    const bool allow_legacy{!(flags & SCRIPT_VERIFY_PQ_STRICT)};
+    // Scheme exclusion is knowable even when scripts or amounts are missing.
+    if (allow_legacy && pubkey[0] != pq::kSchemePrefixFalcon512) return PartialSignatureStatus::EXCLUDED;
     CTxOut utxo;
-    if (!psbt.GetInputUTXO(utxo, index)) return std::nullopt;
+    if (!psbt.GetInputUTXO(utxo, index)) return PartialSignatureStatus::UNKNOWN;
     CScript script = utxo.scriptPubKey;
     const bool is_p2sh{script.IsPayToScriptHash()};
     if (is_p2sh) {
-        if (GetScriptForDestination(ScriptHash(redeem_script)) != script) return std::nullopt;
+        if (GetScriptForDestination(ScriptHash(redeem_script)) != script) return PartialSignatureStatus::UNKNOWN;
         script = redeem_script;
     }
     SigVersion sigversion = SigVersion::BASE;
@@ -427,50 +433,51 @@ static std::optional<bool> CheckPartialSignature(const PartiallySignedTransactio
             script = GetScriptForDestination(PKHash(id));
             sigversion = SigVersion::WITNESS_V0;
         } else if (version == 0 && program.size() == 32) {
-            if (GetScriptForDestination(WitnessV0ScriptHash(witness_script)) != script) return std::nullopt;
+            if (GetScriptForDestination(WitnessV0ScriptHash(witness_script)) != script) return PartialSignatureStatus::UNKNOWN;
             script = witness_script;
             sigversion = SigVersion::WITNESS_V0;
-        } else if (!is_p2sh && version == 1 && program.size() == WITNESS_V1_SCRIPTHASH_512_SIZE && (flags & SCRIPT_VERIFY_WITNESS_V1_512)) {
-            if (GetScriptForDestination(WitnessV1ScriptHash512(witness_script)) != script) return std::nullopt;
+        } else if (!is_p2sh && version == 1 && program.size() == WITNESS_V1_SCRIPTHASH_512_SIZE) {
+            if (!(flags & SCRIPT_VERIFY_WITNESS_V1_512)) return PartialSignatureStatus::EXCLUDED;
+            if (GetScriptForDestination(WitnessV1ScriptHash512(witness_script)) != script) return PartialSignatureStatus::UNKNOWN;
             script = witness_script;
             sigversion = SigVersion::WITNESS_V1_512;
         } else {
-            return std::nullopt;
+            return PartialSignatureStatus::UNKNOWN;
         }
     } else if (!psbt.inputs[index].non_witness_utxo) {
         // A legacy signature commits to no amount, so only the full previous
         // transaction establishes the spent output.
-        return std::nullopt;
+        return PartialSignatureStatus::UNKNOWN;
     }
     const int hash_type{signature.second.back()};
     if (sigversion == SigVersion::WITNESS_V1_512) {
-        if (!IsSupportedSighash(hash_type)) return false;
-        if (!(hash_type & SIGHASH_ANYONECANPAY) && !txdata.m_spent_outputs_ready) return std::nullopt;
+        if (!IsSupportedSighash(hash_type)) return PartialSignatureStatus::INVALID;
+        if (!(hash_type & SIGHASH_ANYONECANPAY) && !txdata.m_spent_outputs_ready) return PartialSignatureStatus::UNKNOWN;
     }
-    const CPubKey& pubkey{signature.first};
-    if (!pubkey.IsValid()) return false;
-    const bool allow_legacy{!(flags & SCRIPT_VERIFY_PQ_STRICT)};
-    // Other schemes may sign only after activation.
-    if (allow_legacy && pubkey[0] != pq::kSchemePrefixFalcon512) return std::nullopt;
     const MutableTransactionSignatureChecker checker{&*psbt.tx, static_cast<unsigned int>(index), utxo.nValue, txdata, MissingDataBehavior::FAIL, allow_legacy};
-    return checker.CheckPostQuantumSignature(signature.second, std::vector<unsigned char>(pubkey.begin(), pubkey.end()), script, sigversion);
+    return checker.CheckPostQuantumSignature(signature.second, std::vector<unsigned char>(pubkey.begin(), pubkey.end()), script, sigversion) ?
+        PartialSignatureStatus::VALID : PartialSignatureStatus::INVALID;
 }
 
-std::set<CKeyID> InvalidPSBTPartialSignatures(const PartiallySignedTransaction& psbt, size_t index, const SigningProvider& provider,
-                                              const PrecomputedTransactionData& txdata, unsigned int flags)
+PSBTPartialSignatureChecks CheckPSBTPartialSignatures(const PartiallySignedTransaction& psbt, size_t index, const SigningProvider& provider,
+                                                     const PrecomputedTransactionData& txdata, unsigned int flags)
 {
-    std::set<CKeyID> invalid;
+    PSBTPartialSignatureChecks result;
     const PSBTInput& input = psbt.inputs.at(index);
-    CTxOut utxo;
-    if (input.partial_sigs.empty() || PSBTInputSigned(input) || !psbt.GetInputUTXO(utxo, index)) return invalid;
+    if (input.partial_sigs.empty() || PSBTInputSigned(input)) return result;
     // The provider may know scripts the PSBT omits.
     SignatureData resolved;
     input.FillSignatureData(resolved);
-    ProduceSignature(HidingSigningProvider(&provider, /*hide_secret=*/true), DUMMY_SIGNATURE_CREATOR, utxo.scriptPubKey, resolved, flags);
-    for (const auto& [keyid, signature] : input.partial_sigs) {
-        if (CheckPartialSignature(psbt, index, resolved.redeem_script, resolved.witness_script, signature, txdata, flags) == false) invalid.insert(keyid);
+    CTxOut utxo;
+    if (psbt.GetInputUTXO(utxo, index)) {
+        ProduceSignature(HidingSigningProvider(&provider, /*hide_secret=*/true), DUMMY_SIGNATURE_CREATOR, utxo.scriptPubKey, resolved, flags);
     }
-    return invalid;
+    for (const auto& [keyid, signature] : input.partial_sigs) {
+        const auto status = CheckPartialSignature(psbt, index, resolved.redeem_script, resolved.witness_script, signature, txdata, flags);
+        if (status == PartialSignatureStatus::INVALID) result.invalid.insert(keyid);
+        if (status == PartialSignatureStatus::EXCLUDED) result.excluded.insert(keyid);
+    }
+    return result;
 }
 
 bool VerifyPSBTPartialSignature(const PartiallySignedTransaction& psbt, size_t index, const SigPair& signature,
@@ -478,7 +485,7 @@ bool VerifyPSBTPartialSignature(const PartiallySignedTransaction& psbt, size_t i
 {
     if (!PSBTInputHasSigningUTXO(psbt, index, flags)) return false;
     const auto& input = psbt.inputs[index];
-    return CheckPartialSignature(psbt, index, input.redeem_script, input.witness_script, signature, txdata, flags).value_or(false);
+    return CheckPartialSignature(psbt, index, input.redeem_script, input.witness_script, signature, txdata, flags) == PartialSignatureStatus::VALID;
 }
 
 bool PSBTInputSignedAndVerified(const PartiallySignedTransaction& psbt, unsigned int input_index, const PrecomputedTransactionData* txdata, unsigned int script_verify_flags)
@@ -550,13 +557,19 @@ PrecomputedTransactionData PrecomputePSBTData(const PartiallySignedTransaction& 
     return txdata;
 }
 
-PSBTError DeclarePSBTSighash(PartiallySignedTransaction& psbt, int sighash)
+PSBTError DeclarePSBTSighash(PartiallySignedTransaction& psbt, int sighash, unsigned int flags)
 {
     if (!IsSupportedSighash(sighash)) return PSBTError::SIGHASH_UNSUPPORTED;
-    for (const auto& input : psbt.inputs) {
+    const auto txdata = PrecomputePSBTData(psbt);
+    for (size_t i = 0; i < psbt.inputs.size(); ++i) {
+        const auto& input = psbt.inputs[i];
         if (PSBTInputSigned(input)) continue;
         if (input.sighash_type && *input.sighash_type != sighash) return PSBTError::SIGHASH_MISMATCH;
-        for (const auto& [_, sig] : input.partial_sigs) {
+        const auto checks = CheckPSBTPartialSignatures(psbt, i, DUMMY_SIGNING_PROVIDER, txdata, flags);
+        for (const auto& [keyid, sig] : input.partial_sigs) {
+            // Public declarations preserve data and existing declarations. Only
+            // definitely excluded candidates are exempt from the mode comparison.
+            if (checks.excluded.contains(keyid)) continue;
             if (sig.second.empty() || sig.second.back() != sighash) return PSBTError::SIGHASH_MISMATCH;
         }
     }
@@ -614,9 +627,12 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
     // Partial signatures are unauthenticated PSBT data. One that cannot verify
     // is neither reused nor allowed to constrain the signing mode. Signing
     // replaces it for the signer's own key; other keys' entries stay in the
-    // PSBT. One the available data cannot decide is handled as before.
+    // PSBT. Excluded partials stay as data without constraining eligible work;
+    // one the available data cannot decide is handled as before.
+    PSBTPartialSignatureChecks checks;
     if (txdata) {
-        for (const CKeyID& keyid : InvalidPSBTPartialSignatures(psbt, index, provider, *txdata, effective_flags)) {
+        checks = CheckPSBTPartialSignatures(psbt, index, provider, *txdata, effective_flags);
+        for (const CKeyID& keyid : checks.invalid) {
             sigdata.signatures.erase(keyid);
             CKey key;
             if (intent == PSBTInputIntent::SIGN && provider.GetKey(keyid, key)) input.partial_sigs.erase(keyid);
@@ -628,6 +644,7 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
         if (!out_sigdata) return;
         out_sigdata->missing_pubkeys = sigdata.missing_pubkeys;
         out_sigdata->missing_sigs = sigdata.missing_sigs;
+        out_sigdata->excluded_sigs = sigdata.excluded_sigs;
         out_sigdata->missing_redeem_script = sigdata.missing_redeem_script;
         out_sigdata->missing_witness_script = sigdata.missing_witness_script;
     };
@@ -637,6 +654,7 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
         // A preceding signing attempt may already have recorded these keys.
         sigdata.missing_pubkeys.clear();
         sigdata.missing_sigs.clear();
+        sigdata.excluded_sigs.clear();
         MutableTransactionSignatureCreator creator(tx, index, utxo.nValue, txdata, requested, allow_legacy);
         ProduceSignature(HidingSigningProvider(&provider, true), creator, utxo.scriptPubKey, sigdata, effective_flags);
         sigdata.complete = false;
@@ -646,7 +664,8 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
     };
     bool existing_match{true};
     bool declaration_match{true};
-    for (const auto& [_, sig] : sigdata.signatures) {
+    for (const auto& [keyid, sig] : sigdata.signatures) {
+        if (checks.excluded.contains(keyid)) continue;
         if (!sig.second.empty() && SingleWithoutOutput(sig.second.back(), index, tx.vout.size())) {
             // Do not newly finalize this partial, including on a foreign input.
             // Inspection explains it; unrelated signing can still proceed.
@@ -661,6 +680,7 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
         // one of the signer's own keys must match the request like a new one;
         // signatures by other keys are left to their owners.
         for (const auto& [keyid, sig] : sigdata.signatures) {
+            if (checks.excluded.contains(keyid)) continue;
             CKey key;
             if (!sig.second.empty() && sig.second.back() != requested && provider.GetKey(keyid, key)) {
                 if (out_sigdata) *out_sigdata = sigdata;

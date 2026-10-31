@@ -159,7 +159,11 @@ Only partial signatures and final scripts/witnesses are merged. Existing
 signature fields cannot be replaced with conflicting values. Before the request,
 partial signatures that do not verify are ignored when checking the signing
 mode, and those for enrolled keys are removed so the device can supply new
-ones; invalid entries for other keys stay in the PSBT. New signature
+ones; invalid entries for other keys stay in the PSBT. Existing partials excluded
+by the selected era also do not constrain the mode, but remain in the request.
+Explicit input declarations and eligible partials still have to match. This does
+not change which requests are sent to a device or allow newly returned excluded
+signatures to pass host verification. New signature
 hash types must match the request (ALL by default). Previously verified finalized
 inputs retain their existing hash types even if finalization removed their
 sighash metadata. Every returned final script

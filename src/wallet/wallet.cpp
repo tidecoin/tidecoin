@@ -2750,7 +2750,7 @@ std::optional<PSBTError> CWallet::FillPSBT(PartiallySignedTransaction& psbt, boo
     if (sign) {
         sighash_type = sighash_type.value_or(SIGHASH_ALL);
     } else if (sighash_type) {
-        const auto error = DeclarePSBTSighash(psbtx, *sighash_type);
+        const auto error = DeclarePSBTSighash(psbtx, *sighash_type, script_verify_flags);
         if (error != PSBTError::OK) return error;
     }
     if (n_signed) {

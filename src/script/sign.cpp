@@ -158,17 +158,19 @@ static bool CreateSig(const BaseSignatureCreator& creator, SignatureData& sigdat
     CKeyID keyid = pubkey.GetID();
     // Keep excluded partials as data, but do not let one displace an eligible
     // alternative when choosing a multisig or Miniscript satisfaction.
-    if (creator.IsSignatureAllowed(pubkey, sigversion)) {
-        const auto it = sigdata.signatures.find(keyid);
-        if (it != sigdata.signatures.end()) {
-            sig_out = it->second.second;
-            return true;
-        }
-        if (creator.CreateSig(provider, sig_out, keyid, scriptcode, sigversion)) {
-            auto i = sigdata.signatures.emplace(keyid, SigPair(pubkey, sig_out));
-            assert(i.second);
-            return true;
-        }
+    if (!creator.IsSignatureAllowed(pubkey, sigversion)) {
+        if (std::find(sigdata.excluded_sigs.begin(), sigdata.excluded_sigs.end(), keyid) == sigdata.excluded_sigs.end()) sigdata.excluded_sigs.push_back(keyid);
+        return false;
+    }
+    const auto it = sigdata.signatures.find(keyid);
+    if (it != sigdata.signatures.end()) {
+        sig_out = it->second.second;
+        return true;
+    }
+    if (creator.CreateSig(provider, sig_out, keyid, scriptcode, sigversion)) {
+        auto i = sigdata.signatures.emplace(keyid, SigPair(pubkey, sig_out));
+        assert(i.second);
+        return true;
     }
     // Could not make signature or signature not found, add keyid to missing
     if (creator.Error() == common::PSBTError::OK) sigdata.missing_sigs.push_back(keyid);

@@ -128,6 +128,7 @@ BASE_SCRIPTS = [
     'rpc_psbt_signing_policy.py --preactivation',
     'rpc_psbt_partial_reuse.py',
     'rpc_transaction_rules.py',
+    'rpc_psbt_excluded_signatures.py',
     'rpc_transaction_rules_signer.py',
     'rpc_psbt_previous_tx.py',
     'rpc_psbt_previous_tx.py --preactivation',

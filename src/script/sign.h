@@ -121,6 +121,7 @@ struct SignatureData {
     std::map<CKeyID, SigPair> signatures; ///< BIP 174 style partial signatures for the input. May contain all signatures necessary for producing a final scriptSig or scriptWitness.
     std::vector<CKeyID> missing_pubkeys; ///< KeyIDs of pubkeys which could not be found
     std::vector<CKeyID> missing_sigs; ///< KeyIDs of pubkeys for signatures which could not be found
+    std::vector<CKeyID> excluded_sigs; ///< KeyIDs of signature candidates excluded by the selected rules
     uint160 missing_redeem_script; ///< ScriptID of the missing redeemScript (if any)
     std::vector<unsigned char> missing_witness_script; ///< SHA256 (v0) or SHA512 (v1) of the missing witnessScript; empty if none
     std::map<std::vector<uint8_t>, std::vector<uint8_t>> sha256_preimages; ///< Mapping from a SHA256 hash to its preimage provided to solve a Script

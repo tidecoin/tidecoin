@@ -94,8 +94,12 @@ Local pre-AuxPoW signing creates only Falcon-512 signatures for supported
 legacy/v0 inputs. Newer schemes and native-v1 inputs require post-AuxPoW rules,
 including when processing offline. Eligible partial work in a mixed request is
 retained. Cached signatures excluded by the selected era remain in incomplete
-PSBTs but do not displace eligible alternatives during assembly. An incomplete
-result can contain signatures. External devices receive the entire PSBT without
+PSBTs but do not displace eligible alternatives during assembly or constrain
+their signing modes. Explicit input declarations and eligible partials still
+have to match. For incomplete inputs, `analyzepsbt` reports excluded key IDs in
+`excluded_signatures`, separately from missing signatures, with a `rules_excluded`
+issue unless a more specific mode issue applies. An incomplete result can contain
+signatures. External devices receive the entire PSBT without
 an era restriction; the host verifies their returned results under its selection.
 
 These arguments do not change consensus, activation, address issuance, ordinary

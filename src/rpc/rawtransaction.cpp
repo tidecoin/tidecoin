@@ -1692,8 +1692,12 @@ static RPCHelpMan analyzepsbt()
                         {
                             {RPCResult::Type::BOOL, "has_utxo", "Whether a UTXO is provided"},
                             {RPCResult::Type::BOOL, "is_final", "Whether the input is finalized"},
-                            {RPCResult::Type::STR, "issue", /*optional=*/true, "Per-input issue: single_without_output, unsupported_sighash, or sighash_mismatch"},
+                            {RPCResult::Type::STR, "issue", /*optional=*/true, "Per-input issue: single_without_output, unsupported_sighash, sighash_mismatch, or rules_excluded"},
                             {RPCResult::Type::STR, "issue_message", /*optional=*/true, "Explanation of the per-input issue; inspect this regardless of the next role"},
+                            {RPCResult::Type::ARR, "excluded_signatures", /*optional=*/true, "Signature candidates excluded by the selected rules, whether or not a partial is present. Other eligible alternatives may exist",
+                            {
+                                {RPCResult::Type::STR_HEX, "keyid", "Public key ID (HASH160 of the serialized public key)"},
+                            }},
                             {RPCResult::Type::OBJ, "missing", /*optional=*/true, "Things that are missing that are required to complete this input",
                             {
                                 {RPCResult::Type::ARR, "pubkeys", /*optional=*/true, "",
@@ -1747,6 +1751,14 @@ static RPCHelpMan analyzepsbt()
                                *input.issue == common::PSBTError::SIGHASH_UNSUPPORTED ? "unsupported_sighash" : "sighash_mismatch";
             input_univ.pushKV("issue", code);
             input_univ.pushKV("issue_message", input.issue_message);
+        } else if (!input.excluded_sigs.empty()) {
+            input_univ.pushKV("issue", "rules_excluded");
+            input_univ.pushKV("issue_message", "Some signature candidates are excluded by the selected rules; review the rules or provide an eligible alternative");
+        }
+        if (!input.excluded_sigs.empty()) {
+            UniValue excluded(UniValue::VARR);
+            for (const CKeyID& keyid : input.excluded_sigs) excluded.push_back(HexStr(keyid));
+            input_univ.pushKV("excluded_signatures", std::move(excluded));
         }
 
         if (!input.missing_pubkeys.empty()) {

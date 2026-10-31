@@ -92,9 +92,9 @@ bool ExternalSigner::SignTransaction(PartiallySignedTransaction& psbtx, std::str
             auto& input = staged.inputs[i];
             if (input.sighash_type && *input.sighash_type != mode) { error = "Conflicting signing mode"; return false; }
             // Partials that cannot verify do not constrain the mode.
-            const std::set<CKeyID> invalid{InvalidPSBTPartialSignatures(psbtx, i, FlatSigningProvider{}, request_txdata, script_verify_flags)};
+            const auto checks{CheckPSBTPartialSignatures(psbtx, i, FlatSigningProvider{}, request_txdata, script_verify_flags)};
             for (const auto& [keyid, sig] : input.partial_sigs) {
-                if (invalid.contains(keyid)) continue;
+                if (checks.invalid.contains(keyid) || checks.excluded.contains(keyid)) continue;
                 if (sig.second.empty() || sig.second.back() != mode || sig.second.back() != input.sighash_type.value_or(SIGHASH_ALL)) { error = "Conflicting existing signature mode"; return false; }
             }
             if (mode != SIGHASH_ALL) input.sighash_type = mode;

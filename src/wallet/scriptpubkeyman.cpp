@@ -1384,9 +1384,9 @@ std::optional<PSBTError> DescriptorScriptPubKeyMan::CheckPSBTSigningIntent(const
         if (input.partial_sigs.empty() || PSBTInputSigned(input) || !psbt.GetInputUTXO(utxo, i)) continue;
         std::unique_ptr<FlatSigningProvider> scripts{GetSigningProvider(utxo.scriptPubKey, /*include_private=*/false)};
         if (!scripts) scripts = std::make_unique<FlatSigningProvider>();
-        const std::set<CKeyID> invalid{InvalidPSBTPartialSignatures(psbt, i, *scripts, txdata, flags)};
+        const auto checks{CheckPSBTPartialSignatures(psbt, i, *scripts, txdata, flags)};
         for (const auto& [keyid, sig] : input.partial_sigs) {
-            if (invalid.contains(keyid) || sig.second.empty() || sig.second.back() == mode || !owns(sig.first)) continue;
+            if (checks.invalid.contains(keyid) || checks.excluded.contains(keyid) || sig.second.empty() || sig.second.back() == mode || !owns(sig.first)) continue;
             if (!result) result = PSBTError::SIGHASH_MISMATCH;
             if (input_errors) input_errors->push_back({i, mode, input.sighash_type, PSBTError::SIGHASH_MISMATCH});
             break;

@@ -887,8 +887,9 @@ std::string PSBTRoleName(PSBTRole role);
 
 enum class PSBTInputIntent { SIGN, INSPECT };
 
-/** Deliberate public declaration: validate every unfinished input before mutation. */
-[[nodiscard]] PSBTError DeclarePSBTSighash(PartiallySignedTransaction& psbt, int sighash);
+/** Deliberate public declaration: validate every unfinished input before mutation.
+ * Excluded partials are retained but do not constrain the declaration. */
+[[nodiscard]] PSBTError DeclarePSBTSighash(PartiallySignedTransaction& psbt, int sighash, unsigned int flags);
 
 /** Compute a PrecomputedTransactionData object from a psbt. */
 PrecomputedTransactionData PrecomputePSBTData(const PartiallySignedTransaction& psbt);
@@ -903,11 +904,16 @@ bool PSBTInputSigned(const PSBTInput& input);
  * signatures or establish confirmation, unspentness, or other inputs' amounts. */
 bool PSBTInputHasSigningUTXO(const PartiallySignedTransaction& psbt, size_t index, unsigned int flags);
 
-/** Keys of an unfinished input's partial signatures that provably cannot
- * verify. Signatures the available data cannot decide are not included.
+struct PSBTPartialSignatureChecks {
+    std::set<CKeyID> invalid; //!< Provably invalid; may be replaced by the owning signer.
+    std::set<CKeyID> excluded; //!< Unavailable under the selected rules; retain as PSBT data.
+};
+
+/** Classify partials separately from missing-data cases. Valid and undecidable
+ * signatures are in neither set and retain their existing mode checks.
  * Scripts the PSBT omits are looked up in provider. */
-std::set<CKeyID> InvalidPSBTPartialSignatures(const PartiallySignedTransaction& psbt, size_t index, const SigningProvider& provider,
-                                              const PrecomputedTransactionData& txdata, unsigned int flags);
+PSBTPartialSignatureChecks CheckPSBTPartialSignatures(const PartiallySignedTransaction& psbt, size_t index, const SigningProvider& provider,
+                                                     const PrecomputedTransactionData& txdata, unsigned int flags);
 
 /** Verify a newly supplied partial signature using data sufficient for signing. */
 bool VerifyPSBTPartialSignature(const PartiallySignedTransaction& psbt, size_t index, const SigPair& signature,

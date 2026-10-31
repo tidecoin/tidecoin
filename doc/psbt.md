@@ -134,9 +134,9 @@ The standalone `tidecoin-tx` tool uses these same names but requires an explicit
 `-rules` argument for signing and verification; it has no chain-derived default.
 
 One selection governs cached partial checks, new signatures, existing finals,
-analysis, transaction-record cleanup and extraction. A partial that fails the
-selected rules is excluded from reusable signing data; when signing with its
-owner's key it can be replaced. Foreign entries are preserved. Explicit sighash
+analysis, transaction-record cleanup and extraction. A provably invalid partial
+is removed from reusable signing data; when signing with its owner's key it can
+be replaced. Foreign entries are preserved. Explicit sighash
 requests and required previous-output data still apply. A supplied invalid final
 remains incomplete; processing does not clear it to automatically re-sign it.
 
@@ -149,11 +149,24 @@ signed in a mixed request; `complete: false` does not mean that nothing was sign
 A cached signature excluded by the selected era is retained in an incomplete
 PSBT, but is not chosen to satisfy an input. An eligible threshold or alternative
 can therefore complete even when another key or cached signature is ineligible.
+Excluded partials also do not constrain the requested or declared signing mode.
+An explicit input sighash declaration still applies, as do the checks on eligible
+partials. Missing scripts or amounts do not establish an exclusion: undecidable
+partials retain their existing mode checks.
 Successful finalization performs the usual removal of partial fields. Selecting
 another era later can make a preserved signature usable; it cannot supply a new
 signature that was never created. Public metadata updates and dummy size
 estimation remain available. External devices receive the whole PSBT without an
 era restriction; see the [device boundary](external-signer.md#signing-responses-and-completion).
+
+For an incomplete input, `analyzepsbt` lists known key candidates excluded by the
+selected rules in `excluded_signatures`, separately from `missing.signatures`.
+These are public-key IDs (HASH160), whether or not a partial signature is present.
+It reports `issue: "rules_excluded"` unless a more specific mode issue applies,
+and requests an updater to review the rules or supply an eligible alternative.
+This is not a claim that every possible satisfaction is unavailable. When an
+eligible alternative already completes the input, analysis instead reports
+`next: "finalizer"` without an exclusion issue.
 
 For example, `pre-auxpow` processing can complete an older valid Falcon-512
 encoding with a negative-zero coefficient sign or nonzero unused final bits.
