@@ -414,6 +414,8 @@ BlockValidationState TestBlockValidity(
 
 /** Check with the proof of work on each blockheader matches the value in nBits */
 bool HasValidProofOfWork(const std::vector<CBlockHeader>& headers, const Consensus::Params& consensusParams);
+/** A present AuxPoW proof must fit within the undiscounted block weight budget. */
+bool IsOversizedAuxPowHeader(const CBlockHeader& header);
 bool HasValidProofOfWork(const std::vector<CBlockHeader>& headers, const Consensus::Params& consensusParams, std::optional<int> start_height);
 
 /** Check if a block has been mutated (with respect to its merkle root and witness commitments). */
@@ -1261,7 +1263,8 @@ public:
      * checks and block-index insertion still run here. start_height is the
      * height used to check the first header, not one inferred after buffering.
      * This internal path trusts that check, including each AuxPoW proof and
-     * activation rule. Buffered headers may omit the already-checked proofs.
+     * activation rule and complete serialized header size. Buffered headers may
+     * omit the already-checked proofs.
      */
     bool ProcessNewBlockHeadersPrechecked(std::span<const CBlockHeader> headers, int start_height, BlockValidationState& state, const CBlockIndex** ppindex = nullptr) LOCKS_EXCLUDED(cs_main);
 

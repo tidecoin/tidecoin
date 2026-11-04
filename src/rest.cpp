@@ -247,7 +247,12 @@ static bool rest_headers(const std::any& context,
     case RESTResponseFormat::BINARY: {
         DataStream ssHeader{};
         for (const CBlockIndex *pindex : headers) {
-            ssHeader << pindex->GetBlockHeader(chainman);
+            const auto result{pindex->GetBlockHeader(chainman)};
+            if (const auto* error = std::get_if<HeaderReadError>(&result)) {
+                return RESTERR(req, *error == HeaderReadError::READ_ERROR ? HTTP_INTERNAL_SERVER_ERROR : HTTP_NOT_FOUND,
+                               HeaderReadErrorString(*error));
+            }
+            ssHeader << std::get<CBlockHeader>(result);
         }
 
         req->WriteHeader("Content-Type", "application/octet-stream");
@@ -258,7 +263,12 @@ static bool rest_headers(const std::any& context,
     case RESTResponseFormat::HEX: {
         DataStream ssHeader{};
         for (const CBlockIndex *pindex : headers) {
-            ssHeader << pindex->GetBlockHeader(chainman);
+            const auto result{pindex->GetBlockHeader(chainman)};
+            if (const auto* error = std::get_if<HeaderReadError>(&result)) {
+                return RESTERR(req, *error == HeaderReadError::READ_ERROR ? HTTP_INTERNAL_SERVER_ERROR : HTTP_NOT_FOUND,
+                               HeaderReadErrorString(*error));
+            }
+            ssHeader << std::get<CBlockHeader>(result);
         }
 
         std::string strHex = HexStr(ssHeader) + "\n";

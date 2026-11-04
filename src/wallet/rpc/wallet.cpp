@@ -495,6 +495,8 @@ static RPCHelpMan importpqhdseed()
     return RPCHelpMan{
         "importpqhdseed",
         "Import a 32-byte PQHD master seed. Re-importing an existing seed is idempotent.\n"
+        "Import seed bytes from your own private backup. Do not use a public example seed for a funded wallet.\n"
+        "To generate new seed material inside the wallet, use createpqhdseed instead.\n"
         "This stores the seed only; it does not restore historical addresses or scan for transactions.\n"
         "For recovery, import every required seed, then use importdescriptors with the historical descriptors, ranges, next_index values and timestamps.\n"
         "A seed identifier alone cannot reconstruct custom scripts, other seeds, or previously used ranges.\n",
@@ -509,8 +511,8 @@ static RPCHelpMan importpqhdseed()
             },
         },
         RPCExamples{
-            HelpExampleCli("importpqhdseed", "\"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\"")
-            + HelpExampleRpc("importpqhdseed", "\"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\"")
+            HelpExampleCli("importpqhdseed", "\"<your_private_32_byte_seed_hex>\"")
+            + HelpExampleRpc("importpqhdseed", "\"<your_private_32_byte_seed_hex>\"")
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -872,9 +874,10 @@ static RPCHelpMan migratewallet()
         "migratewallet",
         "Migrate the wallet to a descriptor wallet.\n"
         "A new wallet backup will need to be made.\n"
-        "\nThe migration process will create a backup of the wallet before migrating. This backup\n"
-        "file will be named <wallet name>-<timestamp>.legacy.bak and can be found in the directory\n"
-        "for this wallet. In the event of an incorrect migration, the backup can be restored using restorewallet."
+        "\nThe migration process creates a .legacy.bak copy in the wallet directory before migrating.\n"
+        "The result's backup_path gives its exact location. Keep this original backup and make new backups of all migrated wallets.\n"
+        "To retry from the legacy backup, stop the node, copy it into a new wallet directory as wallet.dat,\n"
+        "then restart and call migratewallet with that directory's name. Legacy wallets cannot be loaded directly with restorewallet.\n"
         "\nEncrypted wallets must have the passphrase provided as an argument to this call.\n"
         "\nThis RPC may take a long time to complete. Increasing the RPC client timeout is recommended.",
         {

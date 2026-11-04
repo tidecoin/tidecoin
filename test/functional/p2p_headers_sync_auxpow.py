@@ -39,17 +39,23 @@ class HeadersSyncAuxpowTest(BitcoinTestFramework):
         batches = [[CBlockHeader(b) for b in blocks[start:start + 2000]] for start in [0, 2000]]
 
         for phase in ["presync", "redownload"]:
-            self.log.info("Reject an invalid proof during %s", phase)
-            peer = node.add_p2p_connection(HeadersPeer())
-            if phase == "redownload":
-                for batch in batches:
-                    peer.send_and_ping(msg_headers(batch))
-            bad = [CBlockHeader(header) for header in batches[0]]
-            bad[0].auxpow.nChainIndex = 1
-            with node.assert_debug_log(["header with invalid proof of work"]):
-                peer.send_without_ping(msg_headers(bad))
-                peer.wait_for_disconnect()
-            assert_equal(node.getblockchaininfo()["headers"], 0)
+            for oversized in [False, True]:
+                self.log.info("Reject a %s proof during %s", "too-large" if oversized else "bad", phase)
+                peer = node.add_p2p_connection(HeadersPeer())
+                if phase == "redownload":
+                    for batch in batches:
+                        peer.send_and_ping(msg_headers(batch))
+                bad = [CBlockHeader(header) for header in batches[0]]
+                if oversized:
+                    bad[0].auxpow = make_auxpow(bad[0].hash_hex, bad[0].nBits, b"\x00" * 1_500_000)
+                    reason = "Oversized AuxPoW header"
+                else:
+                    bad[0].auxpow.nChainIndex = 1
+                    reason = "header with invalid proof of work"
+                with node.assert_debug_log([reason]):
+                    peer.send_without_ping(msg_headers(bad))
+                    peer.wait_for_disconnect()
+                assert_equal(node.getblockchaininfo()["headers"], 0)
 
         self.log.info("Accept valid proofs through both passes")
         peer = node.add_p2p_connection(HeadersPeer())

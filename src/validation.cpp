@@ -4566,12 +4566,21 @@ bool ChainstateManager::AcceptBlockHeader(const CBlockHeader& block, BlockValida
     return true;
 }
 
+bool IsOversizedAuxPowHeader(const CBlockHeader& header)
+{
+    return header.IsAuxpow() && header.auxpow && GetSerializeSize(header) > MAX_BLOCK_HEADER_SIZE;
+}
+
 bool ChainstateManager::ProcessNewBlockHeadersImpl(std::span<const CBlockHeader> headers, bool min_pow_checked, std::optional<int> proof_start_height, BlockValidationState& state, const CBlockIndex** ppindex)
 {
     AssertLockNotHeld(cs_main);
     {
         LOCK(cs_main);
         for (const CBlockHeader& header : headers) {
+            // Check before the duplicate shortcut. Prechecked buffered headers may lack proofs.
+            if (!proof_start_height && IsOversizedAuxPowHeader(header)) {
+                return state.Invalid(BlockValidationResult::BLOCK_MUTATED, "auxpow-header-too-large");
+            }
             CBlockIndex *pindex = nullptr; // Use a temp pindex instead of ppindex to avoid a const_cast
             bool accepted{AcceptBlockHeader(header, state, &pindex, min_pow_checked, proof_start_height)};
             CheckBlockIndex();

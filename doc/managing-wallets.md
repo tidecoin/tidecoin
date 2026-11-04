@@ -36,7 +36,23 @@ Wallet encryption may prevent unauthorized access. However, this significantly i
 
 Wallet encryption may also not protect against more sophisticated attacks. An attacker can, for example, obtain the password by installing a keylogger on the user's machine.
 
-After encrypting the wallet or changing the passphrase, a new backup needs to be created immediately. The reason is that the keypool is flushed and a new HD seed is generated after encryption. Any coins received by the new seed cannot be recovered from previous backups.
+Make a new wallet backup after encryption. Successful encryption of a non-blank
+wallet sets up a fresh PQHD seed and default descriptors for future addresses;
+existing keys and descriptors remain available for earlier addresses. A backup
+made before this setup does not contain the new seed. Encrypting a blank wallet
+does not generate a seed or descriptors; any existing seed and policy are retained.
+
+If encryption succeeds but replacement-seed setup fails, the error says that the
+wallet is encrypted and locked and that its existing active descriptors remain
+in use. No replacement seed was installed. Follow the
+[PQHD recovery instructions](pq-rpc.md#createpqhdseed) after resolving the write
+error, then make a new backup.
+
+Changing the passphrase does not replace the existing seeds or keys. Back up
+after the change to save the new encryption settings. Earlier encrypted backups
+still use their original passphrase, and earlier unencrypted backups remain
+unencrypted. Those backups retain their old keys; they do not become useless.
+Keep them until you have verified the new backup.
 
 The wallet's private key may be encrypted with the following command:
 
@@ -105,11 +121,17 @@ If both the wallet and all backups are lost for any reason, the coins related to
 
 Historically, non-HD wallets were collections of unrelated private keys. If such a wallet received funds to a newly generated address and was later restored from an older backup, funds sent to that newer address could be lost because there was no deterministic derivation path to recreate it.
 
-Modern Tidecoin wallets use deterministic key derivation, so addresses come from wallet seed material and can be re-derived on restore.
+Modern Tidecoin wallets use PQHD derivation for default addresses. A complete
+wallet backup preserves the seeds, descriptors and derivation state saved at
+that time. It does not contain seeds, imported keys or descriptors added later.
+Make a new backup after adding or selecting a seed, importing keys or
+descriptors, encrypting, changing the passphrase, or migrating a legacy wallet.
+A seed identifier alone is not a seed backup.
 
-This means that a single backup is enough to recover the coins at any time. It is still recommended to make regular backups (once a week) or after a significant number of new transactions to maintain the metadata, such as labels. Metadata cannot be retrieved from a blockchain rescan, so if the backup is too old, the metadata will be lost forever.
-
-Wallets created before version 0.13 are not HD and must be backed up every 100 keys used since the previous backup, or even more often to maintain the metadata.
+Back up regularly to retain recent labels and other wallet metadata, which a
+blockchain rescan cannot reconstruct. For legacy wallets without deterministic
+derivation, back up whenever new keys are generated or imported; an older backup
+may not contain them. Verify that you can restore a backup before relying on it.
 
 ### 1.6 Restoring the Wallet From a Backup
 
@@ -145,7 +167,7 @@ If the wallet passphrase is too complex and is subsequently forgotten or lost, t
 
 ## Migrating Legacy Wallets to Descriptor Wallets
 
-Legacy wallets (traditional non-descriptor wallets) can be migrated to become Descriptor wallets
+Legacy Tidecoin Berkeley DB wallets (traditional non-descriptor wallets) can be migrated to become descriptor wallets
 through the use of the `migratewallet` RPC. Migrated wallets will have all of their addresses and private keys added to
 a newly created Descriptor wallet that has the same name as the original wallet. As Descriptor
 wallets do not support having both private keys and watch-only scripts, there may be up to two
@@ -157,16 +179,29 @@ contains only watch-only scripts and no private keys, then only the `<name>_watc
 will be created and the descriptor wallet with the same name will not be created. Additionally,
 the created watch-only descriptor wallet will not have private keys enabled.
 
-Migrated wallets will also generate new addresses differently. While the same BIP 32 seed will be
-used, the BIP 44, 49, 84, and 86 standard derivation paths will be used. After migrating, a new
-backup of the wallet(s) will need to be created.
+Migration preserves existing private keys in explicit `combo(...)` descriptors,
+so the addresses controlled by those keys keep the same keys. When migrating
+spendable key material, the wallet also creates a fresh PQHD seed and default
+descriptors for future receive and change addresses. Watch-only migration does
+not create private seeds. This does not reuse a BIP32 seed or derive keys using
+BIP44/49/84/86 paths.
+
+Make a new backup of every resulting wallet, including any watch-only or solvable
+wallet. Keep the original legacy backup as well. It preserves the original keys
+but does not contain the fresh PQHD seed or the new descriptor-wallet state.
 
 Given that there is an extremely large number of possible configurations for the scripts that
 Legacy wallets can know about, be watching for, and be able to sign for, `migratewallet` only
 makes a best effort attempt to capture all of these things into Descriptor wallets. There may be
 unforeseen configurations which result in some scripts being excluded. If a migration fails
 unexpectedly or otherwise misses any scripts, please create an issue on GitHub. A backup of the
-original wallet can be found in the wallet directory with the name `<name>-<timestamp>.legacy.bak`.
+original wallet is created in the wallet directory with a `.legacy.bak` suffix;
+the RPC's `backup_path` result gives its exact location.
 
-The backup can be restored using the methods discussed in the
-[Restoring the Wallet From a Backup](#16-restoring-the-wallet-from-a-backup) section.
+The [restore procedure above](#16-restoring-the-wallet-from-a-backup) applies to
+the new descriptor-wallet backups. To retry migration from a legacy backup,
+stop the node and copy the backup, keeping the original unchanged, into a new,
+unused directory under the wallet directory as `<new_name>/wallet.dat`. Restart
+without trying to load that legacy wallet, then call `migratewallet` with
+`<new_name>` and its passphrase if encrypted. Legacy wallets must be migrated
+before they can be loaded; `restorewallet` does not perform that migration.

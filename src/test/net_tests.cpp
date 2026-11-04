@@ -42,6 +42,65 @@ using util::ToString;
 
 BOOST_FIXTURE_TEST_SUITE(net_tests, RegTestingSetup)
 
+BOOST_AUTO_TEST_CASE(headers_message_byte_budget)
+{
+    HeadersMessageSize size;
+    BOOST_CHECK_EQUAL(size.GetSize(), 1U);
+    for (size_t count{1}; count <= MAX_HEADERS_RESULTS; ++count) {
+        size.Add(80);
+        BOOST_CHECK_EQUAL(size.GetSize(), GetSizeOfCompactSize(count) + count * 81);
+        BOOST_CHECK_EQUAL(size.IsFull(), count == MAX_HEADERS_RESULTS);
+    }
+    HeadersMessageSize exact;
+    exact.Add(HEADERS_MESSAGE_SIZE_THRESHOLD - 3);
+    BOOST_CHECK_EQUAL(exact.GetSize(), HEADERS_MESSAGE_SIZE_THRESHOLD - 1);
+    BOOST_CHECK(!exact.IsFull());
+    // A complete final header and its zero transaction count still fit the hard ceiling.
+    exact.Add(MAX_BLOCK_HEADER_SIZE);
+    BOOST_CHECK(exact.IsFull());
+    BOOST_CHECK(exact.GetSize() < MAX_PROTOCOL_MESSAGE_LENGTH);
+    HeadersMessageSize boundary;
+    boundary.Add(HEADERS_MESSAGE_SIZE_THRESHOLD - 2);
+    BOOST_CHECK_EQUAL(boundary.GetSize(), HEADERS_MESSAGE_SIZE_THRESHOLD);
+    BOOST_CHECK(boundary.IsFull());
+    HeadersMessageSize above;
+    above.Add(HEADERS_MESSAGE_SIZE_THRESHOLD - 1);
+    BOOST_CHECK_EQUAL(above.GetSize(), HEADERS_MESSAGE_SIZE_THRESHOLD + 1);
+    BOOST_CHECK(above.IsFull());
+    HeadersMessageSize large;
+    for (int i{0}; i < 7; ++i) {
+        large.Add(900301);
+        BOOST_CHECK_EQUAL(large.IsFull(), i == 6);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(outgoing_payload_limit)
+{
+    auto& connman = *m_node.connman;
+    for (const bool v2 : {false, true}) {
+        CNode node{0, std::make_shared<ZeroSock>(), CAddress{}, 0, 0, CAddress{}, "",
+                   ConnectionType::INBOUND, false, {.use_v2transport = v2}};
+        node.SetCommonVersion(PROTOCOL_VERSION);
+        CSerializedNetMsg allowed;
+        allowed.m_type = "longtypename";
+        allowed.data.resize(MAX_PROTOCOL_MESSAGE_LENGTH);
+        connman.PushMessage(&node, std::move(allowed));
+        BOOST_CHECK(!node.fDisconnect);
+        const auto count = WITH_LOCK(node.cs_vSend, return node.vSendMsg.size());
+        const auto memory = WITH_LOCK(node.cs_vSend, return node.m_send_memusage);
+        const auto sent = WITH_LOCK(node.cs_vSend, return node.nSendBytes);
+        CSerializedNetMsg oversized;
+        oversized.m_type = "longtypename";
+        oversized.data.resize(MAX_PROTOCOL_MESSAGE_LENGTH + 1);
+        connman.PushMessage(&node, std::move(oversized));
+        BOOST_CHECK(node.fDisconnect);
+        LOCK(node.cs_vSend);
+        BOOST_CHECK_EQUAL(node.vSendMsg.size(), count);
+        BOOST_CHECK_EQUAL(node.m_send_memusage, memory);
+        BOOST_CHECK_EQUAL(node.nSendBytes, sent);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(discovery_bind_options)
 {
     CConnman::Options options{};

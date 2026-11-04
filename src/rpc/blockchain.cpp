@@ -616,6 +616,7 @@ static RPCHelpMan getblockheader()
     return RPCHelpMan{
         "getblockheader",
         "If verbose is false, returns a string that is serialized, hex-encoded data for blockheader 'hash'.\n"
+                "Raw AuxPoW headers require retained block data; unavailable or unreadable proofs return an error.\n"
                 "If verbose is true, returns an Object with information about blockheader <hash>.\n",
                 {
                     {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "The block hash"},
@@ -673,7 +674,11 @@ static RPCHelpMan getblockheader()
     if (!fVerbose)
     {
         DataStream ssBlock{};
-        ssBlock << pblockindex->GetBlockHeader(chainman);
+        const auto result{pblockindex->GetBlockHeader(chainman)};
+        if (const auto* error = std::get_if<HeaderReadError>(&result)) {
+            throw JSONRPCError(RPC_MISC_ERROR, HeaderReadErrorString(*error));
+        }
+        ssBlock << std::get<CBlockHeader>(result);
         std::string strHex = HexStr(ssBlock);
         return strHex;
     }

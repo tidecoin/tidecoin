@@ -19,6 +19,8 @@ static const int64_t MAX_BLOCK_SIGOPS_COST = 80000;
 static const int COINBASE_MATURITY = 100;
 
 static const int WITNESS_SCALE_FACTOR = 4;
+/** Necessary size bound for a complete header, whose AuxPoW bytes have no weight discount. */
+static constexpr size_t MAX_BLOCK_HEADER_SIZE{MAX_BLOCK_WEIGHT / WITNESS_SCALE_FACTOR};
 
 static const size_t MIN_TRANSACTION_WEIGHT = WITNESS_SCALE_FACTOR * 60; // 60 is the lower bound for the size of a valid serialized CTransaction
 static const size_t MIN_SERIALIZABLE_TRANSACTION_WEIGHT = WITNESS_SCALE_FACTOR * 10; // 10 is the lower bound for the size of a serialized CTransaction

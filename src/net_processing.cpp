@@ -643,8 +643,8 @@ private:
                                bool via_compact_block)
         EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_headers_presync_mutex, g_msgproc_mutex);
     /** Various helpers for headers processing, invoked by ProcessHeadersMessage() */
-    /** Return true if headers are continuous and have valid proof-of-work (DoS points assigned on failure) */
-    bool CheckHeadersPoW(const std::vector<CBlockHeader>& headers, const Consensus::Params& consensusParams, Peer& peer, std::optional<int> start_height);
+    /** Check complete header sizes, work and continuity before proofs are discarded. */
+    bool CheckHeadersPoW(const std::vector<CBlockHeader>& headers, const Consensus::Params& consensusParams, CNode& pfrom, Peer& peer, std::optional<int> start_height);
     /** Calculate an anti-DoS work threshold for headers chains */
     arith_uint256 GetAntiDoSWorkThreshold();
     /** Deal with state tracking and headers sync for peers that send
@@ -660,6 +660,7 @@ private:
      *  @param[in]  pfrom                           CNode of the peer
      *  @param[in,out] headers                      The headers to be processed.
      *  @param[in,out] checked_height               Replaced with the first released header's height on success.
+     *  @param[in] full_batch                       Original batch reached the count or byte threshold.
      *  @return     True if the passed in headers were successfully processed
      *              as the continuation of a low-work headers sync in progress;
      *              false otherwise.
@@ -672,7 +673,7 @@ private:
      *              acceptance by the caller).
      */
     bool IsContinuationOfLowWorkHeadersSync(Peer& peer, CNode& pfrom,
-            std::vector<CBlockHeader>& headers, std::optional<int>& checked_height)
+            std::vector<CBlockHeader>& headers, std::optional<int>& checked_height, bool full_batch)
         EXCLUSIVE_LOCKS_REQUIRED(peer.m_headers_sync_mutex, !m_headers_presync_mutex, g_msgproc_mutex);
     /** Check work on a headers chain to be processed, and if insufficient,
      * initiate our anti-DoS headers sync mechanism.
@@ -681,13 +682,14 @@ private:
      * @param[in]   pfrom               CNode of the peer
      * @param[in]   chain_start_header  Where these headers connect in our index.
      * @param[in,out]   headers             The headers to be processed.
+     * @param[in]   full_batch          Original batch reached the count or byte threshold.
      *
      * @return      True if chain was low work (headers will be empty after
      *              calling); false otherwise.
      */
     bool TryLowWorkHeadersSync(Peer& peer, CNode& pfrom,
                                   const CBlockIndex* chain_start_header,
-                                  std::vector<CBlockHeader>& headers)
+                                  std::vector<CBlockHeader>& headers, bool full_batch)
         EXCLUSIVE_LOCKS_REQUIRED(!peer.m_headers_sync_mutex, !m_peer_mutex, !m_headers_presync_mutex, g_msgproc_mutex);
 
     /** Return true if the given header is an ancestor of
@@ -2495,8 +2497,16 @@ void PeerManagerImpl::SendBlockTransactions(CNode& pfrom, Peer& peer, const CBlo
     MakeAndPushMessage(pfrom, NetMsgType::BLOCKTXN, resp);
 }
 
-bool PeerManagerImpl::CheckHeadersPoW(const std::vector<CBlockHeader>& headers, const Consensus::Params& /*consensusParams*/, Peer& peer, std::optional<int> start_height)
+bool PeerManagerImpl::CheckHeadersPoW(const std::vector<CBlockHeader>& headers, const Consensus::Params& /*consensusParams*/, CNode& pfrom, Peer& peer, std::optional<int> start_height)
 {
+    for (const auto& header : headers) {
+        if (IsOversizedAuxPowHeader(header)) {
+            LogDebug(BCLog::NET, "Oversized AuxPoW header from peer=%d\n", pfrom.GetId());
+            pfrom.fDisconnect = true;
+            return false;
+        }
+    }
+
     // Do these headers have proof-of-work matching what's claimed?
     if (!m_chainman.HasValidHeadersProofOfWork(headers, start_height)) {
         Misbehaving(peer, "header with invalid proof of work");
@@ -2561,10 +2571,10 @@ bool PeerManagerImpl::CheckHeadersAreContinuous(const std::vector<CBlockHeader>&
     return true;
 }
 
-bool PeerManagerImpl::IsContinuationOfLowWorkHeadersSync(Peer& peer, CNode& pfrom, std::vector<CBlockHeader>& headers, std::optional<int>& checked_height)
+bool PeerManagerImpl::IsContinuationOfLowWorkHeadersSync(Peer& peer, CNode& pfrom, std::vector<CBlockHeader>& headers, std::optional<int>& checked_height, bool full_batch)
 {
     if (peer.m_headers_sync) {
-        auto result = peer.m_headers_sync->ProcessNextHeaders(headers, headers.size() == m_opts.max_headers_result);
+        auto result = peer.m_headers_sync->ProcessNextHeaders(headers, full_batch);
         // If it is a valid continuation, we should treat the existing getheaders request as responded to.
         if (result.success) peer.m_last_getheaders_timestamp = {};
         if (result.request_more) {
@@ -2644,7 +2654,7 @@ bool PeerManagerImpl::IsContinuationOfLowWorkHeadersSync(Peer& peer, CNode& pfro
     return false;
 }
 
-bool PeerManagerImpl::TryLowWorkHeadersSync(Peer& peer, CNode& pfrom, const CBlockIndex* chain_start_header, std::vector<CBlockHeader>& headers)
+bool PeerManagerImpl::TryLowWorkHeadersSync(Peer& peer, CNode& pfrom, const CBlockIndex* chain_start_header, std::vector<CBlockHeader>& headers, bool full_batch)
 {
     // Calculate the claimed total work on this chain.
     arith_uint256 total_work = chain_start_header->nChainWork + CalculateClaimedHeadersWork(headers);
@@ -2659,7 +2669,7 @@ bool PeerManagerImpl::TryLowWorkHeadersSync(Peer& peer, CNode& pfrom, const CBlo
         // Only try to sync with this peer if their headers message was full;
         // otherwise they don't have more headers after this so no point in
         // trying to sync their too-little-work chain.
-        if (headers.size() == m_opts.max_headers_result) {
+        if (full_batch) {
             // Note: we could advance to the last header in this set that is
             // known to us, rather than starting at the first header (which we
             // may already have); however this is unlikely to matter much since
@@ -2677,7 +2687,7 @@ bool PeerManagerImpl::TryLowWorkHeadersSync(Peer& peer, CNode& pfrom, const CBlo
             // is created, process the headers using it as normal. Failures are
             // handled inside of IsContinuationOfLowWorkHeadersSync.
             std::optional<int> ignored_height;
-            (void)IsContinuationOfLowWorkHeadersSync(peer, pfrom, headers, ignored_height);
+            (void)IsContinuationOfLowWorkHeadersSync(peer, pfrom, headers, ignored_height, full_batch);
         } else {
             LogDebug(BCLog::NET, "Ignoring low-work chain (height=%u) from peer=%d\n", chain_start_header->nHeight + headers.size(), pfrom.GetId());
         }
@@ -2878,13 +2888,15 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
             start_height = prev->nHeight + 1;
         }
     }
-    if (!CheckHeadersPoW(headers, m_chainparams.GetConsensus(), peer, start_height)) {
-        // Misbehaving() calls are handled within CheckHeadersPoW(), so we can
-        // just return. (Note that even if a header is announced via compact
-        // block, the header itself should be valid, so this type of error can
-        // always be punished.)
+    if (!CheckHeadersPoW(headers, m_chainparams.GetConsensus(), pfrom, peer, start_height)) {
+        // CheckHeadersPoW handles the peer outcome, including size-only disconnection.
         return;
     }
+
+    // Measure the original batch before either sync pass discards proofs or releases a different batch.
+    HeadersMessageSize received_size;
+    for (const auto& header : headers) received_size.Add(GetSerializeSize(header));
+    const bool full_batch{received_size.IsFull(m_opts.max_headers_result)};
 
     const CBlockIndex *pindexLast = nullptr;
 
@@ -2900,7 +2912,7 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
     {
         LOCK(peer.m_headers_sync_mutex);
 
-        already_validated_work = IsContinuationOfLowWorkHeadersSync(peer, pfrom, headers, start_height);
+        already_validated_work = IsContinuationOfLowWorkHeadersSync(peer, pfrom, headers, start_height, full_batch);
 
         // The headers we passed in may have been:
         // - untouched, perhaps if no headers-sync was in progress, or some
@@ -2962,7 +2974,7 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
     // Do anti-DoS checks to determine if we should process or store for later
     // processing.
     if (!already_validated_work && TryLowWorkHeadersSync(peer, pfrom,
-                chain_start_header, headers)) {
+                chain_start_header, headers, full_batch)) {
         // If we successfully started a low-work headers sync, then there
         // should be no headers to process any further.
         Assume(headers.empty());
@@ -2994,7 +3006,7 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
     }
 
     // Consider fetching more headers if we are not using our headers-sync mechanism.
-    if (nCount == m_opts.max_headers_result && !have_headers_sync) {
+    if (full_batch && !have_headers_sync) {
         // Headers message had its maximum size; the peer may have more headers.
         if (MaybeSendGetHeaders(pfrom, GetLocator(pindexLast), peer)) {
             LogDebug(BCLog::NET, "more getheaders (%d) to end to peer=%d (startheight:%d)\n",
@@ -3002,7 +3014,7 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
         }
     }
 
-    UpdatePeerStateForReceivedHeaders(pfrom, peer, *pindexLast, received_new_header, nCount == m_opts.max_headers_result);
+    UpdatePeerStateForReceivedHeaders(pfrom, peer, *pindexLast, received_new_header, full_batch);
 
     // Consider immediately downloading blocks.
     HeadersDirectFetchBlocks(pfrom, peer, *pindexLast);
@@ -4275,12 +4287,19 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
 
         // we must use CBlocks, as CBlockHeaders won't include the 0x00 nTx count at the end
         std::vector<CBlock> vHeaders;
-        int nLimit = m_opts.max_headers_result;
+        HeadersMessageSize response_size;
         LogDebug(BCLog::NET, "getheaders %d to %s from peer=%d\n", (pindex ? pindex->nHeight : -1), hashStop.IsNull() ? "end" : hashStop.ToString(), pfrom.GetId());
         for (; pindex; pindex = m_chainman.ActiveChain().Next(pindex))
         {
-            vHeaders.emplace_back(pindex->GetBlockHeader(m_chainman));
-            if (--nLimit <= 0 || pindex->GetBlockHash() == hashStop)
+            const auto result{pindex->GetBlockHeader(m_chainman)};
+            if (const auto* error = std::get_if<HeaderReadError>(&result)) {
+                LogDebug(BCLog::NET, "Cannot serve headers to peer=%d: %s\n", pfrom.GetId(), HeaderReadErrorString(*error));
+                pfrom.fDisconnect = true;
+                return;
+            }
+            vHeaders.emplace_back(std::get<CBlockHeader>(result));
+            response_size.Add(GetSerializeSize(vHeaders.back().GetBlockHeader()));
+            if (response_size.IsFull(m_opts.max_headers_result) || pindex->GetBlockHash() == hashStop)
                 break;
         }
         // pindex can be nullptr either if we sent m_chainman.ActiveChain().Tip() OR
@@ -4295,6 +4314,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         // without the new block. By resetting the BestHeaderSent, we ensure we
         // will re-announce the new block via headers (or compact blocks again)
         // in the SendMessages logic.
+        Assume(response_size.GetSize() <= MAX_PROTOCOL_MESSAGE_LENGTH);
         nodestate->pindexBestHeaderSent = pindex ? pindex : m_chainman.ActiveChain().Tip();
         MakeAndPushMessage(pfrom, NetMsgType::HEADERS, TX_WITH_WITNESS(vHeaders));
         return;
@@ -5641,6 +5661,7 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
             // add all to the inv queue.
             LOCK(peer->m_block_inv_mutex);
             std::vector<CBlock> vHeaders;
+            HeadersMessageSize announcement_size;
             bool fRevertToInv = ((!peer->m_prefers_headers &&
                                  (!state.m_requested_hb_cmpctblocks || peer->m_blocks_for_headers_relay.size() > 1)) ||
                                  peer->m_blocks_for_headers_relay.size() > MAX_BLOCKS_TO_ANNOUNCE);
@@ -5678,14 +5699,34 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                     pBestIndex = pindex;
                     if (fFoundStartingHeader) {
                         // add this to the headers message
-                        vHeaders.emplace_back(pindex->GetBlockHeader(m_chainman));
+                        const auto result{pindex->GetBlockHeader(m_chainman)};
+                        if (!std::holds_alternative<CBlockHeader>(result)) {
+                            fRevertToInv = true;
+                            break;
+                        }
+                        vHeaders.emplace_back(std::get<CBlockHeader>(result));
+                        announcement_size.Add(GetSerializeSize(vHeaders.back().GetBlockHeader()));
+                        if (announcement_size.IsFull()) {
+                            fRevertToInv = true;
+                            break;
+                        }
                     } else if (PeerHasHeader(&state, pindex)) {
                         continue; // keep looking for the first new block
                     } else if (pindex->pprev == nullptr || PeerHasHeader(&state, pindex->pprev)) {
                         // Peer doesn't have this header but they do have the prior one.
                         // Start sending headers.
                         fFoundStartingHeader = true;
-                        vHeaders.emplace_back(pindex->GetBlockHeader(m_chainman));
+                        const auto result{pindex->GetBlockHeader(m_chainman)};
+                        if (!std::holds_alternative<CBlockHeader>(result)) {
+                            fRevertToInv = true;
+                            break;
+                        }
+                        vHeaders.emplace_back(std::get<CBlockHeader>(result));
+                        announcement_size.Add(GetSerializeSize(vHeaders.back().GetBlockHeader()));
+                        if (announcement_size.IsFull()) {
+                            fRevertToInv = true;
+                            break;
+                        }
                     } else {
                         // Peer doesn't have this header or the prior one -- nothing will
                         // connect, so bail out.

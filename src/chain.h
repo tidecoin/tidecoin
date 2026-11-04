@@ -20,7 +20,13 @@
 #include <cassert>
 #include <cstdint>
 #include <string>
+#include <variant>
 #include <vector>
+
+/** A complete AuxPoW header requires its retained block-file data. */
+enum class HeaderReadError { NOT_DOWNLOADED, PRUNED, READ_ERROR };
+using BlockHeaderResult = std::variant<CBlockHeader, HeaderReadError>;
+const char* HeaderReadErrorString(HeaderReadError error);
 
 /**
  * Maximum amount of time that a block timestamp is allowed to exceed the
@@ -242,8 +248,8 @@ public:
         return block;
     }
 
-    // Auxpow-aware header retrieval (reads from disk if auxpow flag is set).
-    CBlockHeader GetBlockHeader(const ChainstateManager& chainman) const;
+    // AuxPoW-aware retrieval: callers must handle unavailable or unreadable proofs.
+    BlockHeaderResult GetBlockHeader(const ChainstateManager& chainman) const;
 
     uint256 GetBlockHash() const
     {

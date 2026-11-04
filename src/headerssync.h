@@ -173,7 +173,8 @@ public:
      *                   satisfies proof-of-work and AuxPoW activation checks
      *                   at its exact height (but not necessarily that the
      *                   proof-of-work target is the required difficulty).
-     * full_headers_message: true if the message was at max capacity,
+     * full_headers_message: true if the original wire batch reached its count
+     *                       or byte threshold, before any proofs were discarded,
      *                       indicating more headers may be available
      * ProcessingResult.pow_validated_headers: will be filled in with any
      *                       headers that the caller can fully process and

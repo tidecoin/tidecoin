@@ -3986,7 +3986,14 @@ bool CConnman::NodeFullyConnected(const CNode* pnode)
 void CConnman::PushMessage(CNode* pnode, CSerializedNetMsg&& msg)
 {
     AssertLockNotHeld(m_total_bytes_sent_mutex);
+    static_assert(uint64_t{MAX_PROTOCOL_MESSAGE_LENGTH} + 1 + CMessageHeader::MESSAGE_TYPE_SIZE <
+                  (uint64_t{1} << (8 * BIP324PQCipher::LENGTH_LEN)));
     size_t nMessageSize = msg.data.size();
+    if (nMessageSize > MAX_PROTOCOL_MESSAGE_LENGTH) {
+        LogError("Refusing oversized outgoing %s message (%u bytes) peer=%d", msg.m_type, nMessageSize, pnode->GetId());
+        pnode->fDisconnect = true;
+        return;
+    }
     LogDebug(BCLog::NET, "sending %s (%d bytes) peer=%d\n", msg.m_type, nMessageSize, pnode->GetId());
     if (gArgs.GetBoolArg("-capturemessages", false)) {
         CaptureMessage(pnode->addr, msg.m_type, msg.data, /*is_incoming=*/false);

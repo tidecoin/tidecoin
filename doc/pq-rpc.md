@@ -178,16 +178,13 @@ a non-blank wallet instead performs replacement-seed setup, as described above.
 ### `importpqhdseed`
 
 Import a 32-byte PQHD master seed (idempotent for existing seeds).
+Use seed bytes from your own private backup. The placeholder below must be
+replaced with those 32 bytes encoded as 64 hexadecimal characters; it is not a
+seed you can import as written. Do not use seeds copied from public examples for
+funded wallets. To generate new seed material, use `createpqhdseed` instead.
 
 ```bash
-tidecoin-cli -rpcwallet="<wallet>" importpqhdseed "<32_byte_seed_hex>"
-```
-
-Example:
-
-```bash
-tidecoin-cli -rpcwallet="<wallet>" importpqhdseed \
-  "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+tidecoin-cli -rpcwallet="<wallet>" importpqhdseed "<your_private_32_byte_seed_hex>"
 ```
 
 Returns derived `seed_id` and whether a new record was inserted.

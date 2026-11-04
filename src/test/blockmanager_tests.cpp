@@ -2,9 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <auxpow.h>
 #include <chain.h>
 #include <chainparams.h>
 #include <clientversion.h>
+#include <compat/compat.h>
 #include <node/blockstorage.h>
 #include <node/context.h>
 #include <node/kernel_notifications.h>
@@ -13,6 +15,11 @@
 #include <util/chaintype.h>
 #include <validation.h>
 #include <validationinterface.h>
+
+#ifdef WIN32
+#include <io.h>
+#include <winioctl.h>
+#endif
 
 #include <algorithm>
 #include <vector>
@@ -338,6 +345,130 @@ BOOST_FIXTURE_TEST_CASE(blockmanager_block_data_availability, TestChain100Setup)
     BOOST_CHECK_EQUAL(blockman.GetFirstBlock(tip, BLOCK_HAVE_DATA), first_available_block);
     BOOST_CHECK(blockman.CheckBlockDataAvailability(tip, *first_available_block));
     BOOST_CHECK(!blockman.CheckBlockDataAvailability(tip, *last_pruned_block));
+}
+
+BOOST_FIXTURE_TEST_CASE(block_header_prefix_read, TestingSetup)
+{
+    LOCK(cs_main);
+    auto& chainman = *m_node.chainman;
+    auto& blockman = chainman.m_blockman;
+    CBlockHeader header;
+    header.SetBaseVersion(2, Params().GetConsensus().nAuxpowChainId);
+    header.SetAuxpowVersion(true);
+    header.auxpow = std::make_shared<CAuxPow>();
+    // A multi-buffer proof. Its work is intentionally not checked during a disk read.
+    CMutableTransaction tx;
+    tx.vin.resize(1);
+    tx.vin[0].scriptSig.resize(9000);
+    DataStream proof;
+    proof << TX_WITH_WITNESS(MakeTransactionRef(tx)) << uint256{} << std::vector<uint256>{}
+          << int32_t{0} << std::vector<uint256>{} << int32_t{0} << CBlockHeader{};
+    proof >> *header.auxpow;
+    const auto hash = header.GetHash();
+    CBlockIndex index{header};
+    index.phashBlock = &hash;
+    index.nStatus |= BLOCK_HAVE_DATA;
+    index.nTx = 1;
+    DataStream encoded;
+    encoded << header;
+    const std::vector<std::byte> bytes{encoded.begin(), encoded.end()};
+    const auto expect_error = [&](HeaderReadError expected) {
+        const auto result = index.GetBlockHeader(chainman);
+        BOOST_REQUIRE(std::holds_alternative<HeaderReadError>(result));
+        BOOST_CHECK(std::get<HeaderReadError>(result) == expected);
+    };
+    // Exercise the existing XOR file API and positions above 32 bits without allocating a large file.
+    for (const uint64_t start : {uint64_t{0}, uint64_t{1} << 32}) {
+        index.nFile = start == 0 ? 77 : 78;
+        index.nDataPos = start + STORAGE_HEADER_BYTES;
+#ifdef WIN32
+        if (start != 0) {
+            auto file = blockman.OpenBlockFile({index.nFile, 0}, false);
+            FILE* raw_file = file.release();
+            BOOST_REQUIRE(raw_file != nullptr);
+            AutoFile owner{raw_file};
+            DWORD returned{0};
+            const bool sparse = DeviceIoControl(reinterpret_cast<HANDLE>(_get_osfhandle(_fileno(raw_file))),
+                                                FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &returned, nullptr) != 0;
+            BOOST_REQUIRE_EQUAL(owner.fclose(), 0);
+            if (!sparse) {
+                BOOST_TEST_MESSAGE("Skipping wide header position: filesystem does not support sparse files");
+                continue;
+            }
+        }
+#endif
+        const auto write = [&](uint32_t record_size, size_t actual_size, bool good_magic = true) EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
+            auto file = blockman.OpenBlockFile({index.nFile, start}, /*fReadOnly=*/false);
+            BOOST_REQUIRE(!file.IsNull());
+            auto magic = Params().MessageStart();
+            if (!good_magic) magic[0] ^= 1;
+            file << magic << record_size;
+            file.write(std::span{bytes}.first(actual_size));
+            BOOST_REQUIRE(file.Commit());
+            BOOST_REQUIRE(file.Truncate(start + STORAGE_HEADER_BYTES + actual_size));
+            BOOST_REQUIRE_EQUAL(file.fclose(), 0);
+        };
+        // Only the header exists at EOF, despite a large declared record. Old whole-block reads fail.
+        write(MAX_BLOCK_SERIALIZED_SIZE, bytes.size());
+        auto result = index.GetBlockHeader(chainman);
+        BOOST_REQUIRE(std::holds_alternative<CBlockHeader>(result));
+        DataStream read;
+        read << std::get<CBlockHeader>(result);
+        BOOST_CHECK(std::ranges::equal(read, bytes));
+        // Complete bytes exist after the claimed record boundary: they must not be consumed.
+        write(bytes.size() - 1, bytes.size());
+        expect_error(HeaderReadError::READ_ERROR);
+        write(bytes.size(), bytes.size() - 1);
+        expect_error(HeaderReadError::READ_ERROR);
+        write(79, bytes.size());
+        expect_error(HeaderReadError::READ_ERROR);
+        write(MAX_SIZE + 1, bytes.size());
+        expect_error(HeaderReadError::READ_ERROR);
+        write(bytes.size(), bytes.size(), false);
+        expect_error(HeaderReadError::READ_ERROR);
+        write(bytes.size(), bytes.size());
+        index.phashBlock = &uint256::ONE;
+        expect_error(HeaderReadError::READ_ERROR);
+        index.phashBlock = &hash;
+    }
+    index.nFile = 77;
+    index.nDataPos = STORAGE_HEADER_BYTES;
+    // A record can be large enough while its header exceeds the necessary header bound.
+    tx.vin[0].scriptSig.resize(MAX_BLOCK_HEADER_SIZE);
+    DataStream large_proof;
+    large_proof << TX_WITH_WITNESS(MakeTransactionRef(tx)) << uint256{} << std::vector<uint256>{}
+                << int32_t{0} << std::vector<uint256>{} << int32_t{0} << CBlockHeader{};
+    large_proof >> *header.auxpow;
+    BOOST_CHECK(IsOversizedAuxPowHeader(header));
+    {
+        auto file = blockman.OpenBlockFile({index.nFile, index.nDataPos - STORAGE_HEADER_BYTES}, false);
+        file << Params().MessageStart() << uint32_t(GetSerializeSize(header)) << header;
+        BOOST_REQUIRE_EQUAL(file.fclose(), 0);
+    }
+    expect_error(HeaderReadError::READ_ERROR);
+    // Equality is permitted by the necessary bound; complete block validity is separate.
+    tx.vin[0].scriptSig.resize(2 * MAX_BLOCK_HEADER_SIZE - GetSerializeSize(header));
+    DataStream exact_proof;
+    exact_proof << TX_WITH_WITNESS(MakeTransactionRef(tx)) << uint256{} << std::vector<uint256>{}
+                << int32_t{0} << std::vector<uint256>{} << int32_t{0} << CBlockHeader{};
+    exact_proof >> *header.auxpow;
+    BOOST_CHECK_EQUAL(GetSerializeSize(header), MAX_BLOCK_HEADER_SIZE);
+    BOOST_CHECK(!IsOversizedAuxPowHeader(header));
+    {
+        auto file = blockman.OpenBlockFile({index.nFile, index.nDataPos - STORAGE_HEADER_BYTES}, false);
+        file << Params().MessageStart() << uint32_t(GetSerializeSize(header)) << header;
+        BOOST_REQUIRE_EQUAL(file.fclose(), 0);
+    }
+    BOOST_CHECK(std::holds_alternative<CBlockHeader>(index.GetBlockHeader(chainman)));
+    index.nStatus &= ~BLOCK_HAVE_DATA;
+    index.nTx = 0;
+    expect_error(HeaderReadError::NOT_DOWNLOADED);
+    blockman.m_have_pruned = true;
+    index.nTx = 1;
+    expect_error(HeaderReadError::PRUNED);
+    // Ordinary header metadata remains reconstructible without stored block data.
+    index.nVersion = 1;
+    BOOST_CHECK(std::holds_alternative<CBlockHeader>(index.GetBlockHeader(chainman)));
 }
 
 BOOST_FIXTURE_TEST_CASE(blockmanager_readblock_hash_mismatch, TestingSetup)

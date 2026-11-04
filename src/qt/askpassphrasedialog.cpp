@@ -145,10 +145,10 @@ void AskPassphraseDialog::accept()
                                              "<qt>" +
                                              tr("Your wallet is now encrypted. ") + encryption_reminder +
                                              "<br><br><b>" +
-                                             tr("IMPORTANT: Any previous backups you have made of your wallet file "
-                                             "should be replaced with the newly generated, encrypted wallet file. "
-                                             "For security reasons, previous backups of the unencrypted wallet file "
-                                             "will become useless as soon as you start using the new, encrypted wallet.") +
+                                             tr("Make a new backup of your encrypted wallet. "
+                                             "Earlier backups still contain their old keys, but may lack newly generated keys. "
+                                             "Keep them until you have verified the new backup. "
+                                             "Unencrypted copies remain unencrypted.") +
                                              "</b></qt>");
                     } else {
                         QMessageBox::critical(this, tr("Wallet encryption failed"),
@@ -201,7 +201,8 @@ void AskPassphraseDialog::accept()
                 if(model->changePassphrase(oldpass, newpass1))
                 {
                     QMessageBox::information(this, tr("Wallet encrypted"),
-                                         tr("Wallet passphrase was successfully changed."));
+                                         tr("Wallet passphrase was successfully changed. Make a new wallet backup. "
+                                            "Existing encrypted backups still use their original passphrase."));
                     QDialog::accept(); // Success
                 }
                 else

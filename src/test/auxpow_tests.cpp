@@ -278,7 +278,9 @@ BOOST_FIXTURE_TEST_CASE(auxpow_blockheader_reads_auxpow, TestingSetup)
         index.nDataPos = pos.nPos;
     }
 
-    const CBlockHeader header = index.GetBlockHeader(chainman);
+    const auto result = index.GetBlockHeader(chainman);
+    BOOST_REQUIRE(std::holds_alternative<CBlockHeader>(result));
+    const auto& header = std::get<CBlockHeader>(result);
     BOOST_CHECK(header.IsAuxpow());
     BOOST_CHECK(header.auxpow);
     BOOST_CHECK_EQUAL(header.auxpow->getParentBlockHash(), block.auxpow->getParentBlockHash());

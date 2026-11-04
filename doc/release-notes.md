@@ -392,6 +392,17 @@ Subsidy schedule
 AuxPoW merged mining infrastructure
 ------------------------------------
 
+AuxPoW header replies use byte/count batching with matching continuation,
+including both header-sync passes. Large announcements fall back to inventory
+announcements, and outgoing messages exceeding the network limit are refused.
+Header retrieval reads only a bounded block-file prefix. Missing or pruned
+proofs return explicit raw RPC/REST errors; a P2P header range that cannot be
+served closes the connection so the requester can use another peer. No separate
+proof store is added. Verbose header metadata remains available. Oversized
+individual proof representations are refused without permanently rejecting the
+child hash. See [AuxPoW header synchronization](auxpow-header-sync.md) for the
+continuation convention and storage limits.
+
 Infrastructure for scrypt-based merged mining with Litecoin is implemented
 and available for activation:
 

@@ -1,5 +1,8 @@
 # Regtest AuxPoW activation
 
+See [AuxPoW header synchronization](auxpow-header-sync.md) for byte/count
+continuation, proof availability and pruning behavior.
+
 Regtest defaults to AuxPoW activation at height **0**, preserving its existing
 scrypt mining behavior. Override the height to test the mainnet-style yespower
 path or a transition between the two rule sets:

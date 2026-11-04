@@ -7,9 +7,11 @@
 #define BITCOIN_NET_PROCESSING_H
 
 #include <consensus/amount.h>
+#include <consensus/consensus.h>
 #include <net.h>
 #include <node/txorphanage.h>
 #include <protocol.h>
+#include <serialize.h>
 #include <threadsafety.h>
 #include <validationinterface.h>
 
@@ -43,9 +45,31 @@ static const bool DEFAULT_PEERBLOOMFILTERS = false;
 static const bool DEFAULT_PEERBLOCKFILTERS = false;
 /** Maximum number of outstanding CMPCTBLOCK requests for the same block. */
 static const unsigned int MAX_CMPCTBLOCKS_INFLIGHT_PER_BLOCK = 3;
-/** Number of headers sent in one getheaders result. We rely on the assumption that if a peer sends
- *  less than this number, we reached its tip. Changing this value is a protocol upgrade. */
+/** Count ceiling for a headers reply. A reply may also be full by serialized size. */
 static const unsigned int MAX_HEADERS_RESULTS = 2000;
+/** Stop after appending the header that reaches this complete payload size. */
+static constexpr size_t HEADERS_MESSAGE_SIZE_THRESHOLD{6'000'000};
+// One final header, its zero transaction count and a growing CompactSize count must fit.
+static_assert(HEADERS_MESSAGE_SIZE_THRESHOLD + MAX_BLOCK_HEADER_SIZE + 3 < MAX_PROTOCOL_MESSAGE_LENGTH);
+
+/** Canonical headers payload size, including list count and each zero transaction count. */
+class HeadersMessageSize
+{
+    size_t m_count{0};
+    size_t m_size{GetSizeOfCompactSize(0)};
+
+public:
+    void Add(size_t header_size)
+    {
+        m_size += header_size + 1 + GetSizeOfCompactSize(m_count + 1) - GetSizeOfCompactSize(m_count);
+        ++m_count;
+    }
+    size_t GetSize() const { return m_size; }
+    bool IsFull(size_t max_count = MAX_HEADERS_RESULTS) const
+    {
+        return m_count >= max_count || m_size >= HEADERS_MESSAGE_SIZE_THRESHOLD;
+    }
+};
 /** Maximum number of concurrent low-work headers presync peers during IBD. */
 static constexpr int MAX_LOW_WORK_HEADERS_SYNC_PEERS{2};
 

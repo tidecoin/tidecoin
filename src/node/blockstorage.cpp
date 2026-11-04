@@ -1120,32 +1120,46 @@ bool BlockManager::ReadBlock(CBlock& block, const CBlockIndex& index) const
     return true;
 }
 
-bool BlockManager::ReadBlockHeaderFromDisk(CBlockHeader& block, const CBlockIndex* pindex) const
+BlockHeaderResult BlockManager::ReadBlockHeaderFromDisk(const CBlockIndex& index) const
 {
-    if (pindex == nullptr) return false;
-    const FlatFilePos block_pos{WITH_LOCK(cs_main, return pindex->GetBlockPos())};
-
-    block.SetNull();
-    std::vector<std::byte> block_data;
-    if (!ReadRawBlock(block_data, block_pos)) {
-        return false;
+    FlatFilePos pos;
+    {
+        LOCK(cs_main);
+        if (!(index.nStatus & BLOCK_HAVE_DATA)) {
+            return IsBlockPruned(index) ? HeaderReadError::PRUNED : HeaderReadError::NOT_DOWNLOADED;
+        }
+        pos = index.GetBlockPos();
     }
 
+    // Decode only the header prefix, preserving the record boundary of the old SpanReader.
     try {
-        SpanReader{block_data} >> block;
+        if (pos.nPos < STORAGE_HEADER_BYTES) throw std::ios_base::failure("Invalid block position");
+        AutoFile file{OpenBlockFile({pos.nFile, pos.nPos - STORAGE_HEADER_BYTES}, /*fReadOnly=*/true)};
+        if (file.IsNull()) throw std::ios_base::failure("Cannot open block file");
+        MessageStartChars magic;
+        unsigned int record_size;
+        file >> magic >> record_size;
+        if (magic != GetParams().MessageStart() || record_size < 80 || record_size > MAX_SIZE) {
+            throw std::ios_base::failure("Invalid block storage header");
+        }
+        // Positions are relative to construction, after the storage prefix. Read-ahead is bounded.
+        BufferedFile reader{file, /*nBufSize=*/4096, /*nRewindIn=*/0};
+        if (!reader.SetLimit(std::min<size_t>(record_size, MAX_BLOCK_HEADER_SIZE))) {
+            throw std::ios_base::failure("Cannot set block header read limit");
+        }
+        CBlockHeader header;
+        reader >> header;
+        // Identity only: the child hash does not commit to the AuxPoW proof bytes.
+        if (header.GetHash() != index.GetBlockHash() || header.IsAuxpow() != bool(header.auxpow)) {
+            throw std::ios_base::failure("Block header does not match index");
+        }
+        return header;
     } catch (const std::exception& e) {
-        LogError("Deserialize or I/O error - %s at %s while reading block header", e.what(), block_pos.ToString());
-        return false;
+        LogError("Error reading block header at %s: %s", pos.ToString(), e.what());
+        LOCK(cs_main);
+        if (IsBlockPruned(index)) return HeaderReadError::PRUNED;
+        return HeaderReadError::READ_ERROR;
     }
-
-    const auto block_hash{block.GetHash()};
-    if (block_hash != pindex->GetBlockHash()) {
-        LogError("GetHash() doesn't match index at %s while reading block header (%s != %s)",
-                 block_pos.ToString(), block_hash.ToString(), pindex->GetBlockHash().ToString());
-        return false;
-    }
-
-    return true;
 }
 
 bool BlockManager::ReadRawBlock(std::vector<std::byte>& block, const FlatFilePos& pos) const
@@ -1418,21 +1432,20 @@ std::ostream& operator<<(std::ostream& os, const BlockfileCursor& cursor) {
 }
 } // namespace node
 
-// Auxpow headers cannot be reconstructed from CBlockIndex alone; read from disk when needed.
-CBlockHeader CBlockIndex::GetBlockHeader(const ChainstateManager& chainman) const
+const char* HeaderReadErrorString(HeaderReadError error)
 {
-    CBlockHeader block;
-    block.nVersion = nVersion;
-
-    if (block.IsAuxpow()) {
-        chainman.m_blockman.ReadBlockHeaderFromDisk(block, this);
-        return block;
+    switch (error) {
+    case HeaderReadError::NOT_DOWNLOADED: return "AuxPoW header not available (not fully downloaded)";
+    case HeaderReadError::PRUNED: return "AuxPoW header not available (pruned data)";
+    case HeaderReadError::READ_ERROR: return "Error reading AuxPoW header from disk";
     }
+    NONFATAL_UNREACHABLE();
+}
 
-    if (pprev) block.hashPrevBlock = pprev->GetBlockHash();
-    block.hashMerkleRoot = hashMerkleRoot;
-    block.nTime = nTime;
-    block.nBits = nBits;
-    block.nNonce = nNonce;
-    return block;
+// AuxPoW proofs cannot be reconstructed from index fields alone.
+BlockHeaderResult CBlockIndex::GetBlockHeader(const ChainstateManager& chainman) const
+{
+    CBlockHeader header{GetBlockHeader()};
+    if (header.IsAuxpow()) return chainman.m_blockman.ReadBlockHeaderFromDisk(*this);
+    return header;
 }
