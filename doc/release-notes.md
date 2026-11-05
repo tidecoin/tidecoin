@@ -423,6 +423,12 @@ is imposed on this cache.
 hexadecimal spellings of the same block hash. Successful `getauxblock`
 submissions advance the wallet's payout address regardless of hash spelling.
 
+Wallet-selected mining payouts are tied to the loaded wallet instance. Unloading
+a wallet clears its payout reservation, so loading a different wallet under the
+same name cannot reuse the old wallet's address. Previously issued work keeps its
+original payout and remains submittable under the template-retention rules above;
+submitting it does not clear a replacement wallet's new reservation.
+
 Mining and IPC reliability
 --------------------------
 

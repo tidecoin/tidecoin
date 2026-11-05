@@ -2,19 +2,26 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <rpc/protocol.h>
 #include <rpc/request.h>
+#include <rpc/util.h>
 #include <test/util/setup_common.h>
 #include <test/util/test_controls.h>
 #include <univalue.h>
+#include <wallet/context.h>
 #include <wallet/rpc/util.h>
+#include <wallet/test/util.h>
 #include <wallet/test/wallet_test_fixture.h>
 
 #include <boost/test/unit_test.hpp>
 
+#include <memory>
 #include <optional>
 #include <string>
 
 namespace wallet {
+RPCHelpMan getauxblock();
+
 static std::string TestWalletName(const std::string& endpoint, std::optional<std::string> parameter = std::nullopt)
 {
     JSONRPCRequest req;
@@ -23,6 +30,43 @@ static std::string TestWalletName(const std::string& endpoint, std::optional<std
 }
 
 BOOST_FIXTURE_TEST_SUITE(wallet_rpc_tests, BasicTestingSetup)
+
+BOOST_FIXTURE_TEST_CASE(mining_payout_unload_lifetime, WalletTestingSetup)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    WalletContext context;
+    context.args = &m_args;
+    context.chain = m_node.chain.get();
+    m_args.ForceSetArg("-keypool", "2");
+
+    JSONRPCRequest request;
+    request.context = &context;
+    request.strMethod = "getauxblock";
+    request.params = UniValue{UniValue::VARR};
+    // Mainnet's unconnected fixture refuses mining after selecting the payout.
+    // This also exercises reservation cleanup after an unsuccessful work request.
+    const auto request_work = [&] {
+        BOOST_CHECK_EXCEPTION(getauxblock().HandleRequest(request), UniValue, [](const UniValue& error) {
+            return error["code"].getInt<int>() == RPC_CLIENT_NOT_CONNECTED;
+        });
+    };
+
+    for (int i = 0; i < 3; ++i) {
+        auto wallet = TestLoadWallet(CreateMockableWalletDatabase(), context, WALLET_FLAG_DESCRIPTORS);
+        BOOST_REQUIRE(AddWallet(context, wallet));
+        BOOST_CHECK(wallet->NotifyUnload.empty());
+        request_work();
+        BOOST_CHECK_EQUAL(wallet->NotifyUnload.num_slots(), 1U);
+        request_work();
+        BOOST_CHECK_EQUAL(wallet->NotifyUnload.num_slots(), 1U);
+
+        const std::weak_ptr<CWallet> weak_wallet{wallet};
+        BOOST_CHECK(RemoveWallet(context, wallet, std::nullopt));
+        BOOST_CHECK(wallet->NotifyUnload.empty());
+        TestUnloadWallet(std::move(wallet));
+        BOOST_CHECK(weak_wallet.expired());
+    }
+}
 
 BOOST_FIXTURE_TEST_CASE(descriptor_expansion_reservation, WalletTestingSetup)
 {

@@ -17,25 +17,33 @@
 #include <wallet/scriptpubkeyman.h>
 #include <wallet/wallet.h>
 
+#include <boost/signals2/connection.hpp>
+
+#include <algorithm>
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
+#include <utility>
 
 namespace wallet {
 namespace {
 
 /**
- * Helper class that keeps track of reserved keys that are used for mining
- * coinbases. We also keep track of the block hash(es) that are based on the
- * key, so we can mark it as keep and get a fresh one once a block is submitted.
+ * Track a coinbase destination and its issued work for each loaded wallet.
+ * Reserve a fresh destination after a matching submission, and forget the
+ * reservation on unload without changing any already-issued block templates.
  */
 class ReservedKeysForMining
 {
 private:
+    using WalletRef = std::weak_ptr<CWallet>;
+
     struct PerWallet
     {
         CScript coinbase_script;
         std::set<uint256> block_hashes;
+        boost::signals2::scoped_connection unload_connection;
 
         explicit PerWallet(const CScript& script)
             : coinbase_script(script)
@@ -45,44 +53,68 @@ private:
         PerWallet(PerWallet&&) = default;
     };
 
-    std::map<std::string, PerWallet> data;
+    // Compare shared ownership, not wallet names or reusable object addresses.
+    // Neither the entries nor their unload callbacks keep a wallet alive.
+    std::map<WalletRef, PerWallet, std::owner_less<WalletRef>> data GUARDED_BY(cs);
 
 public:
     mutable RecursiveMutex cs;
     ReservedKeysForMining() = default;
 
-    CScript GetCoinbaseScript(CWallet* pwallet) EXCLUSIVE_LOCKS_REQUIRED(cs)
+    CScript GetCoinbaseScript(const std::shared_ptr<CWallet>& wallet, WalletContext& context) EXCLUSIVE_LOCKS_REQUIRED(cs)
     {
-        LOCK(pwallet->cs_wallet);
+        CScript script;
+        {
+            LOCK(wallet->cs_wallet);
 
-        const auto it = data.find(pwallet->GetName());
-        if (it != data.end()) {
-            return it->second.coinbase_script;
+            const auto it = data.find(wallet);
+            if (it != data.end()) {
+                if (wallet->IsMine(it->second.coinbase_script)) {
+                    return it->second.coinbase_script;
+                }
+                data.erase(it);
+            }
+
+            ReserveDestination rdest(wallet.get(), wallet->m_default_address_type);
+            auto op_dest = rdest.GetReservedDestination(false);
+            if (!op_dest) {
+                throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT,
+                                   "Error: Keypool ran out, please call keypoolrefill first");
+            }
+
+            rdest.KeepDestination();
+            script = GetScriptForDestination(*op_dest);
         }
 
-        ReserveDestination rdest(pwallet, pwallet->m_default_address_type);
-        auto op_dest = rdest.GetReservedDestination(false);
-        if (!op_dest) {
-            throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT,
-                               "Error: Keypool ran out, please call keypoolrefill first");
+        // Register before RemoveWallet can remove the wallet and emit NotifyUnload.
+        // Do not take wallets_mutex while holding cs_wallet. RemoveWallet emits
+        // the signal with neither of those locks held; its callback waits for cs,
+        // so an in-flight getauxblock finishes before its reservation is erased.
+        LOCK(context.wallets_mutex);
+        if (std::find(context.wallets.begin(), context.wallets.end(), wallet) == context.wallets.end()) {
+            throw JSONRPCError(RPC_WALLET_NOT_FOUND, "Wallet was unloaded");
         }
-
-        rdest.KeepDestination();
-        const CScript script = GetScriptForDestination(*op_dest);
-        data.emplace(pwallet->GetName(), PerWallet(script));
+        const WalletRef ref{wallet};
+        boost::signals2::scoped_connection unload_connection{wallet->NotifyUnload.connect([this, ref] {
+            LOCK(cs);
+            data.erase(ref);
+        })};
+        const auto [it, inserted] = data.try_emplace(ref, script);
+        CHECK_NONFATAL(inserted);
+        it->second.unload_connection = std::move(unload_connection);
         return script;
     }
 
-    void AddBlockHash(const CWallet* pwallet, const std::string& hash_hex) EXCLUSIVE_LOCKS_REQUIRED(cs)
+    void AddBlockHash(const std::shared_ptr<CWallet>& wallet, const std::string& hash_hex) EXCLUSIVE_LOCKS_REQUIRED(cs)
     {
-        const auto it = data.find(pwallet->GetName());
+        const auto it = data.find(wallet);
         CHECK_NONFATAL(it != data.end());
         it->second.block_hashes.insert(uint256::FromHex(hash_hex).value());
     }
 
-    void MarkBlockSubmitted(const CWallet* pwallet, const std::string& hash_hex) EXCLUSIVE_LOCKS_REQUIRED(cs)
+    void MarkBlockSubmitted(const std::shared_ptr<CWallet>& wallet, const std::string& hash_hex) EXCLUSIVE_LOCKS_REQUIRED(cs)
     {
-        const auto it = data.find(pwallet->GetName());
+        const auto it = data.find(wallet);
         if (it == data.end()) {
             return;
         }
@@ -151,9 +183,9 @@ RPCHelpMan getauxblock()
     node_request.context = node_context;
 
     if (request.params.empty()) {
-        const CScript coinbase_script = g_mining_keys.GetCoinbaseScript(pwallet);
+        const CScript coinbase_script = g_mining_keys.GetCoinbaseScript(wallet, wallet_context);
         UniValue res = AuxpowMiner::get().createAuxBlock(node_request, coinbase_script);
-        g_mining_keys.AddBlockHash(pwallet, res["hash"].get_str());
+        g_mining_keys.AddBlockHash(wallet, res["hash"].get_str());
         return res;
     }
 
@@ -162,7 +194,7 @@ RPCHelpMan getauxblock()
 
     const bool accepted = AuxpowMiner::get().submitAuxBlock(node_request, hash, request.params[1].get_str());
     if (accepted) {
-        g_mining_keys.MarkBlockSubmitted(pwallet, hash);
+        g_mining_keys.MarkBlockSubmitted(wallet, hash);
     }
 
     return accepted;

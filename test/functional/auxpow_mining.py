@@ -55,6 +55,7 @@ class AuxpowMiningTest(BitcoinTestFramework):
         self.test_getauxblock()
         self.test_create_submit_auxblock()
         self.test_cache_refresh()
+        self.test_wallet_payout_lifetime()
 
     def test_common(self, create, submit):
         """Common code for getauxblock and createauxblock/submitauxblock."""
@@ -232,6 +233,106 @@ class AuxpowMiningTest(BitcoinTestFramework):
         auxblock1 = self.nodes[0].createauxblock(addr1)
         auxblock2 = self.nodes[0].createauxblock(addr2)
         assert auxblock1["hash"] != auxblock2["hash"]
+
+    def test_wallet_payout_lifetime(self):
+        self.log.info("Check mining payouts across wallet replacement and reload")
+        node = self.nodes[0]
+        wallet_dir = node.wallets_path if node.wallets_path.is_dir() else node.chain_path
+        node.createwallet("aux-other")
+        other = node.get_wallet_rpc("aux-other")
+
+        def next_indices(wallet):
+            return {d["desc"]: d["next_index"] for d in wallet.listdescriptors()["descriptors"] if "next_index" in d}
+
+        def submit(work, submit_rpc):
+            proof = computeAuxpow(work["hash"], reverseHex(work["_target"]), True)
+            assert submit_rpc(work["hash"], proof)
+            self.sync_all()
+            assert_equal(node.getbestblockhash(), work["hash"])
+            return getCoinbaseAddr(node, work["hash"])
+
+        for change_tip in (False, True):
+            name = f"aux-reused-{int(change_tip)}"
+            old_name = name + "-old"
+            node.createwallet(name)
+            first = node.get_wallet_rpc(name)
+            old_work = first.getauxblock()
+            other_work = other.getauxblock()
+            other_indices = next_indices(other)
+
+            # Keep the old wallet's keys, but replace its name with a new wallet.
+            # Unload must finish: the payout cache must not keep the wallet alive.
+            first.unloadwallet()
+            (wallet_dir / name).rename(wallet_dir / old_name)
+            node.loadwallet(old_name)
+            old = node.get_wallet_rpc(old_name)
+            if change_tip:
+                self.generate(self.nodes[1], 1)
+            node.createwallet(name)
+            replacement = node.get_wallet_rpc(name)
+            work = replacement.getauxblock()
+            assert work["hash"] != old_work["hash"]
+            if not change_tip:
+                assert_equal(other.getauxblock(), other_work)
+            else:
+                other.getauxblock()
+            assert_equal(next_indices(other), other_indices)
+
+            # Failed submissions must not rotate the current reservation.
+            indices = next_indices(replacement)
+            assert_raises_rpc_error(-1, None, replacement.getauxblock, work["hash"], "x")
+            bad_proof = computeAuxpow(work["hash"], reverseHex(work["_target"]), False)
+            assert not replacement.getauxblock(work["hash"], bad_proof)
+            assert_equal(replacement.getauxblock(), work)
+            assert_equal(next_indices(replacement), indices)
+
+            if not change_tip:
+                # Previously issued work remains submittable with its original
+                # payout, even through the replacement wallet's endpoint.
+                address = submit(old_work, replacement.getauxblock)
+                assert old.getaddressinfo(address)["ismine"]
+                assert not replacement.getaddressinfo(address)["ismine"]
+                work = replacement.getauxblock()
+                assert_equal(next_indices(replacement), indices)
+            else:
+                # Observing a new tip keeps the existing template-retention rule.
+                assert_raises_rpc_error(-8, "block hash unknown", node.submitauxblock, old_work["hash"], "x")
+
+            # Node-level submission leaves the wallet reservation in place.
+            address = submit(work, node.submitauxblock)
+            assert replacement.getaddressinfo(address)["ismine"]
+            assert not old.getaddressinfo(address)["ismine"]
+            work = replacement.getauxblock()
+            assert_equal(next_indices(replacement), indices)
+            assert_equal(submit(work, replacement.getauxblock), address)
+
+            # Matching wallet submission rotates it; other wallets retain theirs.
+            work = replacement.getauxblock()
+            new_address = submit(work, replacement.getauxblock)
+            assert new_address != address
+            assert replacement.getaddressinfo(new_address)["ismine"]
+            other.getauxblock()
+            assert_equal(next_indices(other), other_indices)
+
+            # Reloading the same wallet forgets its reservation, but retains keys
+            # and old work. Submitting old work must not clear the new reservation.
+            pending = replacement.getauxblock()
+            replacement.unloadwallet()
+            node.loadwallet(name)
+            replacement = node.get_wallet_rpc(name)
+            fresh = replacement.getauxblock()
+            assert fresh["hash"] != pending["hash"]
+            indices = next_indices(replacement)
+            address = submit(pending, replacement.getauxblock)
+            assert replacement.getaddressinfo(address)["ismine"]
+            work = replacement.getauxblock()
+            assert_equal(next_indices(replacement), indices)
+            new_address = submit(work, replacement.getauxblock)
+            assert new_address != address
+            assert replacement.getaddressinfo(new_address)["ismine"]
+            replacement.unloadwallet()
+            old.unloadwallet()
+        other.unloadwallet()
 
     def test_cache_refresh(self):
         self.log.info("Check per-payout template refresh and retention until the next tip")
