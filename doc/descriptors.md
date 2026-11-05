@@ -92,6 +92,23 @@ public key derived from the private bytes; inconsistent pairs are rejected.
 `dumpprivkey TARGET {"format":"legacy"}` exports this v0.18.3 layout for
 Falcon-512. The default `privonly` export remains available for all five schemes.
 
+For an address target, `dumpprivkey` supports P2PKH, P2WPKH, P2SH-P2WPKH, and
+native `wsh512(pk(KEY))`. It resolves the key from the wallet's script, including
+PQHD-derived child keys. Multisig and other script addresses are not supported.
+A descriptor target must identify one distinct public key. It is rejected if it
+contains several public keys, even when the wallet holds only one matching
+private key. Single-key descriptors such as `wsh512(multi(1,KEY))`,
+`wsh512(pkh(KEY))`, conditional Miniscript, `wsh(pk(KEY))`, and
+`sh(wsh(pk(KEY)))` can still export their key by descriptor, although their
+addresses are unsupported targets. Export requires an unlocked wallet with that
+private key; a watch-only descriptor is insufficient.
+
+An unsupported or ambiguous address target known to the wallet returns error
+`-8`, as does a multi-key descriptor. A known single-key target without its
+private key returns `-4`; an address absent from the wallet also returns `-4`,
+with a distinct message. A locked encrypted wallet returns `-13` before resolving
+the target.
+
 ### 3) PQHD key expression
 
 Tidecoin descriptor wallets use `pqhd(...)`:

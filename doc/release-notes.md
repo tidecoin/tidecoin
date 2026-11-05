@@ -172,6 +172,20 @@ matches the key derived from the private bytes, before any wallet records are
 saved. The default private-only export is unchanged. These checks apply to new
 imports; they do not repair inconsistent key pairs already saved in a wallet.
 
+`dumpprivkey` supports native `wsh512(pk(KEY))` address targets, including
+PQHD-derived addresses. Descriptor targets now require one distinct public key:
+previously, a multi-key descriptor could export whichever key was the only
+private key held by the wallet. That case now returns error `-8`, regardless of
+whether the wallet holds none, one or several of the private keys.
+
+Other script-address targets remain unsupported. For a single-key script such
+as `wsh512(multi(1,KEY))`, `wsh512(pkh(KEY))`, conditional Miniscript,
+`wsh(pk(KEY))`, or `sh(wsh(pk(KEY)))`, use the wallet descriptor instead of its
+address. These descriptor exports remain supported. Unsupported or ambiguous
+address targets known to the wallet now return `-8` instead of incorrectly
+reporting that the wallet is watch-only or locked. Missing private keys return
+`-4`; a locked wallet returns `-13`. WIF formats are unchanged.
+
 Legacy and strict Falcon verification
 --------------------------------------
 

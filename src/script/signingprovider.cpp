@@ -5,7 +5,9 @@
 
 #include <script/interpreter.h>
 #include <script/signingprovider.h>
+#include <script/solver.h>
 
+#include <hash.h>
 #include <logging.h>
 
 const SigningProvider& DUMMY_SIGNING_PROVIDER = SigningProvider();
@@ -170,12 +172,24 @@ bool FillableSigningProvider::GetCScript(const CScriptID &hash, CScript& redeemS
 CKeyID GetKeyForDestination(const SigningProvider& store, const CTxDestination& dest)
 {
     // Only supports destinations which map to single public keys:
-    // P2PKH, P2WPKH, P2SH-P2WPKH
+    // P2PKH, P2WPKH, P2SH-P2WPKH, and native wsh512(pk(KEY)).
     if (auto id = std::get_if<PKHash>(&dest)) {
         return ToKeyID(*id);
     }
     if (auto witness_id = std::get_if<WitnessV0KeyHash>(&dest)) {
         return ToKeyID(*witness_id);
+    }
+    if (auto witness_hash = std::get_if<WitnessV1ScriptHash512>(&dest)) {
+        CScript script;
+        // The provider's lookup key is only a shortened index. Authenticate the
+        // complete witness commitment before choosing the key to export.
+        if (!store.GetCScript(CScriptID{RIPEMD160(*witness_hash)}, script) ||
+            WitnessV1ScriptHash512{script} != *witness_hash) return {};
+        std::vector<std::vector<unsigned char>> solutions;
+        if (Solver(script, solutions) != TxoutType::PUBKEY) return {};
+        const CPubKey pubkey{solutions[0]};
+        if (pubkey.IsFullyValid()) return pubkey.GetID();
+        return {};
     }
     if (auto script_hash = std::get_if<ScriptHash>(&dest)) {
         CScript script;

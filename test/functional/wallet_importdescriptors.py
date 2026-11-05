@@ -237,7 +237,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
         watch_addr = self.nodes[1].deriveaddresses(watch_desc)[0]
         assert_raises_rpc_error(
             -4,
-            "Private key not available (watch-only or locked)",
+            "Private key not available in wallet",
             w1.dumpprivkey,
             watch_addr,
         )

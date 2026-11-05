@@ -20,20 +20,11 @@
 #include <univalue.h>
 
 namespace wallet {
-static CKey GetSingleKeyFromProvider(const SigningProvider& provider, const CTxDestination& dest)
+static CKey GetSingleKeyFromProvider(const SigningProvider& provider, const CTxDestination& dest, bool& key_identified)
 {
     const CKeyID keyid = GetKeyForDestination(provider, dest);
-    if (keyid.IsNull()) {
-        // Some descriptor/provider paths don't expose enough script metadata for
-        // GetKeyForDestination (e.g. nested script wrappers), but still carry a
-        // single concrete private key. Export that deterministic single-key case.
-        if (const auto* flat_provider = dynamic_cast<const FlatSigningProvider*>(&provider)) {
-            if (flat_provider->keys.size() == 1) {
-                return flat_provider->keys.begin()->second;
-            }
-        }
-        return {};
-    }
+    if (keyid.IsNull()) return {};
+    key_identified = true;
     CKey key;
     if (!provider.GetKey(keyid, key)) {
         return {};
@@ -59,6 +50,9 @@ RPCHelpMan dumpprivkey()
     return RPCHelpMan{
         "dumpprivkey",
         "Returns the private key corresponding to an address or wallet descriptor.\n"
+        "Addresses must be P2PKH, P2WPKH, P2SH-P2WPKH, or native wsh512(pk(KEY)).\n"
+        "Other script addresses, including multisig, are not supported; use the wallet descriptor if it identifies a single key.\n"
+        "A descriptor must identify one distinct public key, regardless of how many private keys the wallet holds.\n"
         "Only per-address child keys are exported (no master seed export).\n",
         {
             {"target", RPCArg::Type::STR, RPCArg::Optional::NO, "The address or descriptor."},
@@ -95,8 +89,9 @@ RPCHelpMan dumpprivkey()
                 const auto spk_mans = pwallet->GetScriptPubKeyMans(script);
                 std::unique_ptr<SigningProvider> provider = pwallet->GetSolvingProvider(script);
                 CKey key;
+                bool key_identified{false};
                 if (provider) {
-                    key = GetSingleKeyFromProvider(*provider, dest);
+                    key = GetSingleKeyFromProvider(*provider, dest, key_identified);
                     if (!key.IsValid()) {
                         // Legacy solving providers intentionally omit private key access.
                         // Resolve via the owning legacy SPKM when destination->keyid is known.
@@ -116,10 +111,7 @@ RPCHelpMan dumpprivkey()
                         if (!desc_spk_man) continue;
                         std::unique_ptr<FlatSigningProvider> desc_provider = desc_spk_man->GetSigningProviderForScript(script, /*include_private=*/true);
                         if (!desc_provider) continue;
-                        const CKeyID keyid = GetKeyForDestination(*desc_provider, dest);
-                        if (!keyid.IsNull()) {
-                            desc_provider->GetKey(keyid, key);
-                        }
+                        key = GetSingleKeyFromProvider(*desc_provider, dest, key_identified);
                         if (key.IsValid()) break;
                     }
                 }
@@ -127,7 +119,10 @@ RPCHelpMan dumpprivkey()
                     if (!provider && spk_mans.empty()) {
                         throw JSONRPCError(RPC_WALLET_ERROR, "Private key not available (address not found in wallet)");
                     }
-                    throw JSONRPCError(RPC_WALLET_ERROR, "Private key not available (watch-only or locked)");
+                    if (!key_identified) {
+                        throw JSONRPCError(RPC_INVALID_PARAMETER, "Address does not resolve to a supported single-key script. Use a single-key wallet descriptor.");
+                    }
+                    throw JSONRPCError(RPC_WALLET_ERROR, "Private key not available in wallet");
                 }
                 if (format == "legacy") {
                     std::string legacy = EncodeSecretLegacy(key);
@@ -166,14 +161,16 @@ RPCHelpMan dumpprivkey()
                 LOCK(desc_spk_man->cs_desc_man);
                 keys = desc_spk_man->GetSigningProviderForIndex(static_cast<int32_t>(index), /*include_private=*/true);
             }
-            if (!keys || keys->keys.empty()) {
+            if (!keys || keys->pubkeys.empty()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Private key not available for descriptor");
             }
-            if (keys->keys.size() != 1) {
+            // Count all script keys, not just the private keys held here. A
+            // multisig with only one owned key is still ambiguous.
+            if (keys->pubkeys.size() != 1 || keys->keys.size() > 1) {
                 throw JSONRPCError(RPC_INVALID_PARAMETER, "Descriptor does not contain a single key");
             }
-            const CKey key = keys->keys.begin()->second;
-            if (!key.IsValid()) {
+            CKey key;
+            if (!keys->GetKey(keys->pubkeys.begin()->first, key) || !key.IsValid()) {
                 throw JSONRPCError(RPC_WALLET_ERROR, "Private key not available for descriptor");
             }
             if (format == "legacy") {

@@ -4,6 +4,7 @@
 
 
 #include <addresstype.h>
+#include <hash.h>
 #include <key.h>
 #include <key_io.h>
 #include <policy/policy.h>
@@ -346,6 +347,59 @@ BOOST_AUTO_TEST_CASE(script_standard_IsStandard_v1_scripthash_512)
     CScript invalid;
     invalid << OP_1 << std::vector<unsigned char>(63, 0x01);
     BOOST_CHECK(!IsStandard(invalid, which_type));
+}
+
+BOOST_AUTO_TEST_CASE(single_key_witness_v1_destination)
+{
+    for (const auto scheme : {pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_1024,
+                              pq::SchemeId::MLDSA_44, pq::SchemeId::MLDSA_65,
+                              pq::SchemeId::MLDSA_87}) {
+        CKey key, other;
+        key.MakeNewKey(scheme);
+        other.MakeNewKey(scheme);
+        const CPubKey pubkey{key.GetPubKey()};
+        const CPubKey other_pubkey{other.GetPubKey()};
+        const CScript script{GetScriptForRawPubKey(pubkey)};
+        const WitnessV1ScriptHash512 dest{script};
+        const CScriptID script_id{RIPEMD160(dest)};
+        FlatSigningProvider provider;
+        // A private key alone does not establish which script the address uses.
+        provider.keys.emplace(pubkey.GetID(), key);
+        BOOST_CHECK(GetKeyForDestination(provider, dest).IsNull());
+        provider.scripts.emplace(script_id, script);
+        BOOST_CHECK(GetKeyForDestination(provider, dest) == pubkey.GetID());
+        // Resolution depends on the committed script, not provider key count or order.
+        provider.keys.emplace(other_pubkey.GetID(), other);
+        BOOST_CHECK(GetKeyForDestination(provider, dest) == pubkey.GetID());
+        provider.keys.clear();
+        BOOST_CHECK(GetKeyForDestination(provider, dest) == pubkey.GetID());
+
+        provider.scripts[script_id] = GetScriptForRawPubKey(other_pubkey);
+        BOOST_CHECK(GetKeyForDestination(provider, dest).IsNull());
+        provider.scripts[script_id] = script;
+
+        CScript arbitrary{script};
+        arbitrary << OP_DROP << OP_TRUE;
+        for (const auto& unsupported : {
+                 GetScriptForMultisig(1, {pubkey}),
+                 GetScriptForMultisig(1, {pubkey, other_pubkey}),
+                 GetScriptForDestination(PKHash{pubkey}), arbitrary}) {
+            const WitnessV1ScriptHash512 unsupported_dest{unsupported};
+            provider.scripts[CScriptID{RIPEMD160(unsupported_dest)}] = unsupported;
+            provider.keys.emplace(pubkey.GetID(), key);
+            BOOST_CHECK(GetKeyForDestination(provider, unsupported_dest).IsNull());
+        }
+
+        // Wrapping does not turn native-only v1 into a supported export address.
+        const CScript wrapped{GetScriptForDestination(dest)};
+        provider.scripts[CScriptID{wrapped}] = wrapped;
+        BOOST_CHECK(GetKeyForDestination(provider, ScriptHash{wrapped}).IsNull());
+        BOOST_CHECK(GetKeyForDestination(provider, PKHash{pubkey}) == pubkey.GetID());
+        BOOST_CHECK(GetKeyForDestination(provider, WitnessV0KeyHash{pubkey}) == pubkey.GetID());
+        const CScript v0{GetScriptForDestination(WitnessV0KeyHash{pubkey})};
+        provider.scripts[CScriptID{v0}] = v0;
+        BOOST_CHECK(GetKeyForDestination(provider, ScriptHash{v0}) == pubkey.GetID());
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

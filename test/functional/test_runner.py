@@ -331,6 +331,7 @@ BASE_SCRIPTS = [
     'mempool_accept.py',
     'mempool_expiry.py',
     'wallet_importdescriptors.py',
+    'wallet_dumpprivkey.py',
     'wallet_legacy_wif.py',
     'wallet_crosschain.py',
     'mining_basic.py',
