@@ -17,7 +17,7 @@ from wallet_persistence import legacy_bdb
 from test_framework.address import base58_to_byte, key_to_p2pkh, key_to_p2sh_p2wpkh
 from test_framework.descriptors import descsum_create
 from test_framework.messages import hash256, ser_string
-from test_framework.script import CScript, OP_CHECKSIG
+from test_framework.script import CScript, OP_CHECKSIG, OP_DUP, OP_EQUALVERIFY, OP_HASH160, hash160
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error
 from test_framework.wallet_util import generate_keypair
@@ -189,6 +189,50 @@ class WalletMigrationTest(BitcoinTestFramework):
             assert_equal(path.read_bytes(), original)
             assert_equal(self.settings(), before)
 
+    def test_address_book_transfer(self):
+        self.log.info('Migrate address book entries and stored transactions with deletion deferred until commit')
+        node = self.nodes[0]
+        _, pub, _ = self.key_material()
+        address = key_to_p2pkh(pub)
+        encoded = address.encode()
+        watch_scripts = [CScript([pub, OP_CHECKSIG]), CScript([OP_DUP, OP_HASH160, hash160(pub), OP_EQUALVERIFY, OP_CHECKSIG])]
+        records = {ser_string(b'watchs') + ser_string(bytes(script)): b'1' for script in watch_scripts}
+        records[ser_string(b'name') + ser_string(encoded)] = ser_string(b'migrated label')
+        records[ser_string(b'purpose') + ser_string(encoded)] = ser_string(b'receive')
+        records[ser_string(b'destdata') + ser_string(encoded) + ser_string(b'rr1')] = ser_string(b'request')
+
+        # Get a real stored wallet transaction for the synthetic legacy fixture.
+        node.createwallet('address-source', disable_private_keys=True)
+        source = node.get_wallet_rpc('address-source')
+        assert source.importdescriptors([{'desc': descsum_create(f'pkh({pub.hex()})'), 'timestamp': 0}])[0]['success']
+        self.generatetoaddress(node, 1, address)
+        assert_equal(source.getwalletinfo()['txcount'], 1)
+        node.unloadwallet('address-source')
+        with closing(sqlite3.connect(node.wallets_path / 'address-source' / 'wallet.dat')) as db:
+            tx_records = {key: value for key, value in db.execute('SELECT key, value FROM main') if key.startswith(ser_string(b'tx'))}
+        assert_equal(len(tx_records), 1)
+        records.update(tx_records)
+
+        _, original = self.fixture('address-transfer', records)
+        result = node.migratewallet('address-transfer')
+        assert_equal(Path(result['backup_path']).read_bytes(), original)
+        wallet_name = result['wallet_name']
+        wallet = node.get_wallet_rpc(wallet_name)
+        assert_equal(wallet.getaddressinfo(address)['labels'], ['migrated label'])
+        assert_equal(wallet.getwalletinfo()['txcount'], 1)
+        node.unloadwallet(wallet_name)
+        with closing(sqlite3.connect(node.wallets_path / wallet_name / 'wallet.dat')) as db:
+            saved = dict(db.execute('SELECT key, value FROM main'))
+        for kind in [b'name', b'purpose']:
+            key = ser_string(kind) + ser_string(encoded)
+            assert_equal(saved[key], records[key])
+        key = ser_string(b'destdata') + ser_string(encoded) + ser_string(b'rr1')
+        assert_equal(saved[key], records[key])
+        node.loadwallet(wallet_name)
+        assert_equal(wallet.getaddressinfo(address)['labels'], ['migrated label'])
+        assert_equal(wallet.getwalletinfo()['txcount'], 1)
+        self.unload_migrated(result)
+
     def test_settings_write_failure(self):
         node = self.nodes[0]
         _, pub, _ = self.key_material()
@@ -268,6 +312,7 @@ class WalletMigrationTest(BitcoinTestFramework):
     def run_test(self):
         self.test_missing_locators()
         self.test_settings_cleanup()
+        self.test_address_book_transfer()
         self.test_settings_write_failure()
         self.test_pruned_history()
 

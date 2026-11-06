@@ -202,7 +202,11 @@ void AddressBookPage::on_deleteAddress_clicked()
     QModelIndexList indexes = table->selectionModel()->selectedRows();
     if(!indexes.isEmpty())
     {
-        table->model()->removeRow(indexes.at(0).row());
+        if (!table->model()->removeRow(indexes.at(0).row())) {
+            QMessageBox::critical(this, windowTitle(),
+                tr("Could not delete the address book entry. Please check the wallet's debug log."),
+                QMessageBox::Ok, QMessageBox::Ok);
+        }
     }
 }
 

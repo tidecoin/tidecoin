@@ -87,7 +87,10 @@ bool EditAddressDialog::saveCurrentRow()
         break;
     case EditReceivingAddress:
     case EditSendingAddress:
-        if(mapper->submit())
+        // QDataWidgetMapper does not propagate setData() failures from its
+        // delegate. Check the model's result before accepting the edit.
+        if(mapper->submit() && (model->getEditStatus() == AddressTableModel::OK ||
+                               model->getEditStatus() == AddressTableModel::NO_CHANGES))
         {
             address = ui->addressEdit->text();
         }
@@ -129,6 +132,11 @@ void EditAddressDialog::accept()
         case AddressTableModel::KEY_GENERATION_FAILURE:
             QMessageBox::critical(this, windowTitle(),
                 tr("New key generation failed."),
+                QMessageBox::Ok, QMessageBox::Ok);
+            break;
+        case AddressTableModel::ADDRESS_BOOK_FAILURE:
+            QMessageBox::critical(this, windowTitle(),
+                tr("Could not save the address book change. Please check the wallet's debug log."),
                 QMessageBox::Ok, QMessageBox::Ok);
             break;
 

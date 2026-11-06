@@ -218,7 +218,9 @@ public:
                  const std::function<void()>& before_begin, const std::function<void(std::string_view)>& after_write)
         : m_inner(std::move(inner)), m_failure(failure), m_before_begin(before_begin), m_after_write(after_write) {}
     void Close() override { m_inner->Close(); }
-    bool ErasePrefix(std::span<const std::byte> prefix) override { return m_inner->ErasePrefix(prefix); }
+    bool ErasePrefix(std::span<const std::byte> prefix) override {
+        return !m_failure.Reject("erase_prefix", Type(DataStream{prefix})) && m_inner->ErasePrefix(prefix);
+    }
     std::unique_ptr<DatabaseCursor> GetNewCursor() override { return m_inner->GetNewCursor(); }
     std::unique_ptr<DatabaseCursor> GetNewPrefixCursor(std::span<const std::byte> prefix) override {
         const auto type{Type(DataStream{prefix})};
@@ -277,6 +279,114 @@ struct PersistenceSetup : BasicTestingSetup {
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(wallet_persistence_tests, PersistenceSetup)
+
+BOOST_AUTO_TEST_CASE(address_book_deletion_failure_is_atomic)
+{
+    const CTxDestination address{WitnessV0KeyHash{GenerateRandomKey(pq::SchemeId::FALCON_512).GetPubKey()}};
+    size_t scenario{0};
+    for (const Failure& fault : {Failure{"begin"}, Failure{"erase_prefix", DBKeys::DESTDATA},
+                                Failure{"erase", DBKeys::PURPOSE}, Failure{"erase", DBKeys::NAME}, Failure{"commit"}}) {
+        BOOST_TEST_CONTEXT(fault.operation << " " << fault.record) {
+            const auto path{m_args.GetDataDirBase() / fs::PathFromString(strprintf("address-delete-%u", scenario++))};
+            auto wallet{Open(path)};
+            WITH_LOCK(wallet->cs_wallet, wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS | WALLET_FLAG_BLANK_WALLET));
+            BOOST_REQUIRE(wallet->SetAddressBook(address, "recipient", AddressPurpose::SEND));
+            // Exercise deletion of associated data too (for example, a migrated
+            // receive entry that no longer belongs to the original wallet).
+            {
+                WalletBatch batch{wallet->GetDatabase()};
+                LOCK(wallet->cs_wallet);
+                BOOST_REQUIRE(wallet->SetAddressReceiveRequest(batch, address, "1", "request"));
+            }
+            const auto records{ReadRecords(wallet->GetDatabase())};
+            int notifications{0};
+            boost::signals2::scoped_connection connection{wallet->NotifyAddressBookChanged.connect(
+                [&](const CTxDestination&, const std::string&, bool, AddressPurpose, ChangeType) { ++notifications; })};
+            Fault(*wallet) = fault;
+            BOOST_CHECK(!wallet->DelAddressBook(address));
+            BOOST_CHECK(Fault(*wallet).hit);
+            BOOST_CHECK_EQUAL(notifications, 0);
+            BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+            const auto check_entry = [&] {
+                LOCK(wallet->cs_wallet);
+                BOOST_REQUIRE_EQUAL(wallet->m_address_book.size(), 1U);
+                const auto& entry{wallet->m_address_book.at(address)};
+                BOOST_CHECK_EQUAL(entry.GetLabel(), "recipient");
+                BOOST_CHECK(entry.purpose == AddressPurpose::SEND);
+                BOOST_CHECK_EQUAL(entry.receive_requests.at("1"), "request");
+            };
+            check_entry();
+            connection.disconnect();
+            wallet.reset();
+            wallet = Open(path);
+            check_entry();
+            BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+            // The same operation must be retryable after reopening.
+            BOOST_REQUIRE(wallet->DelAddressBook(address));
+            wallet.reset();
+            wallet = Open(path);
+            BOOST_CHECK(WITH_LOCK(wallet->cs_wallet, return wallet->m_address_book.empty()));
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(address_book_deletion_published_only_on_commit)
+{
+    const auto path{m_args.GetDataDirBase() / "address-delete-commit"};
+    auto wallet{Open(path)};
+    const CTxDestination address{WitnessV0KeyHash{GenerateRandomKey(pq::SchemeId::FALCON_512).GetPubKey()}};
+    WITH_LOCK(wallet->cs_wallet, wallet->SetWalletFlag(WALLET_FLAG_DESCRIPTORS | WALLET_FLAG_BLANK_WALLET));
+    BOOST_REQUIRE(wallet->SetAddressBook(address, "recipient", AddressPurpose::SEND));
+    const auto records{ReadRecords(wallet->GetDatabase())};
+    int notifications{0};
+    boost::signals2::scoped_connection connection{wallet->NotifyAddressBookChanged.connect(
+        [&](const CTxDestination& dest, const std::string& label, bool is_mine, AddressPurpose purpose, ChangeType status) {
+            ++notifications;
+            BOOST_CHECK(dest == address);
+            BOOST_CHECK(label.empty());
+            BOOST_CHECK(!is_mine);
+            BOOST_CHECK(purpose == AddressPurpose::SEND);
+            BOOST_CHECK(status == CT_DELETED);
+            BOOST_CHECK(WITH_LOCK(wallet->cs_wallet, return wallet->m_address_book.empty()));
+        })};
+    for (const bool throws : {false, true}) {
+        try {
+            LOCK(wallet->cs_wallet);
+            BOOST_CHECK(!RunWithinTxn(wallet->GetDatabase(), "abort address deletion", [&](WalletBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(wallet->cs_wallet) {
+                BOOST_REQUIRE(wallet->DelAddressBookWithDB(batch, address));
+                BOOST_CHECK(wallet->m_address_book.contains(address));
+                BOOST_CHECK_EQUAL(notifications, 0);
+                if (throws) throw std::runtime_error("abort after deletion");
+                return false;
+            }));
+            BOOST_CHECK(!throws);
+        } catch (const std::runtime_error& e) {
+            BOOST_CHECK(throws);
+            BOOST_CHECK_EQUAL(e.what(), "abort after deletion");
+        }
+        BOOST_CHECK_EQUAL(notifications, 0);
+        BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
+        BOOST_CHECK(WITH_LOCK(wallet->cs_wallet, return wallet->m_address_book.contains(address)));
+    }
+    {
+        LOCK(wallet->cs_wallet);
+        WalletBatch batch{wallet->GetDatabase()};
+        BOOST_REQUIRE(batch.TxnBegin());
+        BOOST_REQUIRE(wallet->DelAddressBookWithDB(batch, address));
+        BOOST_CHECK(wallet->m_address_book.contains(address));
+        BOOST_CHECK_EQUAL(notifications, 0);
+        BOOST_REQUIRE(batch.TxnCommit());
+        BOOST_CHECK(wallet->m_address_book.empty());
+    }
+    BOOST_CHECK_EQUAL(notifications, 1);
+    connection.disconnect();
+    const auto deleted{ReadRecords(wallet->GetDatabase())};
+    BOOST_CHECK(deleted.size() + 2 == records.size()); // Name and purpose.
+    wallet.reset();
+    wallet = Open(path);
+    BOOST_CHECK(WITH_LOCK(wallet->cs_wallet, return wallet->m_address_book.empty()));
+    BOOST_CHECK(deleted == ReadRecords(wallet->GetDatabase()));
+}
 
 BOOST_AUTO_TEST_CASE(migration_locator_absence_corruption_and_read_errors)
 {

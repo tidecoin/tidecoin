@@ -656,6 +656,9 @@ Wallet and GUI
   Metal backend.
 - Legacy BDB wallets require migration to descriptor wallets using `migratewallet`.
   See [wallet migration instructions](managing-wallets.md).
+- Address-book deletions update the wallet and GUI only after the database
+  transaction commits. Failed deletions preserve the entry, and the GUI reports
+  the failure instead of reporting success or proceeding with an address replacement.
 - The wallet supports TRUC transactions.
 - Fee estimates include the full redeem-script push header for P2SH inputs,
   including larger PQ single-key and multisignature scripts.

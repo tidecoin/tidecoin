@@ -285,7 +285,10 @@ bool AddressTableModel::setData(const QModelIndex &index, const QVariant &value,
             else if(rec->type == AddressTableEntry::Sending)
             {
                 // Remove old entry
-                walletModel->wallet().delAddressBook(curAddress);
+                if (!walletModel->wallet().delAddressBook(curAddress)) {
+                    editStatus = ADDRESS_BOOK_FAILURE;
+                    return false;
+                }
                 // Add new entry with new address
                 walletModel->wallet().setAddressBook(newAddress, value.toString().toStdString(), purpose);
             }
@@ -444,8 +447,9 @@ bool AddressTableModel::removeRows(int row, int count, const QModelIndex &parent
         // Also refuse to remove receiving addresses.
         return false;
     }
-    walletModel->wallet().delAddressBook(DecodeDestination(rec->address.toStdString()));
-    return true;
+    const bool removed = walletModel->wallet().delAddressBook(DecodeDestination(rec->address.toStdString()));
+    editStatus = removed ? OK : ADDRESS_BOOK_FAILURE;
+    return removed;
 }
 
 QString AddressTableModel::labelForAddress(const QString &address) const

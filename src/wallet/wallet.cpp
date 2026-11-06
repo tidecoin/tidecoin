@@ -3090,47 +3090,47 @@ bool CWallet::SetAddressBook(const CTxDestination& address, const std::string& s
 
 bool CWallet::DelAddressBook(const CTxDestination& address)
 {
-    return RunWithinTxn(GetDatabase(), /*process_desc=*/"address book entry removal", [&](WalletBatch& batch){
+    LOCK(cs_wallet);
+    return RunWithinTxn(GetDatabase(), /*process_desc=*/"address book entry removal", [&](WalletBatch& batch) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
         return DelAddressBookWithDB(batch, address);
     });
 }
 
 bool CWallet::DelAddressBookWithDB(WalletBatch& batch, const CTxDestination& address)
 {
+    AssertLockHeld(cs_wallet);
+    assert(batch.HasActiveTxn());
     const std::string& dest = EncodeDestination(address);
-    {
-        LOCK(cs_wallet);
-        // If we want to delete receiving addresses, we should avoid calling EraseAddressData because it will delete the previously_spent value. Could instead just erase the label so it becomes a change address, and keep the data.
-        // NOTE: This isn't a problem for sending addresses because they don't have any data that needs to be kept.
-        // When adding new address data, it should be considered here whether to retain or delete it.
-        if (IsMine(address)) {
-            WalletLogPrintf("%s called with IsMine address, NOT SUPPORTED. Please report this bug! %s\n", __func__, CLIENT_BUGREPORT);
-            return false;
-        }
-        // Delete data rows associated with this address
-        if (!batch.EraseAddressData(address)) {
-            WalletLogPrintf("Error: cannot erase address book entry data\n");
-            return false;
-        }
-
-        // Delete purpose entry
-        if (!batch.ErasePurpose(dest)) {
-            WalletLogPrintf("Error: cannot erase address book entry purpose\n");
-            return false;
-        }
-
-        // Delete name entry
-        if (!batch.EraseName(dest)) {
-            WalletLogPrintf("Error: cannot erase address book entry name\n");
-            return false;
-        }
-
-        // finally, remove it from the map
-        m_address_book.erase(address);
+    // If we want to delete receiving addresses, we should avoid calling EraseAddressData because it will delete the previously_spent value. Could instead just erase the label so it becomes a change address, and keep the data.
+    // NOTE: This isn't a problem for sending addresses because they don't have any data that needs to be kept.
+    // When adding new address data, it should be considered here whether to retain or delete it.
+    if (IsMine(address)) {
+        WalletLogPrintf("%s called with IsMine address, NOT SUPPORTED. Please report this bug! %s\n", __func__, CLIENT_BUGREPORT);
+        return false;
+    }
+    // Delete data rows associated with this address
+    if (!batch.EraseAddressData(address)) {
+        WalletLogPrintf("Error: cannot erase address book entry data\n");
+        return false;
     }
 
-    // All good, signal changes
-    NotifyAddressBookChanged(address, "", /*is_mine=*/false, AddressPurpose::SEND, CT_DELETED);
+    // Delete purpose entry
+    if (!batch.ErasePurpose(dest)) {
+        WalletLogPrintf("Error: cannot erase address book entry purpose\n");
+        return false;
+    }
+
+    // Delete name entry
+    if (!batch.EraseName(dest)) {
+        WalletLogPrintf("Error: cannot erase address book entry name\n");
+        return false;
+    }
+
+    // Publish the removal only after the surrounding transaction commits.
+    batch.RegisterTxnListener({.on_commit = [this, address]() EXCLUSIVE_LOCKS_REQUIRED(cs_wallet) {
+        m_address_book.erase(address);
+        NotifyAddressBookChanged(address, "", /*is_mine=*/false, AddressPurpose::SEND, CT_DELETED);
+    }, .on_abort = {}});
     return true;
 }
 
@@ -5408,8 +5408,10 @@ util::Result<void> CWallet::ApplyMigrationData(WalletBatch& local_wallet_batch, 
     // This wallet will be discarded at the end of the process. Only wallets that contain the
     // migrated records will be presented to the user.
     if (!has_spendable_material) {
-        if (!m_address_book.empty()) return util::Error{_("Error: Not all address book records were migrated")};
-        if (!mapWallet.empty()) return util::Error{_("Error: Not all transaction records were migrated")};
+        // Both removals are published at commit. Each existing record is visited
+        // once above, so every record must have been scheduled for deletion.
+        if (m_address_book.size() != dests_to_delete.size()) return util::Error{_("Error: Not all address book records were migrated")};
+        if (mapWallet.size() != txids_to_delete.size()) return util::Error{_("Error: Not all transaction records were migrated")};
     }
 
     return {}; // all good

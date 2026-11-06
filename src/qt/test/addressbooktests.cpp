@@ -9,6 +9,7 @@
 #include <interfaces/chain.h>
 #include <interfaces/node.h>
 #include <qt/addressbookpage.h>
+#include <qt/addresstablemodel.h>
 #include <qt/clientmodel.h>
 #include <qt/editaddressdialog.h>
 #include <qt/optionsmodel.h>
@@ -32,13 +33,26 @@
 
 using wallet::AddWallet;
 using wallet::CWallet;
-using wallet::CreateMockableWalletDatabase;
 using wallet::RemoveWallet;
 using wallet::WALLET_FLAG_DESCRIPTORS;
 using wallet::WalletContext;
 
 namespace
 {
+
+class AddressBookFailDatabase : public wallet::MockableDatabase
+{
+    class Batch : public wallet::MockableBatch {
+        const bool& m_fail_commit;
+    public:
+        Batch(wallet::MockableData& records, bool pass, const bool& fail_commit)
+            : MockableBatch(records, pass), m_fail_commit(fail_commit) {}
+        bool TxnCommit() override { return !m_fail_commit && MockableBatch::TxnCommit(); }
+    };
+public:
+    bool fail_commit{false};
+    std::unique_ptr<wallet::DatabaseBatch> MakeBatch() override { return std::make_unique<Batch>(m_records, m_pass, fail_commit); }
+};
 
 /**
  * Fill the edit address dialog box with data, submit it, and ensure that
@@ -76,7 +90,9 @@ void TestAddAddressesToSendBook(interfaces::Node& node)
     auto wallet_loader = interfaces::MakeWalletLoader(*test.m_node.chain, *Assert(test.m_node.args));
     test.m_node.wallet_loader = wallet_loader.get();
     node.setContext(&test.m_node);
-    const std::shared_ptr<CWallet> wallet = std::make_shared<CWallet>(node.context()->chain.get(), "", CreateMockableWalletDatabase());
+    auto database = std::make_unique<AddressBookFailDatabase>();
+    auto& db = *database;
+    const std::shared_ptr<CWallet> wallet = std::make_shared<CWallet>(node.context()->chain.get(), "", std::move(database));
     // Address-book behavior does not depend on the default keypool size.
     wallet->m_keypool_size = 4;
     wallet->LoadWallet();
@@ -209,6 +225,57 @@ void TestAddAddressesToSendBook(interfaces::Node& node)
 
     search_line->setText("");
     QCOMPARE(table_view->model()->rowCount(), 3);
+
+    // A failed delete must leave disk, wallet and model unchanged, and editing
+    // must not add a replacement after failing to remove the original address.
+    auto* model = walletModel.getAddressTableModel();
+    const auto [replacement_dest, replacement_address] = build_address();
+    const auto records = db.m_records;
+    for (bool fail_commit : {false, true}) {
+        db.m_pass = fail_commit; // Otherwise fail at begin.
+        db.fail_commit = fail_commit;
+        const int row = model->lookupAddress(preexisting_s_address);
+        QVERIFY(row >= 0);
+        QVERIFY(!model->removeRows(row, 1));
+        QCOMPARE(model->getEditStatus(), AddressTableModel::ADDRESS_BOOK_FAILURE);
+        QVERIFY(!model->setData(model->index(row, AddressTableModel::Address, {}), replacement_address, Qt::EditRole));
+        QCOMPARE(model->getEditStatus(), AddressTableModel::ADDRESS_BOOK_FAILURE);
+        QVERIFY(db.m_records == records);
+        {
+            LOCK(wallet->cs_wallet);
+            QVERIFY(wallet->m_address_book.contains(s_key_dest));
+            QVERIFY(!wallet->m_address_book.contains(replacement_dest));
+        }
+        QApplication::processEvents();
+        QCOMPARE(table_view->model()->rowCount(), 3);
+        QCOMPARE(model->labelForAddress(preexisting_s_address), s_label);
+
+        EditAddressDialog edit(EditAddressDialog::EditSendingAddress);
+        edit.setModel(model);
+        edit.loadRow(row);
+        EditAddressAndSubmit(&edit, s_label, replacement_address,
+            QString("Could not save the address book change. Please check the wallet's debug log."));
+        QCOMPARE(edit.result(), int(QDialog::Rejected));
+
+        search_line->setText(preexisting_s_address);
+        table_view->selectRow(0);
+        QString warning;
+        ConfirmMessage(&warning, 0ms);
+        QVERIFY(QMetaObject::invokeMethod(&address_book, "on_deleteAddress_clicked"));
+        QCOMPARE(warning, QString("Could not delete the address book entry. Please check the wallet's debug log."));
+        QVERIFY(db.m_records == records);
+        QCOMPARE(table_view->model()->rowCount(), 1);
+        search_line->setText("");
+    }
+    db.m_pass = true;
+    db.fail_commit = false;
+    QVERIFY(model->removeRows(model->lookupAddress(preexisting_s_address), 1));
+    QCOMPARE(model->getEditStatus(), AddressTableModel::OK);
+    QApplication::processEvents();
+    QCOMPARE(table_view->model()->rowCount(), 2);
+    QCOMPARE(model->lookupAddress(preexisting_s_address), -1);
+    check_addbook_size(3);
+    QVERIFY(!walletModel.wallet().getAddress(s_key_dest, nullptr, nullptr));
 }
 
 } // namespace
