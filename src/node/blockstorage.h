@@ -30,6 +30,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -65,7 +66,14 @@ public:
     //! True if no block entries exist, or the expected genesis is present.
     bool CheckGenesisBlock(const uint256& genesis_hash);
     bool WriteBatchSync(const std::vector<std::pair<int, const CBlockFileInfo*>>& fileInfo, int nLastFile, const std::vector<const CBlockIndex*>& blockinfo);
+    //! An existing record beyond MAX_BLOCKFILE_ENTRIES throws BlockFileLimitError.
     bool ReadBlockFileInfo(int nFile, CBlockFileInfo& info);
+    class InvalidLastBlockFile : public dbwrapper_error
+    {
+    public:
+        using dbwrapper_error::dbwrapper_error;
+    };
+    //! False only if absent; malformed/negative values and unsupported file numbers throw.
     bool ReadLastBlockFile(int& nFile);
     bool WriteReindexing(bool fReindexing);
     void ReadReindexing(bool& fReindexing);
@@ -85,6 +93,19 @@ static const unsigned int BLOCKFILE_CHUNK_SIZE = 0x1000000; // 16 MiB
 static const unsigned int UNDOFILE_CHUNK_SIZE = 0x100000; // 1 MiB
 /** The maximum size of a blk?????.dat file (since 0.8) */
 static const unsigned int MAX_BLOCKFILE_SIZE = 0x8000000; // 128 MiB
+
+/** Local resource limit, not a consensus or database-format rule. Bounds file
+ * metadata entries to about 48 MiB on 64-bit builds, plus vector spare capacity,
+ * representing up to 128 TiB of normal-sized block files over their lifetime
+ * (including pruned files). */
+static constexpr int MAX_BLOCKFILE_ENTRIES{1 << 20};
+
+//! Unsupported file number: stored metadata may be corrupt; actual file growth must stop.
+class BlockFileLimitError : public std::runtime_error
+{
+public:
+    explicit BlockFileLimitError(int file_num);
+};
 
 /** Size of header written by WriteBlock before a serialized CBlock (8 bytes) */
 static constexpr uint32_t STORAGE_HEADER_BYTES{std::tuple_size_v<MessageStartChars> + sizeof(unsigned int)};

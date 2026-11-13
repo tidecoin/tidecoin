@@ -7,7 +7,9 @@
 #include <chainparams.h>
 #include <clientversion.h>
 #include <compat/compat.h>
+#include <kernel/notifications_interface.h>
 #include <node/blockstorage.h>
+#include <node/chainstate.h>
 #include <node/context.h>
 #include <node/kernel_notifications.h>
 #include <script/solver.h>
@@ -23,6 +25,8 @@
 #endif
 
 #include <algorithm>
+#include <array>
+#include <limits>
 #include <vector>
 
 #include <boost/test/unit_test.hpp>
@@ -116,6 +120,295 @@ BOOST_AUTO_TEST_CASE(database_format_version)
         BOOST_REQUIRE(db.Write(std::make_pair(uint8_t{'b'}, Params().GetConsensus().hashGenesisBlock), uint8_t{0}));
         BOOST_CHECK(db.CheckGenesisBlock(Params().GetConsensus().hashGenesisBlock));
     }
+}
+
+BOOST_AUTO_TEST_CASE(last_block_file_record)
+{
+    node::BlockTreeDB db{{.path = "", .cache_bytes = 1 << 20, .memory_only = true}};
+    constexpr uint8_t key{'l'};
+    int file_num{123};
+    BOOST_CHECK(!db.ReadLastBlockFile(file_num));
+    BOOST_CHECK_EQUAL(file_num, 123);
+    for (const int valid : {0, 42, node::MAX_BLOCKFILE_ENTRIES - 1}) {
+        BOOST_REQUIRE(db.Write(key, valid));
+        BOOST_REQUIRE(db.ReadLastBlockFile(file_num));
+        BOOST_CHECK_EQUAL(file_num, valid);
+    }
+    const auto check_malformed = [&] {
+        file_num = 123;
+        BOOST_CHECK_THROW(db.ReadLastBlockFile(file_num), node::BlockTreeDB::InvalidLastBlockFile);
+        BOOST_CHECK_EQUAL(file_num, 123);
+    };
+    BOOST_REQUIRE(db.Write(key, std::array<uint8_t, 0>{}));
+    check_malformed();
+    BOOST_REQUIRE(db.Write(key, uint8_t{0}));
+    check_malformed();
+    BOOST_REQUIRE(db.Write(key, std::array<uint8_t, 3>{}));
+    check_malformed();
+    BOOST_REQUIRE(db.Write(key, std::array<uint8_t, 5>{}));
+    check_malformed();
+    for (const int invalid : {-1, -2, std::numeric_limits<int>::min()}) {
+        BOOST_REQUIRE(db.Write(key, invalid));
+        check_malformed();
+    }
+    for (const int excessive : {node::MAX_BLOCKFILE_ENTRIES, 500'000'000, std::numeric_limits<int>::max()}) {
+        BOOST_REQUIRE(db.Write(key, excessive));
+        BOOST_CHECK_THROW(db.ReadLastBlockFile(file_num), node::BlockFileLimitError);
+        BOOST_CHECK_EQUAL(file_num, 123);
+    }
+
+    // Exercise the forward scan's boundary without allocating a million entries.
+    CBlockFileInfo info;
+    BOOST_REQUIRE(db.Write(std::make_pair(uint8_t{'f'}, node::MAX_BLOCKFILE_ENTRIES - 1), info));
+    BOOST_CHECK(db.ReadBlockFileInfo(node::MAX_BLOCKFILE_ENTRIES - 1, info));
+    BOOST_CHECK(!db.ReadBlockFileInfo(node::MAX_BLOCKFILE_ENTRIES, info));
+    BOOST_REQUIRE(db.Write(std::make_pair(uint8_t{'f'}, node::MAX_BLOCKFILE_ENTRIES), info));
+    BOOST_CHECK_THROW(db.ReadBlockFileInfo(node::MAX_BLOCKFILE_ENTRIES, info), node::BlockFileLimitError);
+    // A malformed boundary record is not mistaken for the end of the scan.
+    BOOST_REQUIRE(db.Write(std::make_pair(uint8_t{'f'}, node::MAX_BLOCKFILE_ENTRIES), uint8_t{0}));
+    BOOST_CHECK_THROW(db.ReadBlockFileInfo(node::MAX_BLOCKFILE_ENTRIES, info), node::BlockFileLimitError);
+}
+
+BOOST_AUTO_TEST_CASE(last_block_file_loading)
+{
+    kernel::Notifications notifications;
+    const BlockManager::Options opts{
+        .chainparams = Params(),
+        .blocks_dir = m_args.GetBlocksDirPath(),
+        .notifications = notifications,
+        .block_tree_db_params = DBParams{.path = "", .cache_bytes = 1 << 20, .memory_only = true},
+    };
+    BlockManager blockman{*Assert(m_node.shutdown_signal), opts};
+    auto& db = *blockman.m_block_tree_db;
+    LOCK(cs_main);
+    BOOST_REQUIRE(blockman.LoadBlockIndexDB(std::nullopt));
+    BOOST_CHECK_THROW(blockman.GetBlockFileInfo(1), std::out_of_range);
+
+    CBlockFileInfo info;
+    info.nSize = 42;
+    const CBlockFileInfo pruned;
+    BOOST_REQUIRE(db.WriteBatchSync({{0, &info}, {1, &pruned}, {2, &info}}, 2, {}));
+    BOOST_REQUIRE(db.Erase(uint8_t{'l'}));
+    BOOST_REQUIRE(blockman.LoadBlockIndexDB(std::nullopt));
+    BOOST_CHECK_THROW(blockman.GetBlockFileInfo(3), std::out_of_range);
+    BOOST_CHECK_EQUAL(blockman.GetBlockFileInfo(1)->nSize, 0U);
+    BOOST_CHECK_EQUAL(blockman.GetBlockFileInfo(2)->nSize, 42U);
+    BOOST_REQUIRE(blockman.WriteBlockIndexDB());
+    int recovered_file{-1};
+    BOOST_REQUIRE(db.ReadLastBlockFile(recovered_file));
+    BOOST_CHECK_EQUAL(recovered_file, 2);
+    // Retain forward scanning after an explicitly stored, older last-file value.
+    BOOST_REQUIRE(db.Write(uint8_t{'l'}, 0));
+    BOOST_REQUIRE(blockman.LoadBlockIndexDB(std::nullopt));
+    BOOST_CHECK_THROW(blockman.GetBlockFileInfo(3), std::out_of_range);
+    BOOST_CHECK_EQUAL(blockman.GetBlockFileInfo(2)->nSize, 42U);
+    // Also retain the historical allowance for holes before an explicit last file.
+    BOOST_REQUIRE(db.Erase(std::make_pair(uint8_t{'f'}, 1)));
+    BOOST_REQUIRE(db.Write(uint8_t{'l'}, 2));
+    BOOST_REQUIRE(blockman.LoadBlockIndexDB(std::nullopt));
+    BOOST_CHECK_THROW(blockman.GetBlockFileInfo(3), std::out_of_range);
+    BOOST_CHECK_EQUAL(blockman.GetBlockFileInfo(2)->nSize, 42U);
+
+    BOOST_REQUIRE(db.Write(uint8_t{'l'}, -1));
+    BOOST_CHECK_THROW(blockman.LoadBlockIndexDB(std::nullopt), node::BlockTreeDB::InvalidLastBlockFile);
+    BOOST_CHECK_THROW(blockman.GetBlockFileInfo(3), std::out_of_range);
+    BOOST_CHECK_EQUAL(blockman.GetBlockFileInfo(2)->nSize, 42U);
+    for (const int excessive : {node::MAX_BLOCKFILE_ENTRIES, std::numeric_limits<int>::max()}) {
+        BOOST_REQUIRE(db.Write(uint8_t{'l'}, excessive));
+        BOOST_CHECK_THROW(blockman.LoadBlockIndexDB(std::nullopt), node::BlockFileLimitError);
+        BOOST_CHECK_THROW(blockman.GetBlockFileInfo(3), std::out_of_range);
+        BOOST_CHECK_EQUAL(blockman.GetBlockFileInfo(2)->nSize, 42U);
+    }
+
+    // The existing file-presence check alone would accept this file. Its index
+    // must still have a corresponding slot, for block and undo users alike.
+    BOOST_REQUIRE(db.Write(uint8_t{'l'}, 0));
+    BOOST_REQUIRE(db.Erase(std::make_pair(uint8_t{'f'}, 2)));
+    BOOST_REQUIRE(!blockman.OpenBlockFile({1, 0}, false).IsNull());
+    CBlockIndex index{Params().GenesisBlock()};
+    const uint256 hash{Params().GenesisBlock().GetHash()};
+    index.phashBlock = &hash;
+    index.nFile = 1;
+    for (const auto status : {BLOCK_HAVE_DATA, BLOCK_HAVE_UNDO}) {
+        index.nStatus = status;
+        BOOST_REQUIRE(db.WriteBatchSync({}, 0, {&index}));
+        BOOST_CHECK(!blockman.LoadBlockIndexDB(std::nullopt));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(last_block_file_load_errors)
+{
+    kernel::Notifications notifications;
+    const ChainstateManager::Options chain_opts{
+        .chainparams = Params(),
+        .datadir = m_args.GetDataDirNet(),
+        .notifications = notifications,
+    };
+    const BlockManager::Options block_opts{
+        .chainparams = Params(),
+        .blocks_dir = m_args.GetBlocksDirPath(),
+        .notifications = notifications,
+        .block_tree_db_params = DBParams{.path = "", .cache_bytes = 1 << 20, .memory_only = true},
+    };
+    for (const int file_num : {-1, node::MAX_BLOCKFILE_ENTRIES, 0x41414141}) {
+        ChainstateManager chainman{*Assert(m_node.shutdown_signal), chain_opts, block_opts};
+        BOOST_REQUIRE(chainman.m_blockman.m_block_tree_db->WriteDatabaseFormatVersion());
+        BOOST_REQUIRE(chainman.m_blockman.m_block_tree_db->Write(uint8_t{'l'}, file_num));
+        node::ChainstateLoadOptions load_opts;
+        load_opts.coins_db_in_memory = true;
+        const auto [status, error] = node::LoadChainstate(chainman, kernel::CacheSizes{1 << 20}, load_opts);
+        BOOST_CHECK(status == node::ChainstateLoadStatus::FAILURE);
+        BOOST_CHECK(error.original.find(strprintf("%d", file_num)) != std::string::npos);
+        if (file_num >= node::MAX_BLOCKFILE_ENTRIES) {
+            BOOST_CHECK(error.original.find("Invalid or unsupported block file number") != std::string::npos);
+            BOOST_CHECK(error.original.find("full rebuild with -reindex may repair it") != std::string::npos);
+            BOOST_CHECK(error.original.find("Rebuilding does not increase the supported limit") != std::string::npos);
+        }
+        BOOST_CHECK_THROW(chainman.m_blockman.GetBlockFileInfo(0), std::out_of_range);
+        int stored;
+        BOOST_REQUIRE(chainman.m_blockman.m_block_tree_db->Read(uint8_t{'l'}, stored));
+        BOOST_CHECK_EQUAL(stored, file_num);
+    }
+}
+
+BOOST_FIXTURE_TEST_CASE(last_block_file_reindex_recovery, TestChain100Setup)
+{
+    // Use a separate copy so a failed load/rebuild cannot affect the fixture.
+    m_node.validation_signals->SyncWithValidationInterfaceQueue();
+    auto& original = *m_node.chainman;
+    const auto datadir = m_args.GetDataDirNet() / "last-file-reindex";
+    const auto blocks_dir = datadir / "blocks";
+    fs::create_directories(blocks_dir);
+    kernel::Notifications notifications;
+    const ChainstateManager::Options chain_opts{
+        .chainparams = Params(),
+        .datadir = datadir,
+        .notifications = notifications,
+    };
+    BlockManager::Options block_opts{
+        .chainparams = Params(),
+        .blocks_dir = blocks_dir,
+        .notifications = notifications,
+        .block_tree_db_params = DBParams{.path = blocks_dir / "index", .cache_bytes = 1 << 20},
+    };
+    constexpr int damaged_file_num{0x41414141};
+    uint256 expected_tip;
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE(original.ActiveChainstate().ForceFlushStateToDisk());
+        expected_tip = original.ActiveTip()->GetBlockHash();
+        BOOST_REQUIRE_EQUAL(original.ActiveTip()->nFile, 0);
+        BOOST_REQUIRE(fs::copy_file(original.m_blockman.GetBlockPosFilename({0, 0}), blocks_dir / "blk00000.dat", fs::copy_options::none));
+        BOOST_REQUIRE(fs::copy_file(m_args.GetBlocksDirPath() / "xor.dat", blocks_dir / "xor.dat", fs::copy_options::none));
+        std::vector<const CBlockIndex*> records;
+        for (const auto* index : original.m_blockman.GetAllBlockIndices()) records.push_back(index);
+        node::BlockTreeDB db{block_opts.block_tree_db_params};
+        BOOST_REQUIRE(db.WriteDatabaseFormatVersion());
+        BOOST_REQUIRE(db.WriteBatchSync({{0, original.m_blockman.GetBlockFileInfo(0)}}, damaged_file_num, records));
+    }
+    const auto original_blocks = ReadBinaryFile(blocks_dir / "blk00000.dat");
+    BOOST_REQUIRE(original_blocks.first);
+
+    // Normal startup and -reindex-chainstate must preserve the damaged record
+    // and offer full rebuilding. Only -reindex replaces the block index.
+    for (int attempt{0}; attempt < 4; ++attempt) {
+        block_opts.block_tree_db_params.wipe_data = attempt == 2;
+        ChainstateManager chainman{*Assert(m_node.shutdown_signal), chain_opts, block_opts};
+        node::ChainstateLoadOptions load_opts;
+        load_opts.wipe_chainstate_db = attempt == 1 || attempt == 2;
+        const auto [status, error] = node::LoadChainstate(chainman, kernel::CacheSizes{8 << 20}, load_opts);
+        if (attempt < 2) {
+            BOOST_CHECK(status == node::ChainstateLoadStatus::FAILURE);
+            BOOST_CHECK(error.original.find("full rebuild with -reindex may repair it") != std::string::npos);
+            int stored;
+            BOOST_REQUIRE(chainman.m_blockman.m_block_tree_db->Read(uint8_t{'l'}, stored));
+            BOOST_CHECK_EQUAL(stored, damaged_file_num);
+            const auto unchanged_blocks = ReadBinaryFile(blocks_dir / "blk00000.dat");
+            BOOST_REQUIRE(unchanged_blocks.first);
+            BOOST_CHECK(unchanged_blocks.second == original_blocks.second);
+            continue;
+        }
+        BOOST_REQUIRE_MESSAGE(status == node::ChainstateLoadStatus::SUCCESS, error.original);
+        if (attempt == 2) {
+            bool reindexing{false};
+            chainman.m_blockman.m_block_tree_db->ReadReindexing(reindexing);
+            BOOST_REQUIRE(reindexing);
+            node::ImportBlocks(chainman, {});
+            chainman.m_blockman.m_block_tree_db->ReadReindexing(reindexing);
+            BOOST_CHECK(!reindexing);
+        }
+        const auto [verify_status, verify_error] = node::VerifyLoadedChainstate(chainman, load_opts);
+        BOOST_CHECK_MESSAGE(verify_status == node::ChainstateLoadStatus::SUCCESS, verify_error.original);
+        LOCK(cs_main);
+        BOOST_REQUIRE(chainman.ActiveTip());
+        BOOST_CHECK_EQUAL(chainman.ActiveHeight(), 100);
+        BOOST_CHECK(chainman.ActiveTip()->GetBlockHash() == expected_tip);
+        BOOST_REQUIRE(chainman.ActiveChainstate().ForceFlushStateToDisk());
+        int last_file{-1};
+        BOOST_REQUIRE(chainman.m_blockman.m_block_tree_db->ReadLastBlockFile(last_file));
+        BOOST_CHECK_EQUAL(last_file, 0);
+        chainman.ActiveChainstate().ResetCoinsViews();
+    }
+}
+
+BOOST_AUTO_TEST_CASE(block_file_limit_preserves_cursors)
+{
+    struct Notifications : kernel::Notifications {
+        std::vector<std::string> errors;
+        void fatalError(const bilingual_str& message) override { errors.push_back(message.original); }
+    } notifications;
+    const BlockManager::Options opts{
+        .chainparams = Params(),
+        .blocks_dir = m_args.GetBlocksDirPath(),
+        .notifications = notifications,
+        .block_tree_db_params = DBParams{.path = "", .cache_bytes = 1 << 20, .memory_only = true},
+    };
+    LOCK(cs_main);
+    const auto& block = Params().GenesisBlock();
+    const auto check_last_file = [](BlockManager& blockman) EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
+        BOOST_REQUIRE(blockman.WriteBlockIndexDB());
+        int last_file{-1};
+        BOOST_REQUIRE(blockman.m_block_tree_db->ReadLastBlockFile(last_file));
+        BOOST_CHECK_EQUAL(last_file, node::MAX_BLOCKFILE_ENTRIES - 1);
+        BOOST_CHECK_THROW(blockman.GetBlockFileInfo(node::MAX_BLOCKFILE_ENTRIES), std::out_of_range);
+    };
+    {
+        BlockManager blockman{*Assert(m_node.shutdown_signal), opts};
+        blockman.m_snapshot_height = 1;
+        // Seed two cursors through the production reindex path, without creating
+        // a million database records or block files. The array uses about 48 MiB.
+        blockman.UpdateBlockInfo(block, 0, {0, 0});
+        blockman.UpdateBlockInfo(block, 1, {node::MAX_BLOCKFILE_ENTRIES - 1, 0});
+        blockman.GetBlockFileInfo(0)->nSize = MAX_BLOCKFILE_SIZE;
+        BOOST_CHECK(blockman.WriteBlock(block, 0).IsNull());
+        BOOST_CHECK_EQUAL(blockman.GetBlockFileInfo(0)->nSize, MAX_BLOCKFILE_SIZE);
+        check_last_file(blockman);
+        // The rejected rollover must leave NORMAL pointing to file zero.
+        blockman.GetBlockFileInfo(0)->nSize = 0;
+        BOOST_CHECK_EQUAL(blockman.WriteBlock(block, 0).nFile, 0);
+    }
+    {
+        BlockManager blockman{*Assert(m_node.shutdown_signal), opts};
+        blockman.UpdateBlockInfo(block, 0, {node::MAX_BLOCKFILE_ENTRIES - 1, 0});
+        blockman.m_snapshot_height = 1;
+        // Starting snapshot storage must not publish an unsupported cursor.
+        BOOST_CHECK(blockman.WriteBlock(block, 1).IsNull());
+        check_last_file(blockman);
+    }
+    {
+        BlockManager blockman{*Assert(m_node.shutdown_signal), opts};
+        // Model a caller violating the reindex boundary. Allocation must still
+        // reject an unsupported current cursor before modifying it or the file.
+        blockman.UpdateBlockInfo(block, 0, {node::MAX_BLOCKFILE_ENTRIES, 0});
+        const auto size_before = blockman.GetBlockFileInfo(node::MAX_BLOCKFILE_ENTRIES)->nSize;
+        BOOST_CHECK(blockman.WriteBlock(block, 0).IsNull());
+        BOOST_CHECK_EQUAL(blockman.GetBlockFileInfo(node::MAX_BLOCKFILE_ENTRIES)->nSize, size_before);
+    }
+    BOOST_REQUIRE_EQUAL(notifications.errors.size(), 3U);
+    for (const auto& error : notifications.errors) {
+        BOOST_CHECK(error.find("1048576") != std::string::npos);
+    }
+    BOOST_CHECK(!fs::exists(m_args.GetBlocksDirPath() / "blk1048576.dat"));
 }
 
 BOOST_AUTO_TEST_CASE(reindex_preserves_unsupported_database_format)

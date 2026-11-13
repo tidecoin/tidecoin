@@ -109,17 +109,17 @@ class InitTest(BitcoinTestFramework):
         deletion_rounds = [
             {
                 'filepath_glob': 'blocks/index/*.ldb',
-                'error_message': 'Error opening block database.',
+                'error_message': 'Error opening block database',
                 'startup_args': [],
             },
             {
                 'filepath_glob': 'chainstate/*.ldb',
-                'error_message': 'Error opening coins database.',
+                'error_message': 'Error opening coins database',
                 'startup_args': ['-checklevel=4'],
             },
             {
                 'filepath_glob': 'blocks/blk*.dat',
-                'error_message': 'Error loading block database.',
+                'error_message': 'Error loading block database',
                 'startup_args': ['-checkblocks=200', '-checklevel=4'],
             },
             {
@@ -135,17 +135,17 @@ class InitTest(BitcoinTestFramework):
         perturbation_rounds = [
             {
                 'filepath_glob': 'blocks/index/*.ldb',
-                'error_message': 'Error loading block database.',
+                'error_message': 'Error loading block database',
                 'startup_args': [],
             },
             {
                 'filepath_glob': 'chainstate/*.ldb',
-                'error_message': 'Error opening coins database.',
+                'error_message': 'Error opening coins database',
                 'startup_args': [],
             },
             {
                 'filepath_glob': 'blocks/blk*.dat',
-                'error_message': 'Corrupted block database detected.',
+                'error_message': 'Corrupted block database detected',
                 # PQ signature verification is expensive; lower checklevel and
                 # check only the tip and corrupt the file tail so it is detected quickly.
                 'startup_args': ['-checkblocks=1', '-checklevel=1'],

@@ -75,6 +75,27 @@ Subdirectory       | File(s)               | Description
 
 ### Block-storage metadata
 
+The block-index database supports file numbers 0 through 1,048,575. This local
+resource limit permits about 48 MiB of file-info entries on 64-bit builds,
+excluding the vector's spare capacity. It corresponds to roughly 128 TiB of
+normal-sized block files over their lifetime; pruning removes files but does not
+reset their numbering. The test-only
+`-fastprune` option uses smaller files. The limit is not a consensus rule or a
+change to the database encoding. An over-limit value in stored metadata stops
+startup with the file number and supported maximum. Because the block index may
+be damaged, the GUI offers a user-approved rebuild; daemon users can restart
+with full `-reindex`. This is not an automatic rebuild. `-reindex-chainstate`
+does not repair block-index metadata. Rebuilding does not raise the limit: actual
+file allocation or reindexing that reaches an unsupported file number stops with
+a fatal error, and an interrupted reindex remains marked as incomplete.
+
+Malformed last-file metadata or block references beyond the loaded file records
+cause a database-load error instead of an unsafe allocation or array access.
+Rebuilding with `-reindex` can repair a damaged block index when the block files
+are intact; pruned data may need to be downloaded again. An absent last-file
+record retains the existing recovery scan from file zero. The node does not
+clamp or rewrite an invalid value automatically.
+
 `blocks/xor.dat` contains exactly eight bytes. Keep it with the block and undo
 files when copying or backing up those files. It is an obfuscation pattern, not
 a wallet key. Replacing it does not convert existing block files to a new pattern.

@@ -51,9 +51,19 @@ static ChainstateLoadResult CompleteChainstateInitialization(
     // LoadBlockIndex will load m_have_pruned if we've ever removed a
     // block file from disk.
     // Note that it also sets m_blockfiles_indexed based on the disk flag!
-    if (!chainman.LoadBlockIndex()) {
-        if (chainman.m_interrupt) return {ChainstateLoadStatus::INTERRUPTED, {}};
-        return {ChainstateLoadStatus::FAILURE, _("Error loading block database")};
+    try {
+        if (!chainman.LoadBlockIndex()) {
+            if (chainman.m_interrupt) return {ChainstateLoadStatus::INTERRUPTED, {}};
+            return {ChainstateLoadStatus::FAILURE, _("Error loading block database")};
+        }
+    } catch (const BlockFileLimitError& e) {
+        // A stored number alone does not prove that the files reach the limit.
+        // Offer the ordinary, user-controlled rebuild for a damaged block index.
+        return {ChainstateLoadStatus::FAILURE, Untranslated(e.what()) + Untranslated(" ") +
+            _("If the block index is damaged, a full rebuild with -reindex may repair it. "
+              "-reindex-chainstate does not rebuild the block index. Rebuilding does not increase the supported limit.")};
+    } catch (const BlockTreeDB::InvalidLastBlockFile& e) {
+        return {ChainstateLoadStatus::FAILURE, Untranslated(e.what())};
     }
 
     if (!chainman.BlockIndex().empty() &&

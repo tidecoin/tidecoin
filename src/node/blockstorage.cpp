@@ -59,6 +59,12 @@ static constexpr uint8_t DB_DATABASE_FORMAT{'V'};
 
 bool BlockTreeDB::ReadBlockFileInfo(int nFile, CBlockFileInfo& info)
 {
+    if (nFile >= node::MAX_BLOCKFILE_ENTRIES) {
+        // The recovery scan may probe one past the last supported file. Only
+        // an existing record there exceeds the limit, including malformed data.
+        if (Exists(std::make_pair(DB_BLOCK_FILES, nFile))) throw node::BlockFileLimitError{nFile};
+        return false;
+    }
     return Read(std::make_pair(DB_BLOCK_FILES, nFile), info);
 }
 
@@ -107,7 +113,24 @@ void BlockTreeDB::ReadReindexing(bool& fReindexing)
 
 bool BlockTreeDB::ReadLastBlockFile(int& nFile)
 {
-    return Read(DB_LAST_BLOCK, nFile);
+    std::string value;
+    if (!ReadRaw(DB_LAST_BLOCK, value)) return false;
+    DataStream stream{MakeByteSpan(value)};
+    int file_num;
+    try {
+        stream >> file_num;
+    } catch (const std::exception&) {
+        throw InvalidLastBlockFile{"Malformed last block file record in block index database"};
+    }
+    if (!stream.empty()) {
+        throw InvalidLastBlockFile{"Trailing data in last block file record in block index database"};
+    }
+    if (file_num < 0) {
+        throw InvalidLastBlockFile{strprintf("Invalid last block file number %d in block index database", file_num)};
+    }
+    if (file_num >= node::MAX_BLOCKFILE_ENTRIES) throw node::BlockFileLimitError{file_num};
+    nFile = file_num;
+    return true;
 }
 
 bool BlockTreeDB::WriteBatchSync(const std::vector<std::pair<int, const CBlockFileInfo*>>& fileInfo, int nLastFile, const std::vector<const CBlockIndex*>& blockinfo)
@@ -182,6 +205,11 @@ bool BlockTreeDB::LoadBlockIndexGuts(const Consensus::Params& consensusParams, s
 } // namespace kernel
 
 namespace node {
+
+BlockFileLimitError::BlockFileLimitError(int file_num)
+    : std::runtime_error{strprintf("Invalid or unsupported block file number %d (maximum %d).", file_num, MAX_BLOCKFILE_ENTRIES - 1)}
+{
+}
 
 bool CBlockIndexWorkComparator::operator()(const CBlockIndex* pa, const CBlockIndex* pb) const
 {
@@ -559,15 +587,17 @@ bool BlockManager::LoadBlockIndexDB(const std::optional<uint256>& snapshot_block
     }
     int max_blockfile_num{0};
 
-    // Load block file info
+    // An absent last-file record retains the historical recovery scan from file 0.
+    // ReadLastBlockFile rejects malformed values and checks the range before allocation.
     m_block_tree_db->ReadLastBlockFile(max_blockfile_num);
-    m_blockfile_info.resize(max_blockfile_num + 1);
+    m_blockfile_info.resize(static_cast<size_t>(max_blockfile_num) + 1);
     LogInfo("Loading block index db: last block file = %i", max_blockfile_num);
     for (int nFile = 0; nFile <= max_blockfile_num; nFile++) {
         m_block_tree_db->ReadBlockFileInfo(nFile, m_blockfile_info[nFile]);
     }
     LogInfo("Loading block index db: last block file info: %s", m_blockfile_info[max_blockfile_num].ToString());
     for (int nFile = max_blockfile_num + 1; true; nFile++) {
+        if (m_interrupt) return false;
         CBlockFileInfo info;
         if (m_block_tree_db->ReadBlockFileInfo(nFile, info)) {
             m_blockfile_info.push_back(info);
@@ -580,6 +610,11 @@ bool BlockManager::LoadBlockIndexDB(const std::optional<uint256>& snapshot_block
     LogInfo("Checking all blk files are present...");
     std::set<int> setBlkDataFiles;
     for (const auto& [_, block_index] : m_block_index) {
+        if ((block_index.nStatus & (BLOCK_HAVE_DATA | BLOCK_HAVE_UNDO)) &&
+            (block_index.nFile < 0 || static_cast<size_t>(block_index.nFile) >= m_blockfile_info.size())) {
+            LogError("Block index references file %d outside the %u loaded file records", block_index.nFile, m_blockfile_info.size());
+            return false;
+        }
         if (block_index.nStatus & BLOCK_HAVE_DATA) {
             setBlkDataFiles.insert(block_index.nFile);
         }
@@ -859,14 +894,23 @@ FlatFilePos BlockManager::FindNextBlockPos(unsigned int nAddSize, unsigned int n
         // If a snapshot is loaded during runtime, we may not have initialized this cursor yet.
         assert(chain_type == BlockfileType::ASSUMED);
         const auto new_cursor = BlockfileCursor{this->MaxBlockfileNum() + 1};
+        if (new_cursor.file_num >= MAX_BLOCKFILE_ENTRIES) {
+            m_opts.notifications.fatalError(Untranslated(BlockFileLimitError{new_cursor.file_num}.what()));
+            return {};
+        }
         m_blockfile_cursors[chain_type] = new_cursor;
         LogDebug(BCLog::BLOCKSTORAGE, "[%s] initializing blockfile cursor to %s\n", chain_type, new_cursor);
     }
     const int last_blockfile = m_blockfile_cursors[chain_type]->file_num;
 
     int nFile = last_blockfile;
+    if (nFile >= MAX_BLOCKFILE_ENTRIES) {
+        m_opts.notifications.fatalError(Untranslated(BlockFileLimitError{nFile}.what()));
+        return {};
+    }
+    Assume(nFile >= 0);
     if (static_cast<int>(m_blockfile_info.size()) <= nFile) {
-        m_blockfile_info.resize(nFile + 1);
+        m_blockfile_info.resize(static_cast<size_t>(nFile) + 1);
     }
 
     bool finalize_undo = false;
@@ -891,11 +935,15 @@ FlatFilePos BlockManager::FindNextBlockPos(unsigned int nAddSize, unsigned int n
 
         // Try the next unclaimed blockfile number
         nFile = this->MaxBlockfileNum() + 1;
+        if (nFile >= MAX_BLOCKFILE_ENTRIES) {
+            m_opts.notifications.fatalError(Untranslated(BlockFileLimitError{nFile}.what()));
+            return {};
+        }
         // Set to increment MaxBlockfileNum() for next iteration
         m_blockfile_cursors[chain_type] = BlockfileCursor{nFile};
 
         if (static_cast<int>(m_blockfile_info.size()) <= nFile) {
-            m_blockfile_info.resize(nFile + 1);
+            m_blockfile_info.resize(static_cast<size_t>(nFile) + 1);
         }
     }
     FlatFilePos pos;
@@ -1383,6 +1431,10 @@ void ImportBlocks(ChainstateManager& chainman, std::span<const fs::path> import_
             FlatFilePos pos(nFile, 0);
             if (!fs::exists(chainman.m_blockman.GetBlockPosFilename(pos))) {
                 break; // No block files left to reindex
+            }
+            if (nFile >= MAX_BLOCKFILE_ENTRIES) {
+                chainman.m_options.notifications.fatalError(Untranslated(BlockFileLimitError{nFile}.what()));
+                return; // Preserve the reindex flag; importing did not complete.
             }
             AutoFile file{chainman.m_blockman.OpenBlockFile(pos, /*fReadOnly=*/true)};
             if (file.IsNull()) {

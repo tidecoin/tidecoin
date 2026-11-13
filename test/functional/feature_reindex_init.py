@@ -36,8 +36,8 @@ class ReindexInitTest(BitcoinTestFramework):
         # generic load-failure recovery path, not the automatic format upgrade.
         (node.chain_path / "chainstate" / "CURRENT").write_text("missing-manifest\n", encoding="utf8")
         node.assert_start_raises_init_error(
-            expected_msg=f": Error opening coins database.{os.linesep}"
-            "Please restart with -reindex or -reindex-chainstate to recover.",
+            expected_msg=f": Error opening coins database{os.linesep}"
+            "Please restart with -reindex to rebuild. Use -reindex-chainstate only if the block index is intact.",
         )
 
         self.log.info("Allowing the reindex should work fine")

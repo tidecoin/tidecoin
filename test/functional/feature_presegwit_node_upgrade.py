@@ -39,8 +39,8 @@ class SegwitUpgradeTest(BitcoinTestFramework):
         node.assert_start_raises_init_error(
             extra_args=["-testactivationheight=segwit@5"],
             expected_msg=": Witness data for blocks after height 5 requires "
-            f"validation. Please restart with -reindex..{os.linesep}"
-            "Please restart with -reindex or -reindex-chainstate to recover.",
+            f"validation. Please restart with -reindex.{os.linesep}"
+            "Please restart with -reindex to rebuild. Use -reindex-chainstate only if the block index is intact.",
         )
 
         # As directed, the user restarts the node with -reindex

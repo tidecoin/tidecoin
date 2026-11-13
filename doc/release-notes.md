@@ -586,6 +586,24 @@ whose failure can remove the original destination. No on-disk format changes.
 Block and undo storage
 ======================
 
+The block-index loader rejects malformed or negative last-file metadata and
+block references outside the loaded file-info array. A missing last-file record
+still permits recovery by scanning file-info records from zero. File numbering
+is limited to 1,048,576 entries (numbers 0 through 1,048,575), bounding the
+metadata entries to approximately 48 MiB on 64-bit builds, excluding vector
+spare capacity. Loading, new-file allocation and reindexing enforce the same
+local resource limit. An over-limit value found in stored metadata may indicate
+a damaged block index, so startup offers the ordinary user-approved full
+`-reindex` recovery. It does not rebuild automatically, and `-reindex-chainstate`
+does not repair this metadata. Actual file allocation or reindexing beyond the
+limit remains fatal; rebuilding does not increase the limit. No database encoding
+or consensus rule changes.
+
+For all startup failures that offer a database rebuild, the command-line recovery
+hint now recommends `-reindex` and says to use `-reindex-chainstate` only when the
+block index is intact. Recovery messages preserve the error's own punctuation,
+avoiding doubled periods.
+
 `xor.dat` and snapshot `base_blockhash` metadata are saved through temporary
 files with checked file synchronization and rename. XOR-key creation also checks
 directory synchronization where supported before writing dependent block data;
