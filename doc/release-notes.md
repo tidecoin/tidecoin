@@ -586,6 +586,16 @@ whose failure can remove the original destination. No on-disk format changes.
 Block and undo storage
 ======================
 
+`xor.dat` and snapshot `base_blockhash` metadata are saved through temporary
+files with checked file synchronization and rename. XOR-key creation also checks
+directory synchronization where supported before writing dependent block data;
+a failed attempt is retried on startup while no block or undo files exist.
+Malformed metadata, including extra bytes, is rejected with a file-specific
+diagnostic. Snapshot directory synchronization remains best effort. Existing
+unobfuscated directories keep their zero-key compatibility behavior; automatic
+recovery of lost XOR keys is not provided. See [block-storage metadata](files.md#block-storage-metadata)
+and [snapshot recovery](design/assumeutxo.md).
+
 Block and undo file positions use 64-bit values. File positioning and truncation
 also support large offsets on Windows and supported 32-bit Unix builds. This
 prevents position overflow when an undo file grows beyond 4 GiB and the earlier

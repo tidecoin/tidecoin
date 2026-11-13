@@ -73,6 +73,35 @@ Subdirectory       | File(s)               | Description
 `./`               | `.cookie`             | Session RPC authentication cookie; if used, created at start and deleted on shutdown; can be specified by `-rpccookiefile` option
 `./`               | `.lock`               | Data directory lock file
 
+### Block-storage metadata
+
+`blocks/xor.dat` contains exactly eight bytes. Keep it with the block and undo
+files when copying or backing up those files. It is an obfuscation pattern, not
+a wallet key. Replacing it does not convert existing block files to a new pattern.
+
+New XOR keys are saved through `.xor.dat.tmp`, with checked file synchronization,
+close and rename, followed by directory synchronization where supported, before
+block data is written. A failed directory synchronization stops initialization;
+if no block or undo files exist yet, the next start retries that synchronization
+using the saved key. A leftover temporary file does not change first-run key
+selection and is not used as a recovery key.
+
+Invalid-length or unreadable keys cause an error naming the file. First check
+file access and storage health. If the key is damaged, restore the original key
+belonging to those block files from a backup. Otherwise, rebuild the affected
+local blockchain data from the network, preserving wallets and configuration.
+`-reindex` cannot decode obfuscated files using a different key.
+
+For compatibility, an existing blocks directory without `xor.dat` still receives
+an all-zero pattern. This supports old unobfuscated data, but does not detect a
+lost key for obfuscated data. Automatic lost-key detection and recovery are not
+provided. Do not delete `xor.dat` while retaining files obfuscated with it.
+
+The synchronization helpers use the operating system's available guarantees.
+Unsupported synchronization is tolerated; Windows has no separate directory
+synchronization here. Storage corruption and hardware that does not honor flush
+requests remain outside those guarantees.
+
 ## Multi-wallet environment
 
 Wallets are SQLite databases.

@@ -30,7 +30,9 @@
 #include <util/batchpriority.h>
 #include <util/check.h>
 #include <util/fs.h>
+#include <util/fs_helpers.h>
 #include <util/obfuscation.h>
+#include <util/readwritefile.h>
 #include <util/signalinterrupt.h>
 #include <util/strencodings.h>
 #include <util/syserror.h>
@@ -1248,12 +1250,14 @@ static auto InitBlocksdirXorKey(const BlockManager::Options& opts)
     // files (those which start with a .). Checking for a fully-empty dir would
     // be too aggressive as a .lock file may have already been written.
     bool first_run = true;
+    bool have_block_files = false;
     for (const auto& entry : fs::directory_iterator(opts.blocks_dir)) {
         const std::string path = fs::PathToString(entry.path().filename());
         if (!entry.is_regular_file() || !path.starts_with('.')) {
             first_run = false;
-            break;
         }
+        if ((path.starts_with("blk") || path.starts_with("rev")) && path.ends_with(".dat")) have_block_files = true;
+        if (!first_run && have_block_files) break;
     }
 
     if (opts.use_xor && first_run) {
@@ -1263,24 +1267,29 @@ static auto InitBlocksdirXorKey(const BlockManager::Options& opts)
     }
 
     const fs::path xor_key_path{opts.blocks_dir / "xor.dat"};
-    if (fs::exists(xor_key_path)) {
+    const auto stored_key = ReadBinaryFileBounded(xor_key_path, obfuscation.size());
+    if (stored_key.status == FileReadStatus::ERROR ||
+        (stored_key.status == FileReadStatus::OK && stored_key.data.size() != obfuscation.size())) {
+        throw std::runtime_error{strprintf(
+            "Invalid or unreadable XOR key file %s: expected exactly %u bytes. Check file access; "
+            "if damaged, restore the original key for these block files from a backup or rebuild local blockchain data. "
+            "Do not replace the key while retaining obfuscated block files.",
+            fs::PathToString(xor_key_path), obfuscation.size())};
+    }
+    if (stored_key.status == FileReadStatus::OK) {
         // A pre-existing xor key file has priority.
-        AutoFile xor_key_file{fsbridge::fopen(xor_key_path, "rb")};
+        SpanReader xor_key_file{MakeByteSpan(stored_key.data)};
         xor_key_file >> obfuscation;
     } else {
-        // Create initial or missing xor key file
-        AutoFile xor_key_file{fsbridge::fopen(xor_key_path,
-#ifdef __MINGW64__
-            "wb" // Temporary workaround for https://github.com/bitcoin/bitcoin/issues/30210
-#else
-            "wbx"
-#endif
-        )};
-        xor_key_file << obfuscation;
-        if (xor_key_file.fclose() != 0) {
-            throw std::runtime_error{strprintf("Error closing XOR key file %s: %s",
-                                               fs::PathToString(xor_key_path),
-                                               SysErrorString(errno))};
+        // A leftover temporary must not disable random-key creation on first run.
+        const fs::path temporary{opts.blocks_dir / ".xor.dat.tmp"};
+        const auto status = fs::symlink_status(temporary);
+        const auto bytes = UCharSpanCast(std::span{obfuscation});
+        if ((status.type() != fs::file_type::not_found && !fs::is_regular_file(status)) ||
+            !WriteBinaryFile(temporary, std::string{bytes.begin(), bytes.end()}, /*commit=*/true) ||
+            !RenameOver(temporary, xor_key_path)) {
+            throw std::runtime_error{strprintf("Could not save XOR key file %s. Check disk space and file access before retrying.",
+                                               fs::PathToString(xor_key_path))};
         }
     }
     // If the user disabled the key, it must be zero.
@@ -1290,6 +1299,13 @@ static auto InitBlocksdirXorKey(const BlockManager::Options& opts)
                       "Stored key: '%s', stored path: '%s'.",
                       HexStr(obfuscation), fs::PathToString(xor_key_path)),
         };
+    }
+    // The key must be committed before block data can depend on it. Retry after
+    // a successful rename followed by a failed directory sync on an earlier start.
+    // Existing block directories retain their legacy missing-key/zero-key behavior.
+    if ((stored_key.status == FileReadStatus::NOT_FOUND || !have_block_files) && !DirectoryCommit(opts.blocks_dir)) {
+        throw std::runtime_error{strprintf("Could not synchronize the directory for XOR key file %s. No block data was written by this startup; retry after fixing the storage error.",
+                                           fs::PathToString(xor_key_path))};
     }
     LogInfo("Using obfuscation key for blocksdir *.dat files (%s): '%s'\n", fs::PathToString(opts.blocks_dir), HexStr(obfuscation));
     return Obfuscation{obfuscation};

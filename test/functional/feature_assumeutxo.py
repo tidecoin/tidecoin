@@ -10,6 +10,7 @@ The assumeutxo value generated and used here is committed to in
 `CRegTestParams::m_assumeutxo_data` in `src/kernel/chainparams.cpp`.
 """
 import contextlib
+import re
 from shutil import rmtree
 
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from test_framework.p2p import (
     P2PInterface,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_node import ErrorMatch
 from test_framework.util import (
     assert_approx,
     assert_equal,
@@ -197,6 +199,15 @@ class AssumeutxoTest(BitcoinTestFramework):
         self.stop_node(0)
         chainstate_snapshot_path = self.nodes[0].chain_path / "chainstate_snapshot"
         chainstate_snapshot_path.mkdir()
+        metadata_path = chainstate_snapshot_path / "base_blockhash"
+        for size in (0, 1, 31, 33):
+            damaged = b'z' * size
+            metadata_path.write_bytes(damaged)
+            self.nodes[0].assert_start_raises_init_error(
+                expected_msg=re.escape(f'Invalid or unreadable snapshot base blockhash file {metadata_path}: expected exactly 32 bytes'),
+                match=ErrorMatch.PARTIAL_REGEX,
+            )
+            assert_equal(metadata_path.read_bytes(), damaged)
         with open(chainstate_snapshot_path / "base_blockhash", 'wb') as f:
             f.write(b'z' * 32)
 

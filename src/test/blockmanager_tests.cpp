@@ -13,6 +13,7 @@
 #include <script/solver.h>
 #include <primitives/block.h>
 #include <util/chaintype.h>
+#include <util/readwritefile.h>
 #include <validation.h>
 #include <validationinterface.h>
 
@@ -35,6 +36,53 @@ using node::MAX_BLOCKFILE_SIZE;
 
 // use BasicTestingSetup here for the data directory configuration, setup, and cleanup
 BOOST_FIXTURE_TEST_SUITE(blockmanager_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(xor_key_metadata)
+{
+    const auto directory = m_args.GetDataDirNet() / "xor-metadata";
+    fs::create_directories(directory);
+    const auto key_path = directory / "xor.dat";
+    const auto temporary = directory / ".xor.dat.tmp";
+    KernelNotifications notifications{Assert(m_node.shutdown_request), m_node.exit_status, *Assert(m_node.warnings)};
+    BlockManager::Options opts{
+        .chainparams = Params(),
+        .blocks_dir = directory,
+        .notifications = notifications,
+        .block_tree_db_params = DBParams{.path = directory / "index", .cache_bytes = 1 << 20, .memory_only = true},
+    };
+    const auto initialize = [&] { BlockManager blockman{*Assert(m_node.shutdown_signal), opts}; };
+    // Interrupted first initialization must not change the choice of obfuscation.
+    BOOST_REQUIRE(WriteBinaryFile(temporary, "partial"));
+    initialize();
+    const auto key = ReadBinaryFileBounded(key_path, 8);
+    BOOST_REQUIRE(key.status == FileReadStatus::OK);
+    BOOST_REQUIRE_EQUAL(key.data.size(), 8U);
+    BOOST_CHECK(key.data != std::string(8, '\0'));
+    BOOST_CHECK(!fs::exists(temporary));
+    initialize();
+    BOOST_CHECK_EQUAL(ReadBinaryFileBounded(key_path, 8).data, key.data);
+
+    for (const auto size : {0, 1, 7, 9}) {
+        const std::string damaged(size, 'x');
+        BOOST_REQUIRE(WriteBinaryFile(key_path, damaged));
+        BOOST_CHECK_EXCEPTION(initialize(), std::runtime_error, [&](const std::runtime_error& e) {
+            return std::string{e.what()}.find(fs::PathToString(key_path)) != std::string::npos;
+        });
+        BOOST_CHECK_EQUAL(ReadBinaryFile(key_path).second, damaged);
+    }
+    BOOST_REQUIRE(WriteBinaryFile(key_path, key.data));
+    opts.use_xor = false;
+    BOOST_CHECK_THROW(initialize(), std::runtime_error);
+    BOOST_CHECK_EQUAL(ReadBinaryFileBounded(key_path, 8).data, key.data);
+
+    // Keep compatibility with existing unobfuscated directories without a key.
+    opts.use_xor = true;
+    fs::remove(key_path);
+    BOOST_REQUIRE(WriteBinaryFile(directory / "blk00000.dat", "existing data"));
+    initialize();
+    BOOST_CHECK_EQUAL(ReadBinaryFileBounded(key_path, 8).data, std::string(8, '\0'));
+    BOOST_CHECK_EQUAL(ReadBinaryFile(directory / "blk00000.dat").second, "existing data");
+}
 
 BOOST_AUTO_TEST_CASE(database_format_version)
 {

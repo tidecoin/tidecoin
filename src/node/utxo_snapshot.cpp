@@ -11,10 +11,10 @@
 #include <txdb.h>
 #include <uint256.h>
 #include <util/fs.h>
+#include <util/readwritefile.h>
 #include <validation.h>
 
 #include <cassert>
-#include <cstdio>
 #include <optional>
 #include <string>
 
@@ -29,17 +29,9 @@ bool WriteSnapshotBaseBlockhash(Chainstate& snapshot_chainstate)
     assert(chaindir); // Sanity check that chainstate isn't in-memory.
     const fs::path write_to = *chaindir / node::SNAPSHOT_BLOCKHASH_FILENAME;
 
-    FILE* file{fsbridge::fopen(write_to, "wb")};
-    AutoFile afile{file};
-    if (afile.IsNull()) {
-        LogPrintf("[snapshot] failed to open base blockhash file for writing: %s\n",
-                  fs::PathToString(write_to));
-        return false;
-    }
-    afile << *snapshot_chainstate.m_from_snapshot_blockhash;
-
-    if (afile.fclose() != 0) {
-        LogPrintf("[snapshot] failed to close base blockhash file %s after writing\n",
+    const auto& hash = *snapshot_chainstate.m_from_snapshot_blockhash;
+    if (!WriteBinaryFileAtomic(write_to, std::string{hash.begin(), hash.end()})) {
+        LogPrintf("[snapshot] failed to save base blockhash file %s\n",
                   fs::PathToString(write_to));
         return false;
     }
@@ -56,28 +48,23 @@ std::optional<uint256> ReadSnapshotBaseBlockhash(fs::path chaindir)
     const fs::path read_from = chaindir / node::SNAPSHOT_BLOCKHASH_FILENAME;
     const std::string read_from_str = fs::PathToString(read_from);
 
-    if (!fs::exists(read_from)) {
+    const auto contents = ReadBinaryFileBounded(read_from, uint256::size());
+    if (contents.status == FileReadStatus::NOT_FOUND) {
         LogPrintf("[snapshot] snapshot chainstate dir is malformed! no base blockhash file "
             "exists at path %s. Try deleting %s and calling loadtxoutset again?\n",
-            fs::PathToString(chaindir), read_from_str);
+            read_from_str, fs::PathToString(chaindir));
         return std::nullopt;
     }
-
+    if (contents.status != FileReadStatus::OK || contents.data.size() != uint256::size()) {
+        throw SnapshotMetadataError{strprintf(
+            "Invalid or unreadable snapshot base blockhash file %s: expected exactly %u bytes. "
+            "Check file access; if damaged, remove only the snapshot chainstate directory %s "
+            "while the node is stopped, then restart and load the snapshot again.",
+            read_from_str, uint256::size(), fs::PathToString(chaindir))};
+    }
     uint256 base_blockhash;
-    FILE* file{fsbridge::fopen(read_from, "rb")};
-    AutoFile afile{file};
-    if (afile.IsNull()) {
-        LogPrintf("[snapshot] failed to open base blockhash file for reading: %s\n",
-            read_from_str);
-        return std::nullopt;
-    }
+    SpanReader afile{MakeByteSpan(contents.data)};
     afile >> base_blockhash;
-
-    int64_t position = afile.tell();
-    afile.seek(0, SEEK_END);
-    if (position != afile.tell()) {
-        LogPrintf("[snapshot] warning: unexpected trailing data in %s\n", read_from_str);
-    }
     return base_blockhash;
 }
 

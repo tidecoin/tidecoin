@@ -68,6 +68,19 @@ serialized `uint256` of the base block of the snapshot. This is used to reinitia
 the snapshot chainstate on subsequent inits. Otherwise, the directory is a normal
 leveldb database.
 
+The `base_blockhash` file must contain exactly 32 bytes. It is saved through a
+temporary file, with checked file synchronization, close and rename. Directory
+synchronization is best effort: a failure after replacement logs a warning.
+Malformed or unreadable metadata stops startup with an error naming the file.
+Check file access first. If the metadata is damaged, stop the node, remove only
+the `chainstate_snapshot` directory named in the error, restart, and load the
+snapshot again. Do not remove wallets or the ordinary `chainstate` directory.
+A missing metadata file retains the existing behavior of logging a diagnostic
+and skipping that snapshot directory. Temporary files are not promoted during
+startup; interruption before metadata publication can still require reloading
+the snapshot. These measures do not guarantee recovery from arbitrary disk
+corruption or power loss on filesystems without supported synchronization.
+
 |    |    |
 | ---------- | ----------- |
 | number of chainstates | 2 |

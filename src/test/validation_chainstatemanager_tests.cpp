@@ -17,6 +17,7 @@
 #include <test/util/setup_common.h>
 #include <test/util/validation.h>
 #include <uint256.h>
+#include <util/readwritefile.h>
 #include <util/result.h>
 #include <util/vector.h>
 #include <validation.h>
@@ -245,7 +246,11 @@ struct SnapshotTestSetup : TestChain100Setup {
 
         // Should not load malleated snapshots
         BOOST_REQUIRE(!CreateAndActivateUTXOSnapshot(
-            this, [](AutoFile& auto_infile, SnapshotMetadata& metadata) {
+            this, [this](AutoFile& auto_infile, SnapshotMetadata& metadata) {
+                // Cleanup after a failed load must also remove a leftover metadata temporary.
+                const auto directory = m_node.chainman->m_options.datadir / "chainstate_snapshot";
+                fs::create_directories(directory);
+                BOOST_REQUIRE(WriteBinaryFile(directory / "base_blockhash.tmp", "partial"));
                 // A UTXO is missing but count is correct
                 metadata.m_coins_count -= 1;
 
@@ -298,10 +303,33 @@ struct SnapshotTestSetup : TestChain100Setup {
 
             fs::path found = *node::FindSnapshotChainstateDir(chainman.m_options.datadir);
 
-            // Note: WriteSnapshotBaseBlockhash() is implicitly tested above.
             BOOST_CHECK_EQUAL(
                 *node::ReadSnapshotBaseBlockhash(found),
                 *chainman.SnapshotBlockhash());
+            const auto metadata = found / node::SNAPSHOT_BLOCKHASH_FILENAME;
+            const auto original = ReadBinaryFile(metadata).second;
+            BOOST_REQUIRE_EQUAL(original.size(), 32U);
+            for (const auto size : {0, 1, 31, 33}) {
+                const std::string damaged(size, 'x');
+                BOOST_REQUIRE(WriteBinaryFile(metadata, damaged));
+                BOOST_CHECK_EXCEPTION(node::ReadSnapshotBaseBlockhash(found), node::SnapshotMetadataError,
+                    [&](const node::SnapshotMetadataError& e) {
+                        return std::string{e.what()}.find(fs::PathToString(metadata)) != std::string::npos;
+                    });
+                BOOST_CHECK_EQUAL(ReadBinaryFile(metadata).second, damaged);
+            }
+            BOOST_REQUIRE(WriteBinaryFile(metadata, original));
+            // A failed temporary-file save must preserve already-published metadata.
+            const auto temporary = metadata + ".tmp";
+            fs::create_directory(temporary);
+            BOOST_CHECK(!node::WriteSnapshotBaseBlockhash(snapshot_chainstate));
+            BOOST_CHECK_EQUAL(ReadBinaryFile(metadata).second, original);
+            fs::remove(temporary);
+            BOOST_REQUIRE(node::WriteSnapshotBaseBlockhash(snapshot_chainstate));
+            BOOST_CHECK_EQUAL(ReadBinaryFile(metadata).second, original);
+            fs::remove(metadata);
+            BOOST_CHECK(!node::ReadSnapshotBaseBlockhash(found));
+            BOOST_REQUIRE(node::WriteSnapshotBaseBlockhash(snapshot_chainstate));
         }
 
         const auto& au_data = ::Params().AssumeutxoForHeight(snapshot_height);

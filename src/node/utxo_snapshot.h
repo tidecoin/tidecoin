@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 
 // UTXO set snapshot magic bytes
@@ -108,6 +109,12 @@ public:
 //! chainstate directory with this filename present within it.
 const fs::path SNAPSHOT_BLOCKHASH_FILENAME{"base_blockhash"};
 
+//! Metadata failure requiring operator repair, not a generic database reindex.
+class SnapshotMetadataError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 //! Write out the blockhash of the snapshot base block that was used to construct
 //! this chainstate. This value is read in during subsequent initializations and
 //! used to reconstruct snapshot-based chainstates.
@@ -115,7 +122,7 @@ bool WriteSnapshotBaseBlockhash(Chainstate& snapshot_chainstate)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 //! Read the blockhash of the snapshot base block that was used to construct the
-//! chainstate.
+//! chainstate. Throws SnapshotMetadataError for malformed or unreadable metadata.
 std::optional<uint256> ReadSnapshotBaseBlockhash(fs::path chaindir)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 

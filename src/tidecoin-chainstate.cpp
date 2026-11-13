@@ -35,109 +35,25 @@
 
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
+#include <exception>
 #include <functional>
-#include <iosfwd>
+#include <iostream>
 #include <memory>
 #include <string>
 
-int main(int argc, char* argv[])
+static int ProcessBlocks(ChainstateManager& chainman, ValidationSignals& validation_signals, const kernel::CacheSizes& cache_sizes)
 {
-    // We do not enable logging for this app, so explicitly disable it.
-    // To enable logging instead, replace with:
-    //    LogInstance().m_print_to_console = true;
-    //    LogInstance().StartLogging();
-    LogInstance().DisableLogging();
-
-    // SETUP: Argument parsing and handling
-    if (argc != 2) {
-        std::cerr
-            << "Usage: " << argv[0] << " DATADIR" << std::endl
-            << "Display DATADIR information, and process hex-encoded blocks on standard input." << std::endl
-            << std::endl
-            << "IMPORTANT: THIS EXECUTABLE IS EXPERIMENTAL, FOR TESTING ONLY, AND EXPECTED TO" << std::endl
-            << "           BREAK IN FUTURE VERSIONS. DO NOT USE ON YOUR ACTUAL DATADIR." << std::endl;
-        return 1;
-    }
-    fs::path abs_datadir{fs::absolute(argv[1])};
-    fs::create_directories(abs_datadir);
-
-
-    // SETUP: Context
-    kernel::Context kernel_context{};
-    // We can't use a goto here, but we can use an assert since none of the
-    // things instantiated so far requires running the epilogue to be torn down
-    // properly
-    assert(kernel::SanityChecks(kernel_context));
-
-    ValidationSignals validation_signals{std::make_unique<util::ImmediateTaskRunner>()};
-
-    class KernelNotifications : public kernel::Notifications
-    {
-    public:
-        kernel::InterruptResult blockTip(SynchronizationState, CBlockIndex&, double) override
-        {
-            std::cout << "Block tip changed" << std::endl;
-            return {};
-        }
-        void headerTip(SynchronizationState, int64_t height, int64_t timestamp, bool presync) override
-        {
-            std::cout << "Header tip changed: " << height << ", " << timestamp << ", " << presync << std::endl;
-        }
-        void progress(const bilingual_str& title, int progress_percent, bool resume_possible) override
-        {
-            std::cout << "Progress: " << title.original << ", " << progress_percent << ", " << resume_possible << std::endl;
-        }
-        void warningSet(kernel::Warning id, const bilingual_str& message) override
-        {
-            std::cout << "Warning " << static_cast<int>(id) << " set: " << message.original << std::endl;
-        }
-        void warningUnset(kernel::Warning id) override
-        {
-            std::cout << "Warning " << static_cast<int>(id) << " unset" << std::endl;
-        }
-        void flushError(const bilingual_str& message) override
-        {
-            std::cerr << "Error flushing block data to disk: " << message.original << std::endl;
-        }
-        void fatalError(const bilingual_str& message) override
-        {
-            std::cerr << "Error: " << message.original << std::endl;
-        }
-    };
-    auto notifications = std::make_unique<KernelNotifications>();
-
-    kernel::CacheSizes cache_sizes{DEFAULT_KERNEL_CACHE};
-
-    // SETUP: Chainstate
-    auto chainparams = CChainParams::Main();
-    const ChainstateManager::Options chainman_opts{
-        .chainparams = *chainparams,
-        .datadir = abs_datadir,
-        .notifications = *notifications,
-        .signals = &validation_signals,
-    };
-    const node::BlockManager::Options blockman_opts{
-        .chainparams = chainman_opts.chainparams,
-        .blocks_dir = abs_datadir / "blocks",
-        .notifications = chainman_opts.notifications,
-        .block_tree_db_params = DBParams{
-            .path = abs_datadir / "blocks" / "index",
-            .cache_bytes = cache_sizes.block_tree_db,
-        },
-    };
-    util::SignalInterrupt interrupt;
-    ChainstateManager chainman{interrupt, chainman_opts, blockman_opts};
-
     node::ChainstateLoadOptions options;
     auto [status, error] = node::LoadChainstate(chainman, cache_sizes, options);
     if (status != node::ChainstateLoadStatus::SUCCESS) {
-        std::cerr << "Failed to load Chain state from your datadir." << std::endl;
-        goto epilogue;
+        std::cerr << "Failed to load chainstate: " << error.original << std::endl;
+        return EXIT_FAILURE;
     } else {
         std::tie(status, error) = node::VerifyLoadedChainstate(chainman, options);
         if (status != node::ChainstateLoadStatus::SUCCESS) {
-            std::cerr << "Failed to verify loaded Chain state from your datadir." << std::endl;
-            goto epilogue;
+            std::cerr << "Failed to verify chainstate: " << error.original << std::endl;
+            return EXIT_FAILURE;
         }
     }
 
@@ -145,7 +61,7 @@ int main(int argc, char* argv[])
         BlockValidationState state;
         if (!chainstate->ActivateBestChain(state, nullptr)) {
             std::cerr << "Failed to connect best block (" << state.ToString() << ")" << std::endl;
-            goto epilogue;
+            return EXIT_FAILURE;
         }
     }
 
@@ -153,7 +69,7 @@ int main(int argc, char* argv[])
     std::cout
         << "Hello! I'm going to print out some information about your datadir." << std::endl
         << "\t"
-        << "Path: " << abs_datadir << std::endl;
+        << "Path: " << chainman.m_options.datadir << std::endl;
     {
         LOCK(chainman.GetMutex());
         std::cout
@@ -254,17 +170,134 @@ int main(int argc, char* argv[])
         }
     }
 
-epilogue:
-    // Without this precise shutdown sequence, there will be a lot of nullptr
-    // dereferencing and UB.
-    validation_signals.FlushBackgroundCallbacks();
+    return EXIT_SUCCESS;
+}
+
+static int Run(int argc, char* argv[])
+{
+    // We do not enable logging for this app, so explicitly disable it.
+    // To enable logging instead, replace with:
+    //    LogInstance().m_print_to_console = true;
+    //    LogInstance().StartLogging();
+    LogInstance().DisableLogging();
+
+    // SETUP: Argument parsing and handling
+    if (argc != 2) {
+        std::cerr
+            << "Usage: " << argv[0] << " DATADIR" << std::endl
+            << "Display DATADIR information, and process hex-encoded blocks on standard input." << std::endl
+            << std::endl
+            << "IMPORTANT: THIS EXECUTABLE IS EXPERIMENTAL, FOR TESTING ONLY, AND EXPECTED TO" << std::endl
+            << "           BREAK IN FUTURE VERSIONS. DO NOT USE ON YOUR ACTUAL DATADIR." << std::endl;
+        return 1;
+    }
+    fs::path abs_datadir{fs::absolute(argv[1])};
+    fs::create_directories(abs_datadir);
+
+
+    // SETUP: Context
+    kernel::Context kernel_context{};
+    assert(kernel::SanityChecks(kernel_context));
+
+    ValidationSignals validation_signals{std::make_unique<util::ImmediateTaskRunner>()};
+
+    class KernelNotifications : public kernel::Notifications
+    {
+    public:
+        kernel::InterruptResult blockTip(SynchronizationState, CBlockIndex&, double) override
+        {
+            std::cout << "Block tip changed" << std::endl;
+            return {};
+        }
+        void headerTip(SynchronizationState, int64_t height, int64_t timestamp, bool presync) override
+        {
+            std::cout << "Header tip changed: " << height << ", " << timestamp << ", " << presync << std::endl;
+        }
+        void progress(const bilingual_str& title, int progress_percent, bool resume_possible) override
+        {
+            std::cout << "Progress: " << title.original << ", " << progress_percent << ", " << resume_possible << std::endl;
+        }
+        void warningSet(kernel::Warning id, const bilingual_str& message) override
+        {
+            std::cout << "Warning " << static_cast<int>(id) << " set: " << message.original << std::endl;
+        }
+        void warningUnset(kernel::Warning id) override
+        {
+            std::cout << "Warning " << static_cast<int>(id) << " unset" << std::endl;
+        }
+        void flushError(const bilingual_str& message) override
+        {
+            std::cerr << "Error flushing block data to disk: " << message.original << std::endl;
+        }
+        void fatalError(const bilingual_str& message) override
+        {
+            std::cerr << "Error: " << message.original << std::endl;
+        }
+    };
+    auto notifications = std::make_unique<KernelNotifications>();
+
+    kernel::CacheSizes cache_sizes{DEFAULT_KERNEL_CACHE};
+
+    // SETUP: Chainstate
+    auto chainparams = CChainParams::Main();
+    const ChainstateManager::Options chainman_opts{
+        .chainparams = *chainparams,
+        .datadir = abs_datadir,
+        .notifications = *notifications,
+        .signals = &validation_signals,
+    };
+    const node::BlockManager::Options blockman_opts{
+        .chainparams = chainman_opts.chainparams,
+        .blocks_dir = abs_datadir / "blocks",
+        .notifications = chainman_opts.notifications,
+        .block_tree_db_params = DBParams{
+            .path = abs_datadir / "blocks" / "index",
+            .cache_bytes = cache_sizes.block_tree_db,
+        },
+    };
+    util::SignalInterrupt interrupt;
+    ChainstateManager chainman{interrupt, chainman_opts, blockman_opts};
+
+    int exit_status{EXIT_FAILURE};
+    try {
+        exit_status = ProcessBlocks(chainman, validation_signals, cache_sizes);
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+    }
+
+    // Keep the manager alive through shutdown, including after partial loading
+    // or an exception. Do not put potentially throwing disk flushes in a destructor.
+    try {
+        validation_signals.FlushBackgroundCallbacks();
+    } catch (const std::exception& e) {
+        std::cerr << "Error draining validation callbacks: " << e.what() << std::endl;
+        exit_status = EXIT_FAILURE;
+    }
     {
         LOCK(cs_main);
         for (Chainstate* chainstate : chainman.GetAll()) {
-            if (chainstate->CanFlushToDisk()) {
-                chainstate->ForceFlushStateToDisk();
-                chainstate->ResetCoinsViews();
+            try {
+                if (chainstate->CanFlushToDisk() && !chainstate->ForceFlushStateToDisk()) {
+                    std::cerr << "Failed to flush chainstate." << std::endl;
+                    exit_status = EXIT_FAILURE;
+                }
+            } catch (const std::exception& e) {
+                std::cerr << "Error flushing chainstate: " << e.what() << std::endl;
+                exit_status = EXIT_FAILURE;
             }
+            chainstate->ResetCoinsViews();
         }
+    }
+    return exit_status;
+}
+
+int main(int argc, char* argv[])
+{
+    try {
+        return Run(argc, argv);
+    } catch (const std::exception& e) {
+        // Setup can fail before a ChainstateManager exists to shut down.
+        std::cerr << "Error: " << e.what() << std::endl;
+        return EXIT_FAILURE;
     }
 }

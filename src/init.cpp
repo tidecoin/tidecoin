@@ -58,6 +58,7 @@
 #include <node/mempool_persist_args.h>
 #include <node/miner.h>
 #include <node/peerman_args.h>
+#include <node/utxo_snapshot.h>
 #include <policy/feerate.h>
 #include <policy/fees.h>
 #include <policy/fees_args.h>
@@ -1338,6 +1339,8 @@ static ChainstateLoadResult InitAndLoadChainstate(
     auto catch_exceptions = [](auto&& f) -> ChainstateLoadResult {
         try {
             return f();
+        } catch (const node::SnapshotMetadataError& e) {
+            return {node::ChainstateLoadStatus::FAILURE_FATAL, Untranslated(e.what())};
         } catch (const std::exception& e) {
             LogError("%s\n", e.what());
             return std::make_tuple(node::ChainstateLoadStatus::FAILURE, _("Error loading databases"));

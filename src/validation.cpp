@@ -5900,15 +5900,18 @@ Chainstate& ChainstateManager::InitializeChainstate(CTxMemPool* mempool)
     if (is_snapshot) {
         fs::path base_blockhash_path = db_path / node::SNAPSHOT_BLOCKHASH_FILENAME;
 
-        try {
-            bool existed = fs::remove(base_blockhash_path);
-            if (!existed) {
-                LogPrintf("[snapshot] snapshot chainstate dir being removed lacks %s file\n",
-                          fs::PathToString(node::SNAPSHOT_BLOCKHASH_FILENAME));
+        // An interrupted or failed metadata save can leave the temporary behind.
+        for (const auto& path : {base_blockhash_path, base_blockhash_path + ".tmp"}) {
+            try {
+                bool existed = fs::remove(path);
+                if (!existed && path == base_blockhash_path) {
+                    LogPrintf("[snapshot] snapshot chainstate dir being removed lacks %s file\n",
+                              fs::PathToString(node::SNAPSHOT_BLOCKHASH_FILENAME));
+                }
+            } catch (const fs::filesystem_error& e) {
+                LogWarning("[snapshot] failed to remove file %s: %s\n",
+                           fs::PathToString(path), e.code().message());
             }
-        } catch (const fs::filesystem_error& e) {
-            LogWarning("[snapshot] failed to remove file %s: %s\n",
-                       fs::PathToString(base_blockhash_path), e.code().message());
         }
     }
 
@@ -5926,7 +5929,7 @@ Chainstate& ChainstateManager::InitializeChainstate(CTxMemPool* mempool)
     // Datadir should be removed from filesystem; otherwise initialization may detect
     // it on subsequent statups and get confused.
     //
-    // If the base_blockhash_path removal above fails in the case of snapshot
+    // If metadata removal above fails in the case of snapshot
     // chainstates, this will return false since leveldb won't remove a non-empty
     // directory.
     return destroyed && !fs::exists(db_path);
