@@ -230,6 +230,17 @@ if(BUILD_FOR_FUZZING)
   )
 endif()
 
+# Enable Objective-C++ before probing shared target options. Qt's macOS bridge
+# sources need the same configured checks as C++, tested with their own compiler.
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND BUILD_GUI)
+  enable_language(OBJCXX)
+  set(CMAKE_OBJCXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
+  set(CMAKE_OBJCXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
+  set(CMAKE_OBJCXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+  set(CMAKE_OBJCXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL}")
+  string(APPEND CMAKE_OBJCXX_COMPILE_OBJECT " ${APPEND_CPPFLAGS} ${APPEND_CXXFLAGS}")
+endif()
+
 include(TryAppendCXXFlags)
 include(TryAppendCFlags)
 include(TryAppendLinkerFlag)
@@ -382,7 +393,7 @@ if(SANITIZERS)
     RESULT_VAR c_supports_sanitizers
   )
   if(NOT cxx_supports_sanitizers OR NOT c_supports_sanitizers)
-    message(FATAL_ERROR "C or C++ compiler did not accept requested sanitizer flags.")
+    message(FATAL_ERROR "A C, C++ or enabled Objective-C++ compiler did not accept requested sanitizer flags.")
   endif()
 
   # Some compilers (e.g. GCC) require additional libraries like libasan,
@@ -629,7 +640,7 @@ if(WERROR)
   try_append_cxx_flags(${werror_flag} TARGET core_interface SKIP_LINK RESULT_VAR compiler_supports_werror)
   try_append_c_flags(${werror_flag} TARGET core_interface RESULT_VAR c_compiler_supports_werror)
   if(NOT compiler_supports_werror OR NOT c_compiler_supports_werror)
-    message(FATAL_ERROR "WERROR set but ${werror_flag} is not usable for C or C++.")
+    message(FATAL_ERROR "WERROR set but ${werror_flag} is not usable for C, C++ or enabled Objective-C++.")
   endif()
   unset(werror_flag)
 endif()

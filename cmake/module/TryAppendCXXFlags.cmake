@@ -4,10 +4,14 @@
 
 include_guard(GLOBAL)
 include(CheckCXXSourceCompiles)
+include(CheckSourceCompiles)
 
 #[=[
 Add language-wide flags, which will be passed to all invocations of the compiler.
 This includes invocations that drive compiling and those that drive linking.
+TARGET options are probed independently for CXX and, when enabled, OBJCXX.
+RESULT_VAR requires all these compilers to accept the options. VAR-only calls
+and linker checks retain their CXX behavior.
 
 Usage examples:
 
@@ -63,45 +67,53 @@ function(try_append_cxx_flags flags)
   # This avoids running a linker.
   set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
   set(CMAKE_REQUIRED_FLAGS "${flags_as_string} ${working_compiler_werror_flag}")
-  set(compiler_result CXX_SUPPORTS_${id_string})
-  check_cxx_source_compiles("${source}" ${compiler_result})
-
-  if(${compiler_result})
+  set(languages CXX)
+  if(DEFINED TACXXF_TARGET AND CMAKE_OBJCXX_COMPILER_LOADED)
+    list(APPEND languages OBJCXX)
+  endif()
+  set(all_compilers_support_flags TRUE)
+  foreach(language IN LISTS languages)
+    set(compiler_result ${language}_SUPPORTS_${id_string})
+    check_source_compiles(${language} "${source}" ${compiler_result})
+    if(NOT ${compiler_result})
+      set(all_compilers_support_flags FALSE)
+      continue()
+    endif()
     if(DEFINED TACXXF_IF_CHECK_PASSED)
       if(DEFINED TACXXF_TARGET)
-        set(cxx_only_flags "")
+        set(language_flags "")
         foreach(flag IN LISTS TACXXF_IF_CHECK_PASSED)
-          list(APPEND cxx_only_flags "$<$<COMPILE_LANGUAGE:CXX>:${flag}>")
+          list(APPEND language_flags "$<$<COMPILE_LANGUAGE:${language}>:${flag}>")
         endforeach()
-        target_compile_options(${TACXXF_TARGET} INTERFACE ${cxx_only_flags})
+        target_compile_options(${TACXXF_TARGET} INTERFACE ${language_flags})
       endif()
-      if(DEFINED TACXXF_VAR)
+      if(DEFINED TACXXF_VAR AND language STREQUAL "CXX")
         list(JOIN TACXXF_IF_CHECK_PASSED " " flags_if_check_passed_as_string)
         string(STRIP "${${TACXXF_VAR}} ${flags_if_check_passed_as_string}" ${TACXXF_VAR})
       endif()
     else()
       if(DEFINED TACXXF_TARGET)
-        set(cxx_only_flags "")
+        set(language_flags "")
         foreach(flag IN LISTS flags)
-          list(APPEND cxx_only_flags "$<$<COMPILE_LANGUAGE:CXX>:${flag}>")
+          list(APPEND language_flags "$<$<COMPILE_LANGUAGE:${language}>:${flag}>")
         endforeach()
-        target_compile_options(${TACXXF_TARGET} INTERFACE ${cxx_only_flags})
+        target_compile_options(${TACXXF_TARGET} INTERFACE ${language_flags})
       endif()
-      if(DEFINED TACXXF_VAR)
+      if(DEFINED TACXXF_VAR AND language STREQUAL "CXX")
         string(STRIP "${${TACXXF_VAR}} ${flags_as_string}" ${TACXXF_VAR})
       endif()
     endif()
-  endif()
+  endforeach()
 
   if(DEFINED TACXXF_VAR)
     set(${TACXXF_VAR} "${${TACXXF_VAR}}" PARENT_SCOPE)
   endif()
 
   if(DEFINED TACXXF_RESULT_VAR)
-    set(${TACXXF_RESULT_VAR} "${${compiler_result}}" PARENT_SCOPE)
+    set(${TACXXF_RESULT_VAR} "${all_compilers_support_flags}" PARENT_SCOPE)
   endif()
 
-  if(NOT ${compiler_result} OR TACXXF_SKIP_LINK)
+  if(NOT CXX_SUPPORTS_${id_string} OR TACXXF_SKIP_LINK)
     return()
   endif()
 

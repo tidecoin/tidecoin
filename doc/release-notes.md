@@ -869,6 +869,14 @@ was already pruned remains unavailable. Only one export can run at a time.
 Cancellation is cooperative, and an abrupt shutdown can leave temporary files
 requiring manual cleanup. See [snapshot export documentation](assumeutxo.md).
 
+macOS GUI builds
+----------------
+
+The Objective-C++ sources used for Dock integration, notifications and App Nap
+now receive the applicable project warning and hardening options. `WERROR` and
+requested sanitizer instrumentation also cover these sources. Target options
+are checked with the Objective-C++ compiler as well as the C++ compiler.
+
 Credits
 ========
 
