@@ -437,6 +437,9 @@ bool ArgsManager::WriteSettingsFile(std::vector<std::string>* errors, bool backu
         SaveErrors({strprintf("Failed renaming settings file %s to %s\n", fs::PathToString(path_tmp), fs::PathToString(path))}, errors);
         return false;
     }
+    if (!DirectoryCommit(path.parent_path())) {
+        LogWarning("Settings file %s was replaced, but its directory could not be synchronized; changes may not survive a system crash", fs::PathToString(path));
+    }
     return true;
 }
 

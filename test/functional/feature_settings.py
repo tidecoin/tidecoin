@@ -5,6 +5,7 @@
 """Test various command line arguments and configuration file parameters."""
 
 import json
+import sys
 
 
 from test_framework.test_framework import BitcoinTestFramework
@@ -69,6 +70,23 @@ class SettingsTest(BitcoinTestFramework):
         # Assert settings are unchanged after shutdown
         with settings.open() as fp:
             assert_equal(json.load(fp), {**default_settings, **{"string": "string", "num": 5, "bool": True, "null": None, "list": [6, 7]}})
+
+        self.log.info("Failure to save settings preserves the previous file and allows retry")
+        original = settings.read_bytes()
+        temporary = settings.with_name(settings.name + ".tmp")
+        temporary.mkdir()
+        node.assert_start_raises_init_error(expected_msg="Unable to write settings file", match=ErrorMatch.PARTIAL_REGEX)
+        assert_equal(settings.read_bytes(), original)
+        temporary.rmdir()
+        if sys.platform.startswith("linux"):
+            # fopen succeeds but flushing buffered writes fails with ENOSPC.
+            temporary.symlink_to("/dev/full")
+            node.assert_start_raises_init_error(expected_msg="Unable to write settings file", match=ErrorMatch.PARTIAL_REGEX)
+            assert_equal(settings.read_bytes(), original)
+            temporary.unlink()
+        self.start_node(0)
+        self.stop_node(0)
+        assert_equal(settings.read_bytes(), original)
 
         # Test invalid json
         with settings.open("w") as fp:

@@ -82,6 +82,24 @@ unless `-i2pacceptincoming=0` is set.  The private key is saved in a file named
 address is used for making outbound connections and accepting inbound
 connections.
 
+The key file must be a regular file or a symbolic link to one. Tidecoin limits it to
+65,536 bytes, conservatively allowing every key its bounded SAM replies can
+contain. This is a local resource limit, not a universal maximum for I2P key
+formats. The destination structure is checked locally; the SAM router validates
+the remaining algorithm-specific and optional offline key material.
+
+Only a missing file permits generating a new identity. Dangling or unresolvable
+links are errors. Empty, malformed, oversized or unreadable files cause the persistent session to fail without
+replacing the file. Restore the key or correct the file problem to recover the
+same address. New keys are written through a synchronized temporary file before
+replacement, and the session is not created until saving succeeds. Loaded keys
+are not rewritten and do not require directory synchronization, so read-only key
+mounts are supported. After replacement, directory synchronization is best effort:
+failure is logged as a warning and does not prevent session creation, but persistence
+across a system crash is uncertain. Keep a secure backup: filesystem and platform
+limits still apply. Deliberately removing the key file or link causes a new address
+to be generated.
+
 In the I2P network, the receiver of an inbound connection sees the address of
 the initiator.  This is unlike the Tor network, where the recipient does not
 know who is connecting to it.

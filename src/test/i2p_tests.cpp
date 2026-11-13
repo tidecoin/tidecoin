@@ -11,6 +11,7 @@
 #include <test/util/net.h>
 #include <test/util/setup_common.h>
 #include <util/readwritefile.h>
+#include <util/strencodings.h>
 #include <util/threadinterrupt.h>
 
 #include <boost/test/unit_test.hpp>
@@ -169,6 +170,125 @@ BOOST_AUTO_TEST_CASE(damaged_private_key)
             BOOST_CHECK(!session.Connect(CService{}, conn, proxy_error));
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(persistent_key_failures)
+{
+    class RecordingSock : public StaticContentsSock
+    {
+        std::string& m_sent;
+        RecordingSock& operator=(Sock&&) override { std::terminate(); }
+    public:
+        RecordingSock(const std::string& reply, std::string& sent) : StaticContentsSock(reply), m_sent{sent} {}
+        ssize_t Send(const void* data, size_t len, int) const override
+        {
+            m_sent.append(static_cast<const char*>(data), len);
+            return len;
+        }
+    };
+    const auto path = m_args.GetDataDirNet() / "persistent-key";
+    CThreadInterrupt interrupt;
+    const CService addr{in6_addr(IN6ADDR_LOOPBACK_INIT), /*port=*/7656};
+    const Proxy sam_proxy{addr, /*tor_stream_isolation=*/false};
+    std::string sent;
+    // Structurally valid destination and private material; the SAM mock does not
+    // perform cryptographic validation. Keep the certificate length zero.
+    const std::string key(663, '\0');
+    std::string replies;
+    size_t sockets{0};
+    CreateSock = [&](int, int, int) {
+        return std::make_unique<RecordingSock>("HELLO REPLY RESULT=OK VERSION=3.1\n" +
+            (++sockets == 1 ? replies : "STREAM STATUS RESULT=OK\n"), sent);
+    };
+    const auto listen = [&] {
+        sockets = 0;
+        i2p::sam::Session session(path, sam_proxy, &interrupt);
+        i2p::Connection conn;
+        return session.Listen(conn);
+    };
+    // Read errors must not send DEST GENERATE, SESSION CREATE, or alter the file.
+    for (const std::string& data : {std::string{}, std::string(386, '\0'), std::string(i2p::sam::MAX_PRIVATE_KEY_SIZE + 1, 'x')}) {
+        BOOST_REQUIRE(WriteBinaryFile(path, data));
+        sent.clear();
+        BOOST_CHECK(!listen());
+        BOOST_CHECK_EQUAL(sent, "HELLO VERSION MIN=3.1 MAX=3.1\n");
+        BOOST_CHECK_EQUAL(ReadBinaryFile(path).second, data);
+    }
+    fs::remove(path);
+    fs::create_directory(path);
+    sent.clear();
+    BOOST_CHECK(!listen());
+    BOOST_CHECK_EQUAL(sent, "HELLO VERSION MIN=3.1 MAX=3.1\n");
+    BOOST_CHECK(fs::is_directory(path));
+    fs::remove(path);
+
+    replies = "DEST REPLY PRIV=AAAA\n";
+    sent.clear();
+    BOOST_CHECK(!listen());
+    BOOST_CHECK(!fs::exists(path));
+    BOOST_CHECK(sent.find("SESSION CREATE ") == std::string::npos);
+
+    // Failure to persist a newly generated key must precede SESSION CREATE.
+    replies = "DEST REPLY PRIV=" + EncodeBase64(key) + "\n";
+    fs::create_directory(path + ".tmp");
+    sent.clear();
+    BOOST_CHECK(!listen());
+    BOOST_CHECK(sent.find("DEST GENERATE ") != std::string::npos);
+    BOOST_CHECK(sent.find("SESSION CREATE ") == std::string::npos);
+    BOOST_CHECK(!fs::exists(path));
+    fs::remove(path + ".tmp");
+
+    replies += "SESSION STATUS RESULT=OK\nSTREAM STATUS RESULT=OK\n";
+    sent.clear();
+    BOOST_CHECK(listen());
+    BOOST_CHECK_EQUAL(ReadBinaryFile(path).second, key);
+    BOOST_CHECK(sent.find("SESSION CREATE ") != std::string::npos);
+
+    // Reopening uses the same stored key without generating or writing another.
+    // A blocked temporary path would make any unnecessary rewrite fail.
+    fs::create_directory(path + ".tmp");
+    replies = "SESSION STATUS RESULT=OK\nSTREAM STATUS RESULT=OK\n";
+    sent.clear();
+    BOOST_CHECK(listen());
+    BOOST_CHECK(sent.find("DEST GENERATE ") == std::string::npos);
+    BOOST_CHECK(sent.find("DESTINATION=" + EncodeBase64(key)) != std::string::npos);
+    BOOST_CHECK_EQUAL(ReadBinaryFile(path).second, key);
+    fs::remove(path + ".tmp");
+
+    // The local bound accepts the entire buffer at the limit. Leave algorithm
+    // validation to the SAM router rather than imposing a guessed 4 KiB limit.
+    const std::string large_key(i2p::sam::MAX_PRIVATE_KEY_SIZE, '\0');
+    BOOST_REQUIRE(WriteBinaryFile(path, large_key));
+    sent.clear();
+    BOOST_CHECK(listen());
+    BOOST_CHECK(sent.find("DEST GENERATE ") == std::string::npos);
+    BOOST_CHECK(sent.find("DESTINATION=" + EncodeBase64(large_key)) != std::string::npos);
+#ifndef WIN32
+    // A mounted/read-only key can be reached through a link. Using an existing
+    // key must require neither rewriting it nor opening its directory for sync.
+    const auto key_directory = m_args.GetDataDirNet() / "mounted-i2p-key";
+    fs::create_directory(key_directory);
+    const auto target = key_directory / "key";
+    BOOST_REQUIRE(WriteBinaryFile(target, key));
+    fs::remove(path);
+    fs::create_symlink(target, path);
+    fs::permissions(target, fs::perms::owner_read);
+    fs::permissions(key_directory, fs::perms::owner_exec);
+    sent.clear();
+    const bool loaded_linked_key = listen();
+    fs::permissions(key_directory, fs::perms::owner_all);
+    BOOST_CHECK(loaded_linked_key);
+    BOOST_CHECK(sent.find("DEST GENERATE ") == std::string::npos);
+    BOOST_CHECK(sent.find("DESTINATION=" + EncodeBase64(key)) != std::string::npos);
+    BOOST_CHECK(fs::is_symlink(path));
+    BOOST_CHECK_EQUAL(ReadBinaryFile(target).second, key);
+    fs::remove(target);
+    sent.clear();
+    BOOST_CHECK(!listen());
+    BOOST_CHECK_EQUAL(sent, "HELLO VERSION MIN=3.1 MAX=3.1\n");
+    BOOST_CHECK(fs::is_symlink(path));
+    BOOST_CHECK(!fs::exists(target));
+#endif
 }
 
 BOOST_AUTO_TEST_SUITE_END()

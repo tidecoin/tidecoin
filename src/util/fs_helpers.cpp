@@ -134,14 +134,16 @@ bool FileCommit(FILE* file)
     return true;
 }
 
-void DirectoryCommit(const fs::path& dirname)
+bool DirectoryCommit(const fs::path& dirname)
 {
 #ifndef WIN32
     FILE* file = fsbridge::fopen(dirname, "r");
-    if (file) {
-        fsync(fileno(file));
-        fclose(file);
-    }
+    if (!file) return false;
+    const bool synced = fsync(fileno(file)) == 0 || errno == EINVAL || errno == ENOTSUP;
+    const bool closed = fclose(file) == 0;
+    return synced && closed;
+#else
+    return true;
 #endif
 }
 
@@ -258,18 +260,9 @@ fs::path GetSpecialFolderPath(int nFolder, bool fCreate)
 bool RenameOver(fs::path src, fs::path dest)
 {
 #ifdef WIN32
-    if (::MoveFileExW(src.c_str(), dest.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        return true;
-    }
-
-    // ReplaceFileW can succeed in cases where MoveFileExW fails, such as when
-    // ACLs on the destination cannot be merged cleanly.
-    if (::ReplaceFileW(dest.c_str(), src.c_str(), /*lpBackupFileName=*/nullptr,
-                       REPLACEFILE_IGNORE_MERGE_ERRORS,
-                       /*lpExclude=*/nullptr, /*lpReserved=*/nullptr)) {
-        return true;
-    }
-    return false;
+    // Do not fall back to ReplaceFileW: its failure can remove the destination
+    // while leaving the replacement at src, which callers may then delete.
+    return ::MoveFileExW(src.c_str(), dest.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
 #else
     std::error_code error;
     fs::rename(src, dest, error);

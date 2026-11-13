@@ -123,6 +123,9 @@ private:
     const std::string m_tor_control_center;
     TorControlConnection conn;
     std::string private_key;
+    /** Updated only after a successful load/save, never on a failed save. */
+    std::string m_persisted_private_key;
+    bool m_private_key_readable{true};
     std::string service_id;
     bool reconnect;
     struct event *reconnect_ev = nullptr;

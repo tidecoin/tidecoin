@@ -9,6 +9,7 @@
 #include <tinyformat.h>
 #include <univalue.h>
 #include <util/fs.h>
+#include <util/readwritefile.h>
 
 #include <algorithm>
 #include <fstream>
@@ -132,20 +133,8 @@ bool WriteSettings(const fs::path& path,
     for (const auto& value : values) {
         out.pushKVEnd(value.first, value.second);
     }
-    std::ofstream file;
-    file.open(path);
-    if (file.fail()) {
-        errors.emplace_back(strprintf("Error: Unable to open settings file %s for writing", fs::PathToString(path)));
-        return false;
-    }
-    file << out.write(/* prettyIndent= */ 4, /* indentLevel= */ 1) << std::endl;
-    if (file.fail()) {
+    if (!WriteBinaryFile(path, out.write(/* prettyIndent= */ 4, /* indentLevel= */ 1) + "\n", /*commit=*/true)) {
         errors.emplace_back(strprintf("Error: Unable to write settings file %s", fs::PathToString(path)));
-        return false;
-    }
-    file.close();
-    if (file.fail()) {
-        errors.emplace_back(strprintf("Error: Unable to close settings file %s", fs::PathToString(path)));
         return false;
     }
     return true;

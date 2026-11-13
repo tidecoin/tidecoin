@@ -13,6 +13,7 @@
 #include <test/data/falcon512_messages.json.h>
 #include <test/util/falcon.h>
 #include <test/util/json.h>
+#include <test/util/logging.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
@@ -45,7 +46,9 @@
 #include <sys/types.h>
 
 #ifndef WIN32
+#include <sys/stat.h>
 #include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 #include <boost/test/unit_test.hpp>
@@ -1735,6 +1738,132 @@ BOOST_AUTO_TEST_CASE(util_WriteBinaryFile)
     file >> actual_text;
     BOOST_CHECK(valid);
     BOOST_CHECK_EQUAL(actual_text, expected_text);
+}
+
+BOOST_AUTO_TEST_CASE(bounded_identity_files)
+{
+    const auto path = m_args.GetDataDirBase() / "identity";
+    const auto check = [&](FileReadStatus status, size_t limit, const std::string& expected = "") {
+        const auto result = ReadBinaryFileBounded(path, limit);
+        BOOST_CHECK(result.status == status);
+        BOOST_CHECK_EQUAL(result.data, expected);
+    };
+    check(FileReadStatus::NOT_FOUND, 128);
+    BOOST_REQUIRE(WriteBinaryFile(path, ""));
+    check(FileReadStatus::OK, 0);
+    const std::string key(128, 'k');
+    BOOST_REQUIRE(WriteBinaryFile(path, key));
+    check(FileReadStatus::OK, 128, key);
+    check(FileReadStatus::OK, 129, key);
+    check(FileReadStatus::ERROR, 127);
+    check(FileReadStatus::ERROR, 0);
+    BOOST_REQUIRE(WriteBinaryFile(path, key + "x"));
+    check(FileReadStatus::ERROR, 128);
+#ifndef WIN32
+    if (geteuid() != 0) {
+        fs::permissions(path, fs::perms::none);
+        check(FileReadStatus::ERROR, 1024);
+        fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write);
+    }
+#endif
+    fs::remove(path);
+    fs::create_directory(path);
+    check(FileReadStatus::ERROR, 128);
+    fs::remove(path);
+#ifndef WIN32
+    // Check before opening: a FIFO with no writer must not hang the reader.
+    BOOST_REQUIRE_EQUAL(mkfifo(path.c_str(), 0600), 0);
+    check(FileReadStatus::ERROR, 128);
+    fs::remove(path);
+    const auto target = m_args.GetDataDirBase() / "identity-target";
+    BOOST_REQUIRE(WriteBinaryFile(target, key));
+    fs::create_symlink(target, path);
+    check(FileReadStatus::OK, 128, key);
+    check(FileReadStatus::ERROR, 127);
+    fs::remove(target); // A dangling symlink is an error, not permission to rotate.
+    check(FileReadStatus::ERROR, 128);
+    fs::create_directory(target);
+    check(FileReadStatus::ERROR, 128);
+    fs::remove(target);
+    BOOST_REQUIRE_EQUAL(mkfifo(target.c_str(), 0600), 0);
+    check(FileReadStatus::ERROR, 128); // Following a link to a FIFO must not open it.
+    fs::remove(target);
+    fs::create_symlink(path, target); // Unresolvable loop.
+    check(FileReadStatus::ERROR, 128);
+    fs::remove(target);
+    fs::remove(path);
+    // An absent file through a dangling parent link must not count as missing.
+    fs::create_directory_symlink(target, path);
+    BOOST_CHECK(ReadBinaryFileBounded(path / "key", 128).status == FileReadStatus::ERROR);
+    fs::remove(path);
+#endif
+}
+
+BOOST_AUTO_TEST_CASE(atomic_identity_files)
+{
+    const auto path = m_args.GetDataDirBase() / "identity-atomic";
+    const auto temporary = path + ".tmp";
+    BOOST_REQUIRE(WriteBinaryFileAtomic(path, "original"));
+    BOOST_REQUIRE(WriteBinaryFileAtomic(path, "replacement"));
+    BOOST_CHECK_EQUAL(ReadBinaryFileBounded(path, 100).data, "replacement");
+    BOOST_CHECK(!fs::exists(temporary));
+    fs::create_directory(temporary);
+    BOOST_CHECK(!WriteBinaryFileAtomic(path, "must not replace"));
+    BOOST_CHECK_EQUAL(ReadBinaryFileBounded(path, 100).data, "replacement");
+    fs::remove(temporary);
+    fs::remove(path);
+    fs::create_directory(path);
+    BOOST_CHECK(!WriteBinaryFileAtomic(path, "must not replace directory"));
+    BOOST_CHECK(fs::is_directory(path));
+    fs::remove(path);
+#ifndef WIN32
+    const auto target_dir = m_args.GetDataDirBase() / "separate-key-directory";
+    fs::create_directory(target_dir);
+    const auto target = target_dir / "atomic-target";
+    const auto target_temporary = target + ".tmp";
+    BOOST_REQUIRE(WriteBinaryFile(target, "target"));
+    // Resolve a relative link chain, and keep the temporary beside the target.
+    const auto intermediate = m_args.GetDataDirBase() / "intermediate";
+    fs::create_symlink(fs::path{"separate-key-directory"} / "atomic-target", intermediate);
+    fs::create_symlink("intermediate", path);
+    fs::create_directory(temporary); // This is not the resolved target's temporary.
+    fs::create_directory(target_temporary);
+    BOOST_CHECK(!WriteBinaryFileAtomic(path, "blocked write"));
+    BOOST_CHECK(fs::is_symlink(path));
+    BOOST_CHECK(fs::is_symlink(intermediate));
+    BOOST_CHECK_EQUAL(ReadBinaryFileBounded(target, 100).data, "target");
+    fs::remove(target_temporary);
+    BOOST_CHECK(WriteBinaryFileAtomic(path, "updated target"));
+    BOOST_CHECK(fs::is_symlink(path));
+    BOOST_CHECK(fs::is_symlink(intermediate));
+    BOOST_CHECK_EQUAL(ReadBinaryFileBounded(target, 100).data, "updated target");
+    BOOST_CHECK_EQUAL(ReadBinaryFileBounded(path, 100).data, "updated target");
+    BOOST_CHECK(!fs::exists(target_temporary));
+    fs::remove(target);
+    BOOST_CHECK(!WriteBinaryFileAtomic(path, "must not create dangling target"));
+    BOOST_CHECK(!fs::exists(target));
+    BOOST_CHECK(fs::is_symlink(path));
+    fs::remove(path);
+    fs::remove(temporary);
+    BOOST_REQUIRE(WriteBinaryFile(target, "target"));
+    fs::create_symlink(target, temporary);
+    BOOST_CHECK(!WriteBinaryFileAtomic(path, "must not follow temporary symlink"));
+    BOOST_CHECK_EQUAL(ReadBinaryFileBounded(target, 100).data, "target");
+    fs::remove(temporary);
+    if (geteuid() != 0) {
+        // Search/write permission allows replacement without directory-read
+        // permission. Only directory sync fails, and must not fail the save.
+        fs::permissions(target_dir, fs::perms::owner_write | fs::perms::owner_exec);
+        bool saved;
+        {
+            ASSERT_DEBUG_LOG("its directory could not be synchronized");
+            saved = WriteBinaryFileAtomic(target, "saved with warning");
+        }
+        fs::permissions(target_dir, fs::perms::owner_all);
+        BOOST_CHECK(saved);
+        BOOST_CHECK_EQUAL(ReadBinaryFileBounded(target, 100).data, "saved with warning");
+    }
+#endif
 }
 
 BOOST_AUTO_TEST_CASE(clearshrink_test)

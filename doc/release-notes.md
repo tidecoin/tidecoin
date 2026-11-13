@@ -557,6 +557,32 @@ Networking and transaction relay
 - Connections whose send queues remain paused for more than 20 minutes are
   disconnected, including peers using older protocol versions.
 
+Identity and settings files
+--------------------------
+
+Tor and persistent I2P identity files have bounded reads and must be regular
+files or symbolic links to regular files. Dangling links, invalid or unreadable
+files are preserved and reported
+as errors instead of being treated as permission to create a new identity.
+Only a missing file permits automatic generation. Tor keys are rewritten only
+when changed, and neither a new Tor address nor a persistent I2P session is
+advertised or used before the key is saved. See [Tor](tor.md) and [I2P](i2p.md)
+for limits and recovery instructions.
+
+Updating an identity through a symbolic link preserves the link and replaces
+its resolved target. Tor key files accept one optional trailing LF or CRLF;
+normalizing this line ending does not cause a rewrite.
+
+Identity saves use temporary files with checked writes, file synchronization,
+closing and replacement. `settings.json` also synchronizes its temporary file
+before replacement. After replacement they attempt to synchronize the parent
+directory on systems that support it. A failure produces a warning about uncertain
+persistence across a system crash, without preventing startup or service use.
+Windows has no separate directory synchronization in this code. Unchanged Tor
+keys and loaded I2P keys do not trigger directory synchronization.
+The Windows replacement helper no longer attempts a second replacement method
+whose failure can remove the original destination. No on-disk format changes.
+
 Block and undo storage
 ======================
 

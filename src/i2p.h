@@ -50,6 +50,11 @@ namespace sam {
  */
 static constexpr size_t MAX_MSG_SIZE{65536};
 
+/** Local persistence limit, not a maximum imposed by the I2P key format.
+ * Larger than any decoded private key our bounded SAM replies can contain.
+ */
+static constexpr size_t MAX_PRIVATE_KEY_SIZE{MAX_MSG_SIZE};
+
 /**
  * I2P SAM session.
  */

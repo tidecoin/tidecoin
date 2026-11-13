@@ -76,6 +76,21 @@ static const int MAX_LINE_LENGTH = 100000;
  */
 static constexpr size_t MAX_LINE_COUNT = 1000;
 
+// ED25519-V3: followed by base64 of 64 bytes (88 characters with padding).
+static constexpr size_t MAX_ONION_PRIVATE_KEY_SIZE{99};
+// Allow one optional LF or CRLF when restoring the file with a text editor.
+static constexpr size_t MAX_ONION_PRIVATE_KEY_FILE_SIZE{MAX_ONION_PRIVATE_KEY_SIZE + 2};
+
+static bool ValidOnionPrivateKey(const std::string& key)
+{
+    if (!key.starts_with("ED25519-V3:") || key.size() > MAX_ONION_PRIVATE_KEY_SIZE) return false;
+    std::string encoded = key.substr(11);
+    // Accept both padded and unpadded base64 used by Tor implementations.
+    if (encoded.size() == 86) encoded += "==";
+    const auto decoded = DecodeBase64(encoded);
+    return decoded && decoded->size() == 64;
+}
+
 /****** Low-level TorControlConnection ********/
 
 TorControlConnection::TorControlConnection(struct event_base* _base)
@@ -366,10 +381,19 @@ TorController::TorController(struct event_base* _base, const std::string& tor_co
         LogPrintf("tor: Initiating connection to Tor control port %s failed\n", m_tor_control_center);
     }
     // Read service private key if cached
-    std::pair<bool,std::string> pkf = ReadBinaryFile(GetPrivateKeyFile());
-    if (pkf.first) {
+    auto pkf = ReadBinaryFileBounded(GetPrivateKeyFile(), MAX_ONION_PRIVATE_KEY_FILE_SIZE);
+    if (pkf.data.ends_with("\r\n")) {
+        pkf.data.resize(pkf.data.size() - 2);
+    } else if (pkf.data.ends_with('\n')) {
+        pkf.data.pop_back();
+    }
+    if (pkf.status == FileReadStatus::OK && ValidOnionPrivateKey(pkf.data)) {
         LogDebug(BCLog::TOR, "Reading cached private key from %s\n", fs::PathToString(GetPrivateKeyFile()));
-        private_key = pkf.second;
+        private_key = pkf.data;
+        m_persisted_private_key = private_key;
+    } else if (pkf.status != FileReadStatus::NOT_FOUND) {
+        m_private_key_readable = false;
+        LogError("tor: Cannot load private key file %s (invalid, unreadable, oversized or not a regular file); onion service disabled. Restore the file and restart.", fs::PathToString(GetPrivateKeyFile()));
     }
 }
 
@@ -459,6 +483,7 @@ void TorController::add_onion_cb(TorControlConnection& _conn, const TorControlRe
 {
     if (reply.code == TOR_REPLY_OK) {
         LogDebug(BCLog::TOR, "ADD_ONION successful\n");
+        service_id.clear();
         for (const std::string &s : reply.lines) {
             std::map<std::string,std::string> m = ParseTorReplyMapping(s);
             std::map<std::string,std::string>::iterator i;
@@ -467,20 +492,26 @@ void TorController::add_onion_cb(TorControlConnection& _conn, const TorControlRe
             if ((i = m.find("PrivateKey")) != m.end())
                 private_key = i->second;
         }
-        if (service_id.empty()) {
-            LogPrintf("tor: Error parsing ADD_ONION parameters:\n");
-            for (const std::string &s : reply.lines) {
-                LogPrintf("    %s\n", SanitizeString(s));
-            }
+        if (service_id.empty() || !ValidOnionPrivateKey(private_key)) {
+            // Do not log the reply: it can contain private key material.
+            LogPrintf("tor: Invalid service ID or private key in ADD_ONION reply\n");
             return;
         }
-        service = LookupNumeric(std::string(service_id+".onion"), Params().GetDefaultPort());
-        LogInfo("Got tor service ID %s, advertising service %s\n", service_id, service.ToStringAddrPort());
-        if (WriteBinaryFile(GetPrivateKeyFile(), private_key)) {
-            LogDebug(BCLog::TOR, "Cached service private key to %s\n", fs::PathToString(GetPrivateKeyFile()));
-        } else {
-            LogPrintf("tor: Error writing service private key to %s\n", fs::PathToString(GetPrivateKeyFile()));
+        const auto new_service = LookupNumeric(std::string(service_id+".onion"), Params().GetDefaultPort());
+        if (!new_service.IsValid()) {
+            LogPrintf("tor: Invalid service ID in ADD_ONION reply\n");
+            return;
         }
+        if (private_key != m_persisted_private_key) {
+            if (!WriteBinaryFileAtomic(GetPrivateKeyFile(), private_key)) {
+                LogError("tor: Error saving service private key to %s; not advertising onion service", fs::PathToString(GetPrivateKeyFile()));
+                return;
+            }
+            m_persisted_private_key = private_key;
+            LogDebug(BCLog::TOR, "Cached service private key to %s\n", fs::PathToString(GetPrivateKeyFile()));
+        }
+        service = new_service;
+        LogInfo("Got tor service ID %s, advertising service %s\n", service_id, service.ToStringAddrPort());
         AddLocal(service, LOCAL_MANUAL);
         // ... onion requested - keep connection open
     } else if (reply.code == TOR_REPLY_UNRECOGNIZED) {
@@ -502,12 +533,10 @@ void TorController::auth_cb(TorControlConnection& _conn, const TorControlReply& 
         }
 
         // Finally - now create the service
-        if (private_key.empty()) { // No private key, generate one
-            private_key = "NEW:ED25519-V3"; // Explicitly request key type - see issue #9214
-        }
+        if (!m_private_key_readable) return;
         // Request onion service, redirect port.
         // Note that the 'virtual' port is always the default port to avoid decloaking nodes using other ports.
-        _conn.Command(strprintf("ADD_ONION %s Port=%i,%s", private_key, Params().GetDefaultPort(), m_target.ToStringAddrPort()),
+        _conn.Command(strprintf("ADD_ONION %s Port=%i,%s", private_key.empty() ? "NEW:ED25519-V3" : private_key, Params().GetDefaultPort(), m_target.ToStringAddrPort()),
             std::bind(&TorController::add_onion_cb, this, std::placeholders::_1, std::placeholders::_2));
     } else {
         LogPrintf("tor: Authentication failed\n");

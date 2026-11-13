@@ -98,6 +98,30 @@ it requires a Tor connection to work. It can be explicitly disabled with
 
 To see verbose Tor information in the tidecoind debug log, pass `-debug=tor`.
 
+The persistent v3 identity is stored in `onion_v3_private_key` in the network's
+data directory. Keep a secure backup to retain your onion address after a disk
+failure. The file must be a regular file or a symbolic link to one, and contain
+`ED25519-V3:` followed by base64 encoding of the 64-byte private key (at most
+99 bytes). One optional trailing LF or CRLF is accepted, for a file limit of
+101 bytes. Other whitespace and additional lines are rejected.
+
+A missing file permits creating a new identity. An empty, invalid, oversized or
+unreadable file disables the automatic onion service instead of silently changing
+its address. Restore the original file or correct its permissions, then restart.
+Dangling or unresolvable symbolic links are errors, not missing files.
+Deliberately removing the file or link causes a new address to be generated.
+
+New or changed keys are saved through a temporary file and synchronized before
+replacement; reconnecting with an unchanged key does not rewrite it. The node
+does not advertise a newly created service until saving succeeds. If saving
+fails before replacement, reconnecting retries the same key. Updating a linked
+key replaces its resolved target and preserves the link; the temporary file is
+created beside that target. Unchanged keys can be loaded from read-only mounts.
+Directory synchronization after replacement is best effort: failure is logged
+as a warning and does not disable the service. Persistence across a system crash
+is then uncertain. Filesystem and platform limits still apply, so this does not
+replace a backup.
+
 ### Control Port
 
 You may need to set up the Tor Control Port. On Linux distributions there may be

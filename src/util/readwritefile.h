@@ -20,9 +20,34 @@
  */
 std::pair<bool,std::string> ReadBinaryFile(const fs::path &filename, size_t maxsize=std::numeric_limits<size_t>::max());
 
+enum class FileReadStatus { OK, NOT_FOUND, ERROR };
+struct FileReadResult {
+    FileReadStatus status;
+    std::string data;
+};
+
+/** Read an entire regular file, following symlinks and rejecting excess bytes and special files.
+ * NOT_FOUND means the path is absent, not an unreadable or dangling symlink.
+ * Assumes the datadir is trusted: the type check is not resistant to concurrent
+ * replacement of paths by another process. ERROR never returns partial data.
+ */
+FileReadResult ReadBinaryFileBounded(const fs::path& filename, size_t maxsize);
+
 /** Write contents of std::string to a file.
+ * @param commit Synchronize file contents before closing; does not synchronize its directory.
  * @return true on success.
  */
-bool WriteBinaryFile(const fs::path &filename, const std::string &data);
+bool WriteBinaryFile(const fs::path &filename, const std::string &data, bool commit = false);
+
+/** Save through a sibling .tmp file, checking write, file commit, close and rename.
+ * Existing destination symlinks are resolved and preserved; the temporary is
+ * beside the resolved regular-file target and must not itself be a symlink.
+ * Dangling links and special files are errors. Callers must serialize writes
+ * and trust the datadir (concurrent path replacement is not defended against).
+ * Failure before rename preserves the destination. After rename, directory sync
+ * is best effort: failure is logged as a warning, not returned as a failed save.
+ * Directory synchronization is supported on POSIX only; see DirectoryCommit().
+ */
+bool WriteBinaryFileAtomic(const fs::path& filename, const std::string& data);
 
 #endif // BITCOIN_UTIL_READWRITEFILE_H

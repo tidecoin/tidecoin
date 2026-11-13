@@ -365,8 +365,13 @@ void Session::GenerateAndSavePrivateKey(const Sock& sock)
 {
     DestGenerate(sock);
 
+    // Check the destination structure before persisting a router response.
+    if (m_private_key.size() > MAX_PRIVATE_KEY_SIZE || MyDestination().size() == m_private_key.size()) {
+        throw std::runtime_error("Invalid I2P private key returned by SAM proxy");
+    }
+
     // umask is set to 0077 in common/system.cpp, which is ok.
-    if (!WriteBinaryFile(m_private_key_file,
+    if (!WriteBinaryFileAtomic(m_private_key_file,
                          std::string(m_private_key.begin(), m_private_key.end()))) {
         throw std::runtime_error(
             strprintf("Cannot save I2P private key to %s", fs::quoted(fs::PathToString(m_private_key_file))));
@@ -432,11 +437,19 @@ void Session::CreateIfNotCreatedAlready()
     } else {
         // Read our persistent destination (private key) from disk or generate
         // one and save it to disk. Then use it when creating the session.
-        const auto& [read_ok, data] = ReadBinaryFile(m_private_key_file);
-        if (read_ok) {
-            m_private_key.assign(data.begin(), data.end());
-        } else {
+        const auto key_file = ReadBinaryFileBounded(m_private_key_file, MAX_PRIVATE_KEY_SIZE);
+        if (key_file.status == FileReadStatus::OK) {
+            m_private_key.assign(key_file.data.begin(), key_file.data.end());
+        } else if (key_file.status == FileReadStatus::NOT_FOUND) {
             GenerateAndSavePrivateKey(*sock);
+        } else {
+            throw std::runtime_error(strprintf("Cannot read I2P private key file %s (unreadable, oversized or not a regular file); not generating a replacement",
+                                              fs::quoted(fs::PathToString(m_private_key_file))));
+        }
+        // Validate before sending SESSION CREATE. The router validates the remaining
+        // key material, including algorithm-specific and optional offline fields.
+        if (MyDestination().size() == m_private_key.size()) {
+            throw std::runtime_error("I2P destination contains no private key material");
         }
 
         const std::string& private_key_b64 = SwapBase64(EncodeBase64(m_private_key));

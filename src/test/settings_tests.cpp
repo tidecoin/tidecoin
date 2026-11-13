@@ -6,6 +6,7 @@
 #include <interfaces/chain.h>
 
 #include <test/util/setup_common.h>
+#include <test/util/logging.h>
 #include <test/util/str.h>
 
 #include <boost/test/unit_test.hpp>
@@ -21,6 +22,10 @@
 #include <string>
 #include <system_error>
 #include <vector>
+
+#ifndef WIN32
+#include <unistd.h>
+#endif
 
 using util::ToString;
 
@@ -172,6 +177,33 @@ BOOST_AUTO_TEST_CASE(write_failure_preserves_settings)
     fs::remove(temporary);
     BOOST_CHECK(m_args.WriteSettingsFile(&errors));
     BOOST_CHECK(errors.empty());
+}
+#endif
+
+// A directory-sync warning must not turn a successfully replaced settings file
+// into an initialization failure (including on write/search-only directories).
+#ifndef WIN32
+BOOST_AUTO_TEST_CASE(directory_sync_warning_preserves_settings_success)
+{
+    if (geteuid() == 0) return;
+    const auto directory = m_args.GetDataDirBase() / "settings-no-directory-read";
+    fs::create_directory(directory);
+    const auto path = directory / "settings.json";
+    m_args.ForceSetArg("-settings", fs::PathToString(path));
+    m_args.LockSettings([](common::Settings& settings) { settings.rw_settings["sentinel"] = "saved"; });
+    std::vector<std::string> errors;
+    fs::permissions(directory, fs::perms::owner_write | fs::perms::owner_exec);
+    bool saved;
+    {
+        ASSERT_DEBUG_LOG("its directory could not be synchronized");
+        saved = m_args.WriteSettingsFile(&errors);
+    }
+    fs::permissions(directory, fs::perms::owner_all);
+    BOOST_CHECK(saved);
+    BOOST_CHECK(errors.empty());
+    std::map<std::string, common::SettingsValue> values;
+    BOOST_REQUIRE(common::ReadSettings(path, values, errors));
+    BOOST_CHECK_EQUAL(values.at("sentinel").get_str(), "saved");
 }
 #endif
 
