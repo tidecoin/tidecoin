@@ -604,6 +604,11 @@ hint now recommends `-reindex` and says to use `-reindex-chainstate` only when t
 block index is intact. Recovery messages preserve the error's own punctuation,
 avoiding doubled periods.
 
+Startup preserves shutdown requests received while announcing an automatic
+database rebuild or asking whether to rebuild. A pending request stops startup
+before the retry wipes the block index. Requests arriving after rebuilding has
+begun remain effective and are handled by the existing interruption checks.
+
 `xor.dat` and snapshot `base_blockhash` metadata are saved through temporary
 files with checked file synchronization and rename. XOR-key creation also checks
 directory synchronization where supported before writing dependent block data;

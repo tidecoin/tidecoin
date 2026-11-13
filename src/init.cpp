@@ -1771,10 +1771,9 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         const bilingual_str rebuild_msg = _("Database storage format upgrade: rebuilding the block index, chainstate and undo records from local block files. This may take a while. Missing blocks will need to be downloaded.");
         LogWarning("%s\n", rebuild_msg.original);
         uiInterface.InitMessage(rebuild_msg.translated);
-        if (!Assert(node.shutdown_signal)->reset()) {
-            LogError("Internal error: failed to reset shutdown signal.\n");
-        }
         do_reindex = true;
+        // Honor shutdown before the retry can wipe the block index.
+        if (ShutdownRequested(node)) return false;
         std::tie(status, error) = InitAndLoadChainstate(
             node,
             do_reindex,
@@ -1793,9 +1792,8 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
             return false;
         }
         do_reindex = true;
-        if (!Assert(node.shutdown_signal)->reset()) {
-            LogError("Internal error: failed to reset shutdown signal.\n");
-        }
+        // Shutdown may have been requested while the rebuild question was open.
+        if (ShutdownRequested(node)) return false;
         std::tie(status, error) = InitAndLoadChainstate(
             node,
             do_reindex,
