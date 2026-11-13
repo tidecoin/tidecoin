@@ -624,9 +624,9 @@ RPCHelpMan backupwallet()
 {
     return RPCHelpMan{
         "backupwallet",
-        "Safely copies the current wallet file to the specified destination, which can either be a directory or a path with a filename.\n",
+        "Safely copies the current wallet file to the specified destination file. The path must include a filename; an existing directory is not accepted.\n",
                 {
-                    {"destination", RPCArg::Type::STR, RPCArg::Optional::NO, "The destination directory or file"},
+                    {"destination", RPCArg::Type::STR, RPCArg::Optional::NO, "The destination file path, including a filename"},
                 },
                 RPCResult{RPCResult::Type::NONE, "", ""},
                 RPCExamples{

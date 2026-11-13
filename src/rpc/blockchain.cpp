@@ -822,6 +822,21 @@ static RPCHelpMan getblock()
                     {RPCResult::Type::NUM, "nTx", "The number of transactions in the block"},
                     {RPCResult::Type::STR_HEX, "previousblockhash", /*optional=*/true, "The hash of the previous block (if available)"},
                     {RPCResult::Type::STR_HEX, "nextblockhash", /*optional=*/true, "The hash of the next block (if available)"},
+                    {RPCResult::Type::OBJ, "auxpow", /*optional=*/true, "Merged-mining proof (only for AuxPoW blocks)",
+                    {
+                        {RPCResult::Type::OBJ, "tx", "The parent-chain coinbase transaction",
+                        {
+                            {RPCResult::Type::ELISION, "", "Decoded transaction fields as in decoderawtransaction"},
+                            {RPCResult::Type::STR_HEX, "hex", "The serialized parent-chain coinbase transaction"},
+                            {RPCResult::Type::STR_HEX, "blockhash", /*optional=*/true, "The parent-block hash"},
+                        }},
+                        {RPCResult::Type::NUM, "chainindex", "Index of this block in the auxiliary-chain Merkle tree"},
+                        {RPCResult::Type::ARR, "merklebranch", "Merkle branch connecting the coinbase transaction to the parent block",
+                            {{RPCResult::Type::STR_HEX, "", "A sibling hash in leaf-to-root order"}}},
+                        {RPCResult::Type::ARR, "chainmerklebranch", "Merkle branch connecting this block to the auxiliary-chain root committed in the coinbase",
+                            {{RPCResult::Type::STR_HEX, "", "A sibling hash in leaf-to-root order"}}},
+                        {RPCResult::Type::STR_HEX, "parentblock", "The serialized 80-byte parent-block header"},
+                    }},
                 }},
                     RPCResult{"for verbosity = 2",
                 RPCResult::Type::OBJ, "", "",
@@ -3082,7 +3097,7 @@ static RPCHelpMan dumptxoutset()
         "This call may take several minutes. Use no RPC timeout (tidecoin-cli -rpcclienttimeout=0).",
         {
             {"path", RPCArg::Type::STR, RPCArg::Optional::NO, "Path to the output file. If relative, will be prefixed by datadir."},
-            {"type", RPCArg::Type::STR, RPCArg::Default(""), "The type of snapshot to create. Can be \"latest\" to create a snapshot of the current UTXO set or \"rollback\" to roll back a temporary copy of the UTXO set to a historical block before creating the snapshot of a historical UTXO set. This parameter can be omitted if a separate \"rollback\" named parameter is specified indicating the height or hash of a specific historical block. If \"rollback\" is specified and separate \"rollback\" named parameter is not specified, this will roll back to the latest valid snapshot block that can currently be loaded with loadtxoutset."},
+            {"type", RPCArg::Type::STR, RPCArg::Default(""), "The type of snapshot to create. Can be \"latest\" to create a snapshot of the current UTXO set or \"rollback\" to roll back a temporary copy of the UTXO set to a historical block before creating the snapshot of a historical UTXO set. This parameter can be omitted if a separate \"rollback\" named parameter is specified indicating the height or hash of a specific historical block. If \"rollback\" is specified and separate \"rollback\" named parameter is not specified, this will roll back to the latest valid snapshot block that can currently be loaded with loadtxoutset. If this network has no configured snapshot heights, an explicit rollback height or hash is required."},
             {"options", RPCArg::Type::OBJ_NAMED_PARAMS, RPCArg::Optional::OMITTED, "",
                 {
                     {"rollback", RPCArg::Type::NUM, RPCArg::Optional::OMITTED,
@@ -3127,7 +3142,9 @@ static RPCHelpMan dumptxoutset()
         target_index = ParseHashOrHeight(options["rollback"], *node.chainman);
     } else if (snapshot_type == "rollback") {
         auto snapshot_heights = node.chainman->GetParams().GetAvailableSnapshotHeights();
-        CHECK_NONFATAL(snapshot_heights.size() > 0);
+        if (snapshot_heights.empty()) {
+            throw JSONRPCError(RPC_INVALID_PARAMETER, "No default snapshot height is configured for this network. Specify a rollback height or block hash.");
+        }
         auto max_height = std::max_element(snapshot_heights.begin(), snapshot_heights.end());
         target_index = ParseHashOrHeight(*max_height, *node.chainman);
     } else if (snapshot_type == "latest") {

@@ -134,7 +134,7 @@ RPCHelpMan getauxblock()
     return RPCHelpMan{"getauxblock",
                 "Creates or submits a merge-mined block.\n"
                 "\nWithout arguments, creates a new block and returns information\n"
-                "required to merge-mine it. With arguments, submits a solved\n"
+                "required to merge-mine it. With both hash and auxpow, submits a solved\n"
                 "auxpow for a previously returned block.\n",
                 {
                     {"hash", RPCArg::Type::STR_HEX, RPCArg::Optional::OMITTED, "Hash of the block to submit"},
@@ -163,6 +163,9 @@ RPCHelpMan getauxblock()
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
+    if (!request.params.empty() && (request.params.size() != 2 || request.params[0].isNull() || request.params[1].isNull())) {
+        throw JSONRPCError(RPC_INVALID_PARAMETER, "getauxblock requires either no arguments or both hash and auxpow.");
+    }
     const std::shared_ptr<CWallet> wallet = GetWalletForJSONRPCRequest(request);
     if (!wallet) return NullUniValue;
 
@@ -189,7 +192,6 @@ RPCHelpMan getauxblock()
         return res;
     }
 
-    CHECK_NONFATAL(request.params.size() == 2);
     const std::string& hash = request.params[0].get_str();
 
     const bool accepted = AuxpowMiner::get().submitAuxBlock(node_request, hash, request.params[1].get_str());

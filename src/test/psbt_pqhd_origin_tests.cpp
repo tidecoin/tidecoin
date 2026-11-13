@@ -4,6 +4,7 @@
 #include <key.h>
 #include <coins.h>
 #include <common/messages.h>
+#include <common/transaction_rules.h>
 #include <node/psbt.h>
 #include <policy/policy.h>
 #include <psbt.h>
@@ -16,6 +17,7 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #ifndef WIN32
@@ -66,6 +68,61 @@ PartiallySignedTransaction MakeMinimalPSBT()
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(psbt_pqhd_origin_tests)
+
+BOOST_FIXTURE_TEST_CASE(psbt_missing_key_diagnostics_are_unique, BasicTestingSetup)
+{
+    const auto pub1 = GenerateRandomKey(pq::SchemeId::FALCON_512).GetPubKey();
+    const auto pub2 = GenerateRandomKey(pq::SchemeId::FALCON_512).GetPubKey();
+    std::vector<CKeyID> both{pub1.GetID(), pub2.GetID()};
+    std::sort(both.begin(), both.end());
+    struct TestCase {
+        CScript script;
+        std::vector<CKeyID> missing_pubkeys;
+        std::vector<CKeyID> missing_sigs;
+    };
+    const std::vector<TestCase> cases{
+        // The ordinary solver and Miniscript fallback both visit this key.
+        {GetScriptForRawPubKey(pub1), {}, {pub1.GetID()}},
+        {GetScriptForDestination(PKHash(pub1)), {pub1.GetID()}, {}},
+        {GetScriptForMultisig(2, {pub1, pub2}), {}, both},
+        {GetScriptForMultisig(2, {pub2, pub1}), {}, both},
+        {CScript{} << ToByteVector(pub1) << OP_CHECKSIGVERIFY << ToByteVector(pub2) << OP_CHECKSIG, {}, both},
+    };
+    for (const auto era : {common::ScriptRuleEra::PRE_AUXPOW, common::ScriptRuleEra::POST_AUXPOW}) {
+        const auto flags = common::ScriptFlagsForEra(era);
+        for (int version : {0, 1}) {
+            if (version == 1 && era == common::ScriptRuleEra::PRE_AUXPOW) continue;
+            for (const auto& test : cases) {
+                auto psbt = MakeMinimalPSBT();
+                // The same key must still be reported separately for each input.
+                psbt.tx->vin.emplace_back(Txid::FromUint256(uint256::ONE), 1);
+                psbt.inputs.resize(2);
+                const CScript output = version == 0 ? GetScriptForDestination(WitnessV0ScriptHash(test.script)) :
+                    GetScriptForDestination(WitnessV1ScriptHash512(test.script));
+                for (auto& input : psbt.inputs) {
+                    input.witness_utxo = CTxOut{1000, output};
+                    input.witness_script = test.script;
+                }
+                const auto data = PrecomputePSBTData(psbt);
+                for (int i = 0; i < 2; ++i) {
+                    SignatureData missing;
+                    BOOST_REQUIRE(SignPSBTInput(DUMMY_SIGNING_PROVIDER, psbt, i, &data, std::nullopt, &missing,
+                                               true, flags, PSBTInputIntent::INSPECT) == common::PSBTError::INCOMPLETE);
+                    BOOST_CHECK(missing.missing_pubkeys == test.missing_pubkeys);
+                    BOOST_CHECK(missing.missing_sigs == test.missing_sigs);
+                    BOOST_CHECK(missing.excluded_sigs.empty());
+                }
+                const auto analysis = node::AnalyzePSBT(psbt, flags);
+                BOOST_REQUIRE_EQUAL(analysis.inputs.size(), 2U);
+                for (const auto& input : analysis.inputs) {
+                    BOOST_CHECK(input.missing_pubkeys == test.missing_pubkeys);
+                    BOOST_CHECK(input.missing_sigs == test.missing_sigs);
+                    BOOST_CHECK(input.next == (test.missing_pubkeys.empty() ? PSBTRole::SIGNER : PSBTRole::UPDATER));
+                }
+            }
+        }
+    }
+}
 
 BOOST_AUTO_TEST_CASE(psbt_missing_witness_script_commitment)
 {

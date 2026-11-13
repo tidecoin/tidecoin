@@ -22,6 +22,7 @@ class RPCGenerateTest(BitcoinTestFramework):
 
     def run_test(self):
         self.test_generatetoaddress()
+        self.test_maxtries()
         self.test_generate()
         self.test_generateblock()
 
@@ -29,6 +30,31 @@ class RPCGenerateTest(BitcoinTestFramework):
         valid_addr = MiniWallet(self.nodes[0]).get_address()
         self.generatetoaddress(self.nodes[0], 1, valid_addr)
         assert_raises_rpc_error(-5, "Invalid address", self.generatetoaddress, self.nodes[0], 1, '3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy')
+
+    def test_maxtries(self):
+        self.log.info('Both mining RPCs validate the full unsigned 64-bit attempt budget before mining')
+        node = self.nodes[0]
+        address = MiniWallet(node).get_address()
+        for generate, destination in [(self.generatetoaddress, address), (self.generatetodescriptor, f'addr({address})')]:
+            tip = node.getbestblockhash()
+            for invalid in [-1, -(2**63), 2**64, 1.5]:
+                assert_raises_rpc_error(-1, 'JSON integer out of range', generate, node, 1, destination, invalid)
+                assert_equal(node.getbestblockhash(), tip)
+            assert_equal(generate(node, 1, destination, 0), [])
+            assert_equal(node.getbestblockhash(), tip)
+            # Exercise range boundaries without attempting that many hashes.
+            for budget in [1, 2**31 - 1, 2**31, 2**63 - 1, 2**63, 2**64 - 1]:
+                assert_equal(generate(node, 0, destination, budget), [])
+                assert_equal(node.getbestblockhash(), tip)
+            # A small budget may or may not solve this template; it must not
+            # produce more than the requested block, and zero above produces none.
+            height = node.getblockcount()
+            hashes = generate(node, 1, destination, 1)
+            assert len(hashes) <= 1
+            assert_equal(node.getblockcount(), height + len(hashes))
+            if hashes:
+                assert_equal(node.getbestblockhash(), hashes[0])
+            assert_equal(len(generate(node, 1, destination)), 1)
 
     def test_generateblock(self):
         node = self.nodes[0]

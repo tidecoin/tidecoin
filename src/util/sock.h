@@ -148,8 +148,9 @@ public:
     static constexpr Event SEND = 0b010;
 
     /**
-     * Ignored if passed to `Wait()`, but could be set in the occurred events if an
-     * exceptional condition has occurred on the socket or if it has been disconnected.
+     * An output-only event, ignored in the requested events for `Wait()`/`WaitMany()`.
+     * The poll backend can report errors or disconnection independently of RECV/SEND.
+     * The select backend monitors exceptional conditions only when RECV is requested.
      */
     static constexpr Event ERR = 0b100;
 
@@ -158,8 +159,8 @@ public:
      * @param[in] timeout Wait this much for at least one of the requested events to occur.
      * @param[in] requested Wait for those events, bitwise-or of `RECV` and `SEND`.
      * @param[out] occurred If not nullptr and the function returns `true`, then this
-     * indicates which of the requested events occurred (`ERR` will be added, even if
-     * not requested, if an exceptional event occurs on the socket).
+     * indicates which of the requested events occurred. `ERR` may also be set;
+     * exceptional-event reporting depends on the backend as described above.
      * A timeout is indicated by return value of `true` and `occurred` being set to 0.
      * @return true on success (or timeout, if `occurred` of 0 is returned), false otherwise
      */
@@ -211,7 +212,8 @@ public:
      * Same as `Wait()`, but wait on many sockets within the same timeout.
      * @param[in] timeout Wait this long for at least one of the requested events to occur.
      * @param[in,out] events_per_sock Wait for the requested events on these sockets and set
-     * `occurred` for the events that actually occurred.
+     * `occurred` for the events that actually occurred, with the same backend-dependent
+     * `ERR` behavior as `Wait()`.
      * @return true on success (or timeout, if all `what[].occurred` are returned as 0),
      * false otherwise
      */

@@ -503,7 +503,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-includeconf=<file>", "Specify additional configuration file, relative to the -datadir path (only useable from configuration file, not command line)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-allowignoredconf", strprintf("For backwards compatibility, treat an unused %s file in the datadir as a warning, not an error.", TIDECOIN_CONF_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-loadblock=<file>", "Imports blocks from external file on startup", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
-    argsman.AddArg("-maxmempool=<n>", strprintf("Keep the transaction memory pool below <n> megabytes (default: %u)", DEFAULT_MAX_MEMPOOL_SIZE_MB), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-maxmempool=<n>", "Keep the transaction memory pool below <n> megabytes (default: 500 on 32-bit builds, 1024 on 64-bit builds)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     // TODO: remove in v2.0
     argsman.AddArg("-maxorphantx=<n>", strprintf("(Removed option, see release notes)"), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-mempoolexpiry=<n>", strprintf("Do not keep transactions in the mempool longer than <n> hours (default: %u)", DEFAULT_MEMPOOL_EXPIRY_HOURS), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -954,7 +954,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         }
     }
 
-    // Signal NODE_P2P_V2 if BIP324 v2 transport is enabled.
+    // Signal NODE_P2P_V2 if Tidecoin v2 transport is enabled.
     if (args.GetBoolArg("-v2transport", DEFAULT_V2_TRANSPORT)) {
         g_local_services = ServiceFlags(g_local_services | NODE_P2P_V2);
     }

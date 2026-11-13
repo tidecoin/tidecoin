@@ -55,7 +55,7 @@ const std::vector<std::string> CONNECTION_TYPE_DOC{
 const std::vector<std::string> TRANSPORT_TYPE_DOC{
     "detecting (peer could be v1 or v2)",
     "v1 (plaintext transport protocol)",
-    "v2 (BIP324 encrypted transport protocol)"
+    "v2 (Tidecoin encrypted transport using ML-KEM-512)"
 };
 
 static RPCHelpMan getconnectioncount()
@@ -321,12 +321,12 @@ static RPCHelpMan addnode()
                 {
                     {"node", RPCArg::Type::STR, RPCArg::Optional::NO, "The address of the peer to connect to"},
                     {"command", RPCArg::Type::STR, RPCArg::Optional::NO, "'add' to add a node to the list, 'remove' to remove a node from the list, 'onetry' to try a connection to the node once"},
-                    {"v2transport", RPCArg::Type::BOOL, RPCArg::DefaultHint{"set by -v2transport"}, "Attempt to connect using BIP324 v2 transport protocol (ignored for 'remove' command)"},
+                    {"v2transport", RPCArg::Type::BOOL, RPCArg::DefaultHint{"set by -v2transport"}, "Attempt a Tidecoin v2 connection using ML-KEM-512 (ignored for 'remove' command)"},
                 },
                 RPCResult{RPCResult::Type::NONE, "", ""},
                 RPCExamples{
-                    HelpExampleCli("addnode", "\"192.168.0.6:8333\" \"onetry\" true")
-            + HelpExampleRpc("addnode", "\"192.168.0.6:8333\", \"onetry\" true")
+                    HelpExampleCli("addnode", "\"192.168.0.6:8755\" \"onetry\" true")
+            + HelpExampleRpc("addnode", "\"192.168.0.6:8755\", \"onetry\", true")
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -380,7 +380,7 @@ static RPCHelpMan addconnection()
         {
             {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "The IP address and port to attempt connecting to."},
             {"connection_type", RPCArg::Type::STR, RPCArg::Optional::NO, "Type of connection to open (\"outbound-full-relay\", \"block-relay-only\", \"addr-fetch\" or \"feeler\")."},
-            {"v2transport", RPCArg::Type::BOOL, RPCArg::Optional::NO, "Attempt to connect using BIP324 v2 transport protocol"},
+            {"v2transport", RPCArg::Type::BOOL, RPCArg::Optional::NO, "Attempt a Tidecoin v2 connection using ML-KEM-512"},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -389,8 +389,8 @@ static RPCHelpMan addconnection()
                 { RPCResult::Type::STR, "connection_type", "Type of connection opened." },
             }},
         RPCExamples{
-            HelpExampleCli("addconnection", "\"192.168.0.6:8333\" \"outbound-full-relay\" true")
-            + HelpExampleRpc("addconnection", "\"192.168.0.6:8333\" \"outbound-full-relay\" true")
+            HelpExampleCli("addconnection", "\"192.168.0.6:8755\" \"outbound-full-relay\" true")
+            + HelpExampleRpc("addconnection", "\"192.168.0.6:8755\", \"outbound-full-relay\", true")
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -448,9 +448,9 @@ static RPCHelpMan disconnectnode()
                 },
                 RPCResult{RPCResult::Type::NONE, "", ""},
                 RPCExamples{
-                    HelpExampleCli("disconnectnode", "\"192.168.0.6:8333\"")
+                    HelpExampleCli("disconnectnode", "\"192.168.0.6:8755\"")
             + HelpExampleCli("disconnectnode", "\"\" 1")
-            + HelpExampleRpc("disconnectnode", "\"192.168.0.6:8333\"")
+            + HelpExampleRpc("disconnectnode", "\"192.168.0.6:8755\"")
             + HelpExampleRpc("disconnectnode", "\"\", 1")
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
@@ -991,8 +991,8 @@ static RPCHelpMan addpeeraddress()
             },
         },
         RPCExamples{
-            HelpExampleCli("addpeeraddress", "\"1.2.3.4\" 8333 true")
-    + HelpExampleRpc("addpeeraddress", "\"1.2.3.4\", 8333, true")
+            HelpExampleCli("addpeeraddress", "\"1.2.3.4\" 8755 true")
+    + HelpExampleRpc("addpeeraddress", "\"1.2.3.4\", 8755, true")
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {

@@ -498,7 +498,7 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
         //: Explanatory text for v1 transport type.
         tr("v1: unencrypted, plaintext transport protocol"),
         //: Explanatory text for v2 transport type.
-        tr("v2: BIP324 encrypted transport protocol")};
+        tr("v2: Tidecoin encrypted transport using ML-KEM-512")};
     const QString transport_types_list{"<ul><li>" + Join(TRANSPORT_TYPE_DOC, QString("</li><li>")) + "</li></ul>"};
     ui->peerTransportTypeLabel->setToolTip(ui->peerTransportTypeLabel->toolTip().arg(transport_types_list));
     const QString hb_list{"<ul><li>\""

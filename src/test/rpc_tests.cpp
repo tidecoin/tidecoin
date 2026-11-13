@@ -103,6 +103,68 @@ UniValue RPCTestingSetup::CallRPC(std::string args)
 
 BOOST_FIXTURE_TEST_SUITE(rpc_tests, RPCTestingSetup)
 
+namespace {
+void CheckSnapshotWithoutDefaultHeight(node::NodeContext& node)
+{
+    BOOST_REQUIRE(node.chainman->GetParams().GetAvailableSnapshotHeights().empty());
+    const auto* tip{WITH_LOCK(cs_main, return node.chainman->ActiveTip())};
+    BOOST_REQUIRE(tip);
+    BOOST_REQUIRE_EQUAL(tip->nHeight, 0);
+    const auto directory{node.args->GetDataDirNet()};
+    JSONRPCRequest request;
+    request.context = &node;
+    request.strMethod = "dumptxoutset";
+    request.params = JSON("[\"no-default.dat\",\"rollback\"]");
+    if (RPCIsInWarmup(nullptr)) SetRPCWarmupFinished();
+    BOOST_CHECK_EXCEPTION(tableRPC.execute(request), UniValue, [](const UniValue& error) {
+        return error["code"].getInt<int>() == RPC_INVALID_PARAMETER &&
+               error["message"].get_str() == "No default snapshot height is configured for this network. Specify a rollback height or block hash.";
+    });
+    BOOST_CHECK(!fs::exists(directory / "no-default.dat"));
+    BOOST_CHECK(!fs::exists(directory / "no-default.dat.incomplete"));
+    for (const auto& entry : fs::directory_iterator(directory)) {
+        BOOST_CHECK(!fs::PathToString(entry.path().filename()).starts_with("temp_utxo_"));
+    }
+
+    // An empty assumeutxo list only prevents automatic target selection.
+    // Explicit heights/hashes and current-tip exports must remain usable.
+    for (int mode = 0; mode < 5; ++mode) {
+        const std::string filename{strprintf("explicit-snapshot-%d.dat", mode)};
+        request.params = UniValue{UniValue::VARR};
+        request.params.push_back(filename);
+        if (mode == 4) {
+            request.params.push_back("latest");
+        } else {
+            request.params.push_back(mode < 2 ? UniValue{"rollback"} : NullUniValue);
+            UniValue options{UniValue::VOBJ};
+            if (mode % 2 == 0) options.pushKV("rollback", 0);
+            else options.pushKV("rollback", tip->GetBlockHash().GetHex());
+            request.params.push_back(options);
+        }
+        const auto result{tableRPC.execute(request)};
+        BOOST_CHECK_EQUAL(result["base_height"].getInt<int>(), 0);
+        BOOST_CHECK_EQUAL(result["base_hash"].get_str(), tip->GetBlockHash().GetHex());
+        BOOST_CHECK(fs::exists(directory / fs::PathFromString(filename)));
+        BOOST_CHECK(!fs::exists(directory / fs::PathFromString(filename + ".incomplete")));
+        BOOST_CHECK(WITH_LOCK(cs_main, return node.chainman->ActiveTip() == tip));
+    }
+}
+
+struct TestnetRPCSetup : TestingSetup {
+    TestnetRPCSetup() : TestingSetup{ChainType::TESTNET} {}
+};
+} // namespace
+
+BOOST_AUTO_TEST_CASE(snapshot_without_default_height_mainnet)
+{
+    CheckSnapshotWithoutDefaultHeight(m_node);
+}
+
+BOOST_FIXTURE_TEST_CASE(snapshot_without_default_height_testnet, TestnetRPCSetup)
+{
+    CheckSnapshotWithoutDefaultHeight(m_node);
+}
+
 BOOST_AUTO_TEST_CASE(mempool_chunk_fee_reporting)
 {
     auto& pool = *m_node.mempool;
@@ -827,7 +889,7 @@ BOOST_AUTO_TEST_CASE(help_example)
     // test different argument types
     const RPCArgList& args = {{"foo", "bar"}, {"b", true}, {"n", 1}};
     BOOST_CHECK_EQUAL(HelpExampleCliNamed("test", args), "> tidecoin-cli -named test foo=bar b=true n=1\n");
-    BOOST_CHECK_EQUAL(HelpExampleRpcNamed("test", args), "> curl --user myusername --data-binary '{\"jsonrpc\": \"2.0\", \"id\": \"curltest\", \"method\": \"test\", \"params\": {\"foo\":\"bar\",\"b\":true,\"n\":1}}' -H 'content-type: application/json' http://127.0.0.1:8332/\n");
+    BOOST_CHECK_EQUAL(HelpExampleRpcNamed("test", args), "> curl --user myusername --data-binary '{\"jsonrpc\": \"2.0\", \"id\": \"curltest\", \"method\": \"test\", \"params\": {\"foo\":\"bar\",\"b\":true,\"n\":1}}' -H 'content-type: application/json' http://127.0.0.1:7585/\n");
 
     // test shell escape
     BOOST_CHECK_EQUAL(HelpExampleCliNamed("test", {{"foo", "b'ar"}}), "> tidecoin-cli -named test foo='b'''ar'\n");
@@ -840,7 +902,7 @@ BOOST_AUTO_TEST_CASE(help_example)
     obj_value.pushKV("b", false);
     obj_value.pushKV("n", 1);
     BOOST_CHECK_EQUAL(HelpExampleCliNamed("test", {{"name", obj_value}}), "> tidecoin-cli -named test name='{\"foo\":\"bar\",\"b\":false,\"n\":1}'\n");
-    BOOST_CHECK_EQUAL(HelpExampleRpcNamed("test", {{"name", obj_value}}), "> curl --user myusername --data-binary '{\"jsonrpc\": \"2.0\", \"id\": \"curltest\", \"method\": \"test\", \"params\": {\"name\":{\"foo\":\"bar\",\"b\":false,\"n\":1}}}' -H 'content-type: application/json' http://127.0.0.1:8332/\n");
+    BOOST_CHECK_EQUAL(HelpExampleRpcNamed("test", {{"name", obj_value}}), "> curl --user myusername --data-binary '{\"jsonrpc\": \"2.0\", \"id\": \"curltest\", \"method\": \"test\", \"params\": {\"name\":{\"foo\":\"bar\",\"b\":false,\"n\":1}}}' -H 'content-type: application/json' http://127.0.0.1:7585/\n");
 
     // test array params
     UniValue arr_value(UniValue::VARR);
@@ -848,7 +910,7 @@ BOOST_AUTO_TEST_CASE(help_example)
     arr_value.push_back(false);
     arr_value.push_back(1);
     BOOST_CHECK_EQUAL(HelpExampleCliNamed("test", {{"name", arr_value}}), "> tidecoin-cli -named test name='[\"bar\",false,1]'\n");
-    BOOST_CHECK_EQUAL(HelpExampleRpcNamed("test", {{"name", arr_value}}), "> curl --user myusername --data-binary '{\"jsonrpc\": \"2.0\", \"id\": \"curltest\", \"method\": \"test\", \"params\": {\"name\":[\"bar\",false,1]}}' -H 'content-type: application/json' http://127.0.0.1:8332/\n");
+    BOOST_CHECK_EQUAL(HelpExampleRpcNamed("test", {{"name", arr_value}}), "> curl --user myusername --data-binary '{\"jsonrpc\": \"2.0\", \"id\": \"curltest\", \"method\": \"test\", \"params\": {\"name\":[\"bar\",false,1]}}' -H 'content-type: application/json' http://127.0.0.1:7585/\n");
 
     // test types don't matter for shell
     BOOST_CHECK_EQUAL(HelpExampleCliNamed("foo", {{"arg", true}}), HelpExampleCliNamed("foo", {{"arg", "true"}}));

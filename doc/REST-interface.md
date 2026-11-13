@@ -3,8 +3,8 @@ Unauthenticated REST Interface
 
 The REST API can be enabled with the `-rest` option.
 
-The interface runs on the same port as the JSON-RPC interface, by default port 8332 for mainnet, port 18332 for testnet,
-port 18332 for testnet and port 18443 for regtest.
+The interface runs on the same port as the JSON-RPC interface: by default,
+7585 for mainnet, 17585 for testnet and 17595 for regtest.
 
 REST Interface consistency guarantees
 -------------------------------------
@@ -113,7 +113,7 @@ input and output serialization (relevant for `bin` and `hex` output formats).
 
 Example:
 ```
-$ curl localhost:18332/rest/getutxos/checkmempool/b2cdfd7b89def827ff8af7cd9bff7627ff72e5e8b0f71210f92ea7a4000c5d75-0.json 2>/dev/null | json_pp
+$ curl localhost:17585/rest/getutxos/checkmempool/b2cdfd7b89def827ff8af7cd9bff7627ff72e5e8b0f71210f92ea7a4000c5d75-0.json 2>/dev/null | json_pp
 {
    "chainHeight" : 325347,
    "chaintipHash" : "00000000fb01a7f3745a717f8caebee056c484e6e0bfe4a9591c235bb70506fb",
@@ -153,4 +153,4 @@ Refer to the `getrawmempool` RPC help for details. Defaults to setting
 
 Risks
 -------------
-Running a web browser on the same node with a REST enabled tidecoind can be a risk. Accessing prepared XSS websites could read out tx/block data of your node by placing links like `<script src="http://127.0.0.1:8332/rest/tx/1234567890.json">` which might break the nodes privacy.
+Running a web browser on the same node with a REST enabled tidecoind can be a risk. Accessing prepared XSS websites could read out tx/block data of your node by placing links like `<script src="http://127.0.0.1:7585/rest/tx/1234567890.json">` which might break the nodes privacy.

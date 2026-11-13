@@ -12,11 +12,11 @@ The size of some in-memory caches can be reduced. As caches trade off memory usa
 
 ## Memory pool
 
-- In Tidecoin Core there is a memory pool limiter which can be configured with `-maxmempool=<n>`, where `<n>` is the size in MB (1000). The default value is `1024`.
+- In Tidecoin Core there is a memory pool limiter which can be configured with `-maxmempool=<n>`, where `<n>` is the size in MB (1000). The default is `1024` on 64-bit builds and `500` on 32-bit builds. These are decimal megabytes (1 MB = 1,000,000 bytes); the executable architecture determines the default.
   - With default cluster limits, the minimum nonzero value for `-maxmempool` is 10. The required budget is 40 times the configured cluster size in virtual bytes; explicit zero disables retention of unconfirmed transactions.
   - A lower maximum mempool size means that transactions will be evicted sooner. This will affect any uses of `tidecoind` that process unconfirmed transactions.
 
-- The unused memory allocated to the mempool (default: 1024MB) is shared with the UTXO cache, so when trying to reduce memory usage you should limit the mempool, with the `-maxmempool` command line argument.
+- The unused mempool budget (by default, 1,024 MB on 64-bit builds or 500 MB on 32-bit builds) is shared with the UTXO cache, so when trying to reduce memory usage you should limit the mempool, with the `-maxmempool` command line argument.
 
 - To disable most of the mempool functionality there is the `-blocksonly` option. This will reduce the default memory usage to 10MB and make the client opt out of receiving (and thus relaying) transactions, except from peers who have the `relay` permission set (e.g. whitelisted peers), and as part of blocks.
 

@@ -128,7 +128,7 @@ int ParseVerbosity(const UniValue& arg, int default_verbosity, bool allow_bool);
 CAmount AmountFromValue(const UniValue& value, int decimals = 8);
 /**
  * Parse a json number or string, denoting the base currency per kvB, into a CFeeRate
- * (base atom/kvB). Reject negative values or rates larger than 1 unit/kvB.
+ * (base atom/kvB). Reject negative values or rates greater than or equal to 1 unit/kvB.
  */
 CFeeRate ParseFeeRate(const UniValue& json);
 

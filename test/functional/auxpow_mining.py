@@ -122,19 +122,22 @@ class AuxpowMiningTest(BitcoinTestFramework):
         assert_equal(height, auxblock["height"])
         assert_equal(self.nodes[1].getblockhash(height), auxblock["hash"])
 
-        # getblock should contain auxpow JSON.
+        # The documented proof is present at every JSON verbosity level.
         data = self.nodes[1].getblock(auxblock["hash"])
         assert "auxpow" in data
         auxJson = data["auxpow"]
+        assert_equal(set(auxJson), {"tx", "chainindex", "merklebranch", "chainmerklebranch", "parentblock"})
         assert_equal(auxJson["chainindex"], 0)
         assert_equal(auxJson["merklebranch"], [])
         assert_equal(auxJson["chainmerklebranch"], [])
         assert_equal(auxJson["parentblock"], apow[-160:])
+        for verbosity in (2, 3):
+            assert_equal(self.nodes[1].getblock(auxblock["hash"], verbosity)["auxpow"], auxJson)
 
         # Blocks mined with regular generate() should not have auxpow attached.
         oldHash = self.nodes[1].getblockhash(100)
-        data = self.nodes[1].getblock(oldHash)
-        assert "auxpow" not in data
+        for verbosity in (1, 2, 3):
+            assert "auxpow" not in self.nodes[1].getblock(oldHash, verbosity)
 
         # Verify payout to node0.
         t = self.nodes[0].listtransactions("*", 1)
@@ -184,6 +187,22 @@ class AuxpowMiningTest(BitcoinTestFramework):
         return auxblock["hash"]
 
     def test_getauxblock(self):
+        node = self.nodes[0]
+        tip = node.getbestblockhash()
+        pool = node.getrawmempool()
+        keypool_size = node.getwalletinfo()['keypoolsize']
+        error = 'getauxblock requires either no arguments or both hash and auxpow.'
+        for rpc in [node.getauxblock, node.cli.getauxblock]:
+            assert_raises_rpc_error(-8, error, rpc, '0' * 64)
+            assert_raises_rpc_error(-8, error, rpc, hash='0' * 64)
+            assert_raises_rpc_error(-8, error, rpc, auxpow='00')
+        # Explicit nulls cannot turn an incomplete submission into creation.
+        for params in [(None,), (None, None), ('0' * 64, None), (None, '00')]:
+            assert_raises_rpc_error(-8, error, node._rpc.getauxblock, *params)
+        assert_equal(node.getbestblockhash(), tip)
+        assert_equal(node.getrawmempool(), pool)
+        assert_equal(node.getwalletinfo()['keypoolsize'], keypool_size)
+
         create = self.nodes[0].getauxblock
         submit = self.nodes[0].getauxblock
         self.test_common(create, submit)

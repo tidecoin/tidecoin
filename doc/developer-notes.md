@@ -829,7 +829,7 @@ and its `cs_KeyStore` lock for example).
     : Universal plug-and-play startup/shutdown.
 
   - [ThreadSocketHandler (`b-net`)](../src/net.cpp)
-    : Sends/Receives data from peers on port 8333.
+    : Sends/Receives data from peers on port 8755 by default on mainnet (18755 on testnet, 18778 on regtest).
 
   - [ThreadOpenAddedConnections (`b-addcon`)](../src/net.cpp)
     : Opens network connections to added nodes.

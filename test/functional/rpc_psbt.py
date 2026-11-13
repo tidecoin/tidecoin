@@ -5,6 +5,7 @@
 """Test the Partially Signed Transaction RPCs.
 """
 from decimal import Decimal
+from hashlib import sha512
 from itertools import product
 from random import randbytes
 
@@ -34,9 +35,18 @@ from test_framework.psbt import (
     PSBT_IN_HASH256,
     PSBT_IN_NON_WITNESS_UTXO,
     PSBT_IN_WITNESS_UTXO,
+    PSBT_IN_WITNESS_SCRIPT,
+    PSBT_IN_REDEEM_SCRIPT,
 )
-from test_framework.script import CScript, OP_TRUE, SIGHASH_ALL, SIGHASH_ANYONECANPAY, hash160
-from test_framework.script_util import MIN_STANDARD_TX_NONWITNESS_SIZE
+from test_framework.script import CScript, OP_CHECKSIG, OP_CHECKSIGVERIFY, OP_TRUE, SIGHASH_ALL, SIGHASH_ANYONECANPAY, hash160
+from test_framework.script_util import (
+    MIN_STANDARD_TX_NONWITNESS_SIZE,
+    key_to_p2pk_script,
+    key_to_p2pkh_script,
+    keys_to_multisig_script,
+    script_to_p2sh_script,
+    script_to_p2wsh_script,
+)
 from test_framework.segwit_addr import decode_segwit_address, encode_segwit_address
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
@@ -102,6 +112,41 @@ class PSBTTest(BitcoinTestFramework):
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
+
+    def test_unique_missing_key_diagnostics(self):
+        self.log.info("PSBT analysis reports each missing key once per input")
+        pub1, pub2 = [generate_keypair(scheme='7')[1] for _ in range(2)]
+        both = sorted([hash160(pub1).hex(), hash160(pub2).hex()])
+        cases = [
+            (key_to_p2pk_script(pub1), 'signatures', [hash160(pub1).hex()]),
+            (key_to_p2pkh_script(pub1), 'pubkeys', [hash160(pub1).hex()]),
+            (keys_to_multisig_script([pub1, pub2]), 'signatures', both),
+            (keys_to_multisig_script([pub2, pub1]), 'signatures', both),
+            (CScript([pub1, OP_CHECKSIGVERIFY, pub2, OP_CHECKSIG]), 'signatures', both),
+        ]
+        tx = CTransaction()
+        tx.vin = [CTxIn(COutPoint(1, n)) for n in range(2)]
+        tx.vout = [CTxOut(1000, CScript([OP_TRUE]))]
+        for rules in ('pre-auxpow', 'post-auxpow'):
+            for kind in ('wsh', 'sh-wsh', 'wsh512'):
+                if kind == 'wsh512' and rules == 'pre-auxpow':
+                    continue  # Excluded signatures have their own diagnostic.
+                for script, field, expected in cases:
+                    program = (CScript([1, sha512(script).digest()]) if kind == 'wsh512'
+                               else script_to_p2wsh_script(script))
+                    output = script_to_p2sh_script(program) if kind == 'sh-wsh' else program
+                    fields = {PSBT_IN_WITNESS_UTXO: CTxOut(1000, output).serialize(), PSBT_IN_WITNESS_SCRIPT: script}
+                    if kind == 'sh-wsh':
+                        fields[PSBT_IN_REDEEM_SCRIPT] = program
+                    psbt = PSBT(g=PSBTMap({PSBT_GLOBAL_UNSIGNED_TX: tx.serialize()}),
+                                i=[PSBTMap(fields.copy()) for _ in tx.vin], o=[PSBTMap()])
+                    result = self.nodes[0].analyzepsbt(psbt.to_base64(), rules=rules)
+                    assert_equal(len(result['inputs']), 2)
+                    for item in result['inputs']:
+                        assert_equal(item['missing'], {field: expected})
+                        assert_equal(item['next'], 'signer' if field == 'signatures' else 'updater')
+                        assert not item['is_final']
+                        assert 'excluded_signatures' not in item
 
     def test_psbt_incomplete_after_invalid_modification(self):
         self.log.info("Check that PSBT is correctly marked as incomplete after invalid modification")
@@ -387,6 +432,7 @@ class PSBTTest(BitcoinTestFramework):
         self.nodes[2].unloadwallet(coordinator_wallet_name)
 
     def run_test(self):
+        self.test_unique_missing_key_diagnostics()
         # Create and fund a raw tx for sending 10 BTC
         psbtx1 = self.nodes[0].walletcreatefundedpsbt([], {self.nodes[2].getnewaddress():10})['psbt']
 

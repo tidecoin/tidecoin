@@ -446,6 +446,13 @@ submitting it does not clear a replacement wallet's new reservation.
 Mining and IPC reliability
 --------------------------
 
+- `getauxblock` requires either no arguments or both `hash` and `auxpow`.
+  Missing one returns RPC error `-8` instead of an internal-bug error.
+- `generatetoaddress` uses the same unsigned 64-bit `maxtries` parser as
+  `generatetodescriptor`. Negative values are rejected, and values above the
+  former signed 32-bit limit are accepted through `18446744073709551615`.
+  The default budget and mining retry behavior are unchanged.
+
 - Mining IPC requests wait for startup to connect the chain tip. Shutdown or
   failed initialization releases clients waiting for the mining interface.
 - `BlockTemplate.interruptWait()` cancels a pending `waitNext()` call. A queued
@@ -608,6 +615,10 @@ every other input amount used in a displayed fee.
 
 PSBT analysis retains missing public-key and script details alongside signing-mode
 issues, while continuing to omit requests for signatures until the issue is fixed.
+The `analyzepsbt` lists `missing.pubkeys` and `missing.signatures` contain each key
+ID once per input, in sorted order, even when multiple script-solving attempts
+encounter the same missing key. These lists do not specify the minimum number of
+signatures needed for scripts with alternative spending paths.
 
 New signatures refuse SINGLE when the input has no corresponding output.
 PSBT inspection uses per-input declarations, while signing requires explicit
@@ -783,6 +794,10 @@ are unchanged.
 
 Historical UTXO snapshot export
 -------------------------------
+
+`dumptxoutset` with `type="rollback"` and no explicit target returns RPC error
+`-8` when the network has no configured snapshot heights. Supply the `rollback`
+option with a height or block hash, or use `type="latest"` for the current tip.
 
 `dumptxoutset` historical exports now copy the UTXO database and undo blocks in
 that temporary copy. They no longer invalidate the active chain or disconnect

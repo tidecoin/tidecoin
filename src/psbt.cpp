@@ -644,6 +644,12 @@ PSBTError SignPSBTInput(const SigningProvider& provider, PartiallySignedTransact
         if (!out_sigdata) return;
         out_sigdata->missing_pubkeys = sigdata.missing_pubkeys;
         out_sigdata->missing_sigs = sigdata.missing_sigs;
+        // Different satisfaction attempts can report the same missing key.
+        // Return unique, consistently ordered IDs for this input.
+        for (auto* missing : {&out_sigdata->missing_pubkeys, &out_sigdata->missing_sigs}) {
+            std::sort(missing->begin(), missing->end());
+            missing->erase(std::unique(missing->begin(), missing->end()), missing->end());
+        }
         out_sigdata->excluded_sigs = sigdata.excluded_sigs;
         out_sigdata->missing_redeem_script = sigdata.missing_redeem_script;
         out_sigdata->missing_witness_script = sigdata.missing_witness_script;

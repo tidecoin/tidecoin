@@ -72,6 +72,18 @@ Example usage:
 $ tidecoin-cli -rpcclienttimeout=0 dumptxoutset /path/to/output rollback
 ```
 
+This form requires a snapshot height configured in the network's chain
+parameters. Mainnet and testnet currently have none, so specify a historical
+height or block hash explicitly instead:
+
+```
+$ tidecoin-cli -rpcclienttimeout=0 -named dumptxoutset path=/path/to/output rollback=100
+```
+
+The target must be on the active chain, and its required block and undo data
+must still be available. Exporting an explicit target does not make that height
+loadable through `loadtxoutset`; the configured snapshot checks still apply.
+
 Historical exports copy the current UTXO database into a temporary database
 alongside the output file, then undo blocks in that copy to reach the requested
 height. The active chain and mempool are not rolled back, and networking remains
