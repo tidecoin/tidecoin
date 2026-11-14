@@ -85,6 +85,11 @@ Notes:
 
 ## PQHD Wallet RPCs
 
+`setpqhdpolicy` and `setpqhdseed`, like `getnewaddress` and
+`getrawchangeaddress`, wait for wallet notifications to catch up to the chain
+observed when the request begins before applying height-dependent rules. A later
+reorg can still change which outputs are eligible.
+
 ### `setpqhdpolicy`
 
 Set default PQ scheme for new receive/change addresses.

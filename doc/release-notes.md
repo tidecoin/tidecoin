@@ -259,6 +259,12 @@ older descriptors and their funds remain tracked. An encrypted wallet must be
 unlocked when missing policy descriptors need to be created. The RPC help and
 PQHD RPC documentation describe these effects.
 
+Address generation and PQHD policy/seed selection wait for wallet notifications
+to catch up to the chain observed when the request begins. This prevents stale
+activation checks after a rollback or forward transition. The same synchronization
+applies to GUI address generation, sends, fee-bump creation and PQHD policy
+selection. A later reorg can still change which outputs are eligible.
+
 Wallet encryption saves the encrypted existing keys and seeds. For non-blank
 wallets, it then sets up a new seed and descriptors. If that setup fails, its
 changes are rolled back and the wallet remains encrypted and locked. The error

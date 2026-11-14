@@ -157,6 +157,7 @@ public:
     std::string getWalletName() override { return m_wallet->GetName(); }
     util::Result<CTxDestination> getNewDestination(const OutputType type, const std::string& label, std::optional<uint8_t> scheme_override) override
     {
+        m_wallet->BlockUntilSyncedToCurrentChain();
         LOCK(m_wallet->cs_wallet);
         return m_wallet->GetNewDestination(type, label, scheme_override);
     }
@@ -168,6 +169,7 @@ public:
     util::Result<void> setPQHDPolicy(std::optional<uint8_t> receive_scheme,
                                      std::optional<uint8_t> change_scheme) override
     {
+        m_wallet->BlockUntilSyncedToCurrentChain();
         LOCK(m_wallet->cs_wallet);
         return m_wallet->SetPQHDPolicy(receive_scheme, change_scheme);
     }
@@ -286,6 +288,7 @@ public:
         int& change_pos,
         CAmount& fee) override
     {
+        m_wallet->BlockUntilSyncedToCurrentChain();
         LOCK(m_wallet->cs_wallet);
         auto res = CreateTransaction(*m_wallet, recipients, change_pos == -1 ? std::nullopt : std::make_optional(change_pos),
                                      coin_control, sign);
@@ -320,6 +323,7 @@ public:
         CAmount& new_fee,
         CMutableTransaction& mtx) override
     {
+        m_wallet->BlockUntilSyncedToCurrentChain();
         std::vector<CTxOut> outputs; // just an empty list of new recipients for now
         return feebumper::CreateRateBumpTransaction(*m_wallet.get(), txid, coin_control, errors, old_fee, new_fee, mtx, /* require_mine= */ true, outputs) == feebumper::Result::OK;
     }

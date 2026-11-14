@@ -4,13 +4,17 @@
 
 #include <wallet/wallet.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <memory>
 #include <vector>
 
 #include <addresstype.h>
 #include <interfaces/chain.h>
+#include <interfaces/wallet.h>
 #include <key_io.h>
 #include <node/blockstorage.h>
 #include <policy/policy.h>
@@ -19,15 +23,18 @@
 #include <rpc/server.h>
 #include <script/solver.h>
 #include <test/util/logging.h>
+#include <test/util/mining.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <test/util/test_controls.h>
+#include <util/time.h>
 #include <util/translation.h>
 #include <validation.h>
 #include <validationinterface.h>
 #include <wallet/coincontrol.h>
 #include <wallet/context.h>
 #include <wallet/receive.h>
+#include <wallet/rpc/wallet.h>
 #include <wallet/spend.h>
 #include <wallet/test/util.h>
 #include <wallet/test/wallet_test_fixture.h>
@@ -815,6 +822,178 @@ BOOST_FIXTURE_TEST_CASE(RemoveTxs, TestChain100Setup)
         BOOST_CHECK_EQUAL(wallet->mapWallet.count(block_hash), 0u);
     }
 
+    TestUnloadWallet(std::move(wallet));
+}
+
+namespace {
+struct OutputPolicySyncSetup : TestingSetup {
+    OutputPolicySyncSetup() : TestingSetup{ChainType::REGTEST, {.extra_args = {"-auxpowactivationheight=3"}}} {}
+};
+} // namespace
+
+BOOST_FIXTURE_TEST_CASE(output_policy_waits_for_chain_notifications, OutputPolicySyncSetup)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    node::BlockAssembler::Options options;
+    options.coinbase_output_script = CScript{} << OP_TRUE;
+    MineBlock(m_node, options);
+    MineBlock(m_node, options);
+    auto* boundary{WITH_LOCK(cs_main, return m_node.chainman->ActiveTip())};
+    BOOST_REQUIRE_EQUAL(boundary->nHeight, 2); // The next block activates the new rules.
+
+    m_args.ForceSetArg("-keypool", "2");
+    WalletContext context;
+    context.args = &m_args;
+    context.chain = m_node.chain.get();
+    auto wallet{::wallet::TestLoadWallet(CreateMockableWalletDatabase(), context, WALLET_FLAG_DESCRIPTORS)};
+    BOOST_REQUIRE(AddWallet(context, wallet));
+    auto wallet_interface{interfaces::MakeWallet(context, wallet)};
+    m_node.validation_signals->SyncWithValidationInterfaceQueue();
+    const auto seed{WITH_LOCK(wallet->cs_wallet, return wallet->GetPQHDPolicy()->default_seed_id.ToString())};
+
+    using Result = std::pair<bool, std::string>;
+    struct Operation {
+        std::string name;
+        std::function<Result()> call;
+        bool requires_activation;
+        std::pair<std::string, std::string> expected_errors{}; // pre/post activation, for failing operations
+    };
+    std::vector<Operation> operations;
+    auto add_rpc = [&](const std::string& method, const std::vector<std::string>& params, bool requires_activation) {
+        operations.push_back({method + (params.empty() ? "" : " " + params.back()), [&, method, params]() -> Result {
+            JSONRPCRequest request;
+            request.context = &context;
+            request.strMethod = method;
+            request.params = UniValue{UniValue::VARR};
+            for (const auto& param : params) request.params.push_back(param);
+            for (const auto& command : GetWalletRPCCommands()) {
+                if (command.name != method) continue;
+                UniValue result;
+                try {
+                    command.actor(request, result, true);
+                    return {true, result.write()};
+                } catch (const UniValue& error) {
+                    return {false, error.write()};
+                }
+            }
+            throw std::runtime_error("Missing wallet RPC: " + method);
+        }, requires_activation});
+    };
+    for (const auto& [type, scheme] : std::vector<std::pair<std::string, std::string>>{
+             {"bech32pq", "falcon-512"}, {"bech32", "ml-dsa-44"}, {"bech32", "falcon-512"}}) {
+        const bool gated{type == "bech32pq" || scheme == "ml-dsa-44"};
+        add_rpc("getnewaddress", {"", type, scheme}, gated);
+        add_rpc("getrawchangeaddress", {type, scheme}, gated);
+        operations.push_back({"GUI address " + type + " " + scheme, [&, type, scheme]() -> Result {
+            const auto result{wallet_interface->getNewDestination(
+                type == "bech32pq" ? OutputType::BECH32PQ : OutputType::BECH32, "",
+                scheme == "ml-dsa-44" ? 9 : 7)};
+            return result ? Result{true, EncodeDestination(*result)} : Result{false, util::ErrorString(result).original};
+        }, gated});
+    }
+    add_rpc("setpqhdpolicy", {"ml-dsa-44", "ml-dsa-44"}, true);
+    // Rebinding even the same seed may create descriptors depending on height.
+    add_rpc("setpqhdseed", {seed}, false);
+    operations.push_back({"GUI policy", [&]() -> Result {
+        const auto result{wallet_interface->setPQHDPolicy(9, 9)};
+        return result ? Result{true, ""} : Result{false, util::ErrorString(result).original};
+    }, true});
+    operations.push_back({"GUI send", [&]() -> Result {
+        CCoinControl coin_control;
+        coin_control.m_change_scheme_override = 7;
+        coin_control.m_feerate = CFeeRate{10000};
+        int change_pos{-1};
+        CAmount fee{0};
+        const auto result{wallet_interface->createTransaction(
+            {{WitnessV1ScriptHash512{CScript{} << OP_TRUE}, COIN, false}},
+            coin_control, /*sign=*/true, change_pos, fee)};
+        return result ? Result{true, ""} : Result{false, util::ErrorString(result).original};
+    }, false, {"Cannot send to a witness v1 address before auxpow activation", "Insufficient funds"}});
+    operations.push_back({"GUI fee bump", [&]() -> Result {
+        std::vector<bilingual_str> errors;
+        CAmount old_fee{0}, new_fee{0};
+        CMutableTransaction tx;
+        const bool success{wallet_interface->createBumpTransaction(Txid{}, CCoinControl{}, errors, old_fee, new_fee, tx)};
+        return {success, errors.empty() ? "" : errors.front().original};
+    }, false, {"Invalid or non-wallet transaction id", "Invalid or non-wallet transaction id"}});
+
+    for (bool reconnect : {false, true}) {
+        BOOST_TEST_CONTEXT((reconnect ? "forward activation" : "rollback")) {
+            std::vector<std::future<Result>> results;
+            std::promise<void> release, entered;
+            auto gate{release.get_future()};
+            auto waiting{entered.get_future()};
+            m_node.validation_signals->CallFunctionInValidationInterfaceQueue([&] {
+                entered.set_value();
+                gate.wait();
+            });
+            waiting.wait();
+            // Release before futures are destroyed, including on assertion failure.
+            struct QueueRelease {
+                std::promise<void>& release;
+                ValidationSignals& signals;
+                bool done{false};
+                void Finish()
+                {
+                    if (done) return;
+                    done = true;
+                    release.set_value();
+                    signals.SyncWithValidationInterfaceQueue();
+                }
+                ~QueueRelease() { Finish(); }
+            } unblock{release, *m_node.validation_signals};
+
+            BlockValidationState state;
+            if (reconnect) {
+                {
+                    LOCK(cs_main);
+                    m_node.chainman->ActiveChainstate().ResetBlockFailureFlags(boundary);
+                    m_node.chainman->RecalculateBestHeader();
+                }
+                BOOST_REQUIRE(m_node.chainman->ActiveChainstate().ActivateBestChain(state));
+            } else {
+                BOOST_REQUIRE(m_node.chainman->ActiveChainstate().InvalidateBlock(state, boundary));
+            }
+            BOOST_CHECK_EQUAL(*m_node.chain->getHeight(), reconnect ? 2 : 1);
+            BOOST_CHECK_EQUAL(wallet->GetTargetHeightForOutputs(), reconnect ? 2 : 3);
+
+            const size_t pending{m_node.validation_signals->CallbacksPending()};
+            results.reserve(operations.size());
+            for (const auto& op : operations) results.push_back(std::async(std::launch::async, op.call));
+            // Observe the actual synchronization callbacks rather than relying on
+            // a sleep to make the request overlap with notification delivery.
+            const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{10}};
+            auto ready = [](const auto& result) { return result.wait_for(std::chrono::seconds{0}) == std::future_status::ready; };
+            while (m_node.validation_signals->CallbacksPending() < pending + operations.size() &&
+                   !std::any_of(results.begin(), results.end(), ready) &&
+                   std::chrono::steady_clock::now() < deadline) {
+                UninterruptibleSleep(std::chrono::milliseconds{1});
+            }
+            const bool all_waiting{m_node.validation_signals->CallbacksPending() == pending + operations.size()};
+            std::vector<bool> returned_early;
+            returned_early.reserve(results.size());
+            for (const auto& result : results) returned_early.push_back(ready(result));
+            unblock.Finish();
+
+            BOOST_CHECK(all_waiting);
+            for (size_t i{0}; i < operations.size(); ++i) {
+                BOOST_TEST_CONTEXT(operations[i].name) {
+                    BOOST_CHECK(!returned_early[i]);
+                    const auto [success, detail]{results[i].get()};
+                    if (const auto& errors = operations[i].expected_errors; !errors.first.empty()) {
+                        BOOST_CHECK(!success);
+                        BOOST_CHECK_MESSAGE(detail.find(reconnect ? errors.second : errors.first) != std::string::npos, detail);
+                    } else {
+                        BOOST_CHECK_MESSAGE(success == (reconnect || !operations[i].requires_activation), detail);
+                        if (!success) BOOST_CHECK_MESSAGE(detail.find("not allowed") != std::string::npos, detail);
+                    }
+                }
+            }
+            BOOST_CHECK_EQUAL(wallet->GetTargetHeightForOutputs(), reconnect ? 3 : 2);
+        }
+    }
+    wallet_interface.reset();
+    RemoveWallet(context, wallet, std::nullopt);
     TestUnloadWallet(std::move(wallet));
 }
 

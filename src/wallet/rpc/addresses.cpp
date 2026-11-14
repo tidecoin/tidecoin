@@ -210,6 +210,8 @@ RPCHelpMan getnewaddress()
     std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
     if (!pwallet) return UniValue::VNULL;
 
+    // Output eligibility and descriptor setup depend on the current chain.
+    pwallet->BlockUntilSyncedToCurrentChain();
     LOCK(pwallet->cs_wallet);
 
     if (!pwallet->CanGetAddresses()) {
@@ -261,6 +263,8 @@ RPCHelpMan getrawchangeaddress()
     std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
     if (!pwallet) return UniValue::VNULL;
 
+    // Output eligibility and descriptor setup depend on the current chain.
+    pwallet->BlockUntilSyncedToCurrentChain();
     LOCK(pwallet->cs_wallet);
 
     if (!pwallet->CanGetAddresses(true)) {

@@ -386,6 +386,8 @@ static RPCHelpMan setpqhdpolicy()
     std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
     if (!pwallet) return UniValue::VNULL;
 
+    // Output eligibility and descriptor setup depend on the current chain.
+    pwallet->BlockUntilSyncedToCurrentChain();
     LOCK(pwallet->cs_wallet);
 
     const std::optional<uint8_t> receive_scheme = ParsePQSchemePrefix(request.params[0]);
@@ -574,6 +576,8 @@ static RPCHelpMan setpqhdseed()
     const uint256 receive_seed_id = ParseHashV(request.params[0], "receive_seed_id");
     const uint256 change_seed_id = request.params[1].isNull() ? receive_seed_id : ParseHashV(request.params[1], "change_seed_id");
 
+    // Output eligibility and descriptor setup depend on the current chain.
+    pwallet->BlockUntilSyncedToCurrentChain();
     LOCK(pwallet->cs_wallet);
     auto result = pwallet->SetPQHDSeedDefaults(receive_seed_id, change_seed_id);
     if (!result) {

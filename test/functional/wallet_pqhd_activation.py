@@ -42,9 +42,11 @@ class PQHDActivationTest(BitcoinTestFramework):
         self.log.info('Below activation, preserve preferences while refusing ineligible issuance')
         disconnect = node.getblockhash(3)
         node.invalidateblock(disconnect)
-        node.syncwithvalidationinterfacequeue()
+        # Chain-dependent wallet RPCs must synchronize themselves.
         assert_equal(node.getblockcount(), 2)
         self.check_ineligible(wallet)
+        assert_raises_rpc_error(-4, "not allowed before auxpow activation", wallet.setpqhdpolicy, "mldsa44", "mldsa65")
+        wallet.setpqhdseed(receive_seed, change_seed)
         wallet.unloadwallet()
         node.loadwallet('policy')
         wallet = node.get_wallet_rpc('policy')
@@ -56,7 +58,6 @@ class PQHDActivationTest(BitcoinTestFramework):
         assert_equal(self.active(wallet), expected)
         self.check_ineligible(wallet)
         node.reconsiderblock(disconnect)
-        node.syncwithvalidationinterfacequeue()
         assert_equal(node.getblockcount(), 5)
         self.check_addresses(wallet, receive_seed, change_seed)
 
@@ -121,9 +122,13 @@ class PQHDActivationTest(BitcoinTestFramework):
         return sorted(d['desc'] for d in wallet.listdescriptors()['descriptors'] if d['active'])
 
     def check_ineligible(self, wallet):
+        # This unencrypted wallet retains ML-DSA defaults, which are gated for
+        # every address type, not just native witness v1.
         for kind in ['legacy', 'p2sh-segwit', 'bech32', 'bech32pq']:
-            assert_raises_rpc_error(-12, '', wallet.getnewaddress, '', kind)
-            assert_raises_rpc_error(-12, '', wallet.getrawchangeaddress, kind)
+            assert_raises_rpc_error(-12, 'not allowed', wallet.getnewaddress, '', kind)
+            assert_raises_rpc_error(-12, 'not allowed', wallet.getrawchangeaddress, kind)
+        wallet.getnewaddress('', 'bech32', 'falcon512')
+        wallet.getrawchangeaddress('bech32', 'falcon512')
 
     def check_addresses(self, wallet, receive_seed, change_seed):
         assert_equal(len(self.active(wallet)), 8)
