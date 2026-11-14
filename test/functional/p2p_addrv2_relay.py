@@ -73,7 +73,8 @@ class AddrTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 1
-        self.extra_args = [["-whitelist=addr@127.0.0.1"]]
+        # Exact stored-address checks need deterministic addrman bucket placement.
+        self.extra_args = [["-whitelist=addr@127.0.0.1", "-test=addrman"]]
 
     def run_test(self):
         self.log.info('Check disconnection when sending sendaddrv2 after verack')
