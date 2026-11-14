@@ -142,19 +142,6 @@ struct WalletReconciliationTestAccess {
 namespace {
 MockableData ReadRecords(WalletDatabase& database);
 
-// Capture only connections opened on this test's thread. The auto-extension is
-// removed before leaving the test, including when an assertion throws.
-thread_local sqlite3* creation_database{nullptr};
-int CaptureCreationDatabase(sqlite3* db, char**, const sqlite3_api_routines*)
-{
-    creation_database = db;
-    return SQLITE_OK;
-}
-struct CaptureSQLiteCreation {
-    CaptureSQLiteCreation() { BOOST_REQUIRE_EQUAL(sqlite3_auto_extension(reinterpret_cast<void (*)()>(CaptureCreationDatabase)), SQLITE_OK); }
-    ~CaptureSQLiteCreation() { sqlite3_cancel_auto_extension(reinterpret_cast<void (*)()>(CaptureCreationDatabase)); creation_database = nullptr; }
-};
-
 // Faults are confined to this test adapter. All successful operations go to a
 // real SQLite database, which is closed and reopened to check durable state.
 struct Failure {
@@ -1160,8 +1147,6 @@ BOOST_FIXTURE_TEST_CASE(encrypted_creation_failure_retains_recoverable_file, Tes
     WalletContext context;
     context.args = &m_args;
     context.chain = m_node.chain.get();
-    // Keep SQLite initialized before installing its test-only auto-extension.
-    FailingDatabase sqlite_guard{m_args.GetDataDirBase() / "sqlite-guard"};
     for (const auto& record : {DBKeys::PQHD_CRYPTED_SEED, DBKeys::PQHD_POLICY, DBKeys::ACTIVEINTERNALSPK}) {
         const auto path = m_args.GetDataDirBase() / fs::PathFromString("failed-create-" + record);
         DatabaseOptions options;
@@ -1172,25 +1157,19 @@ BOOST_FIXTURE_TEST_CASE(encrypted_creation_failure_retains_recoverable_file, Tes
         DatabaseStatus status;
         bilingual_str error;
         std::vector<bilingual_str> warnings;
-        bool installed{false};
+        // Prepare an empty database with a trigger, then exercise the real
+        // creation/encryption/setup path. No wallet records exist yet. Allow
+        // this precreated database only for the fault-injection call below.
         {
-            CaptureSQLiteCreation capture;
-            DebugLogHelper inject("Encrypting Wallet with an nDeriveIterations", [&](const std::string* line) {
-                if (!line) return true;
-                BOOST_REQUIRE(creation_database);
-                // This callback holds the log mutex. Disable SQL tracing before
-                // executing SQL here, so the trace cannot recursively log.
-                sqlite3_trace_v2(creation_database, 0, nullptr, nullptr);
-                DataStream prefix;
-                prefix << record;
-                const auto sql = strprintf("CREATE TRIGGER fail_creation BEFORE INSERT ON main WHEN substr(NEW.key,1,%u)=X'%s' BEGIN SELECT RAISE(FAIL,'injected creation failure'); END", prefix.size(), HexStr(prefix));
-                BOOST_REQUIRE_EQUAL(sqlite3_exec(creation_database, sql.c_str(), nullptr, nullptr, nullptr), SQLITE_OK);
-                installed = true;
-                return true;
-            });
-            BOOST_CHECK(!CreateWallet(context, fs::PathToString(path), false, options, status, error, warnings));
+            SQLiteDatabase database{path, path / "wallet.dat", options};
+            DataStream prefix;
+            prefix << record;
+            const auto sql = strprintf("CREATE TRIGGER fail_creation BEFORE INSERT ON main WHEN substr(NEW.key,1,%u)=X'%s' BEGIN SELECT RAISE(FAIL,'injected creation failure'); END", prefix.size(), HexStr(prefix));
+            BOOST_REQUIRE_EQUAL(sqlite3_exec(database.m_db, sql.c_str(), nullptr, nullptr, nullptr), SQLITE_OK);
         }
-        BOOST_REQUIRE(installed);
+        options.require_create = false;
+        BOOST_CHECK(!CreateWallet(context, fs::PathToString(path), false, options, status, error, warnings));
+        options.require_create = true;
         BOOST_CHECK(status == DatabaseStatus::FAILED_CREATE);
         BOOST_CHECK(error.original.find("was created and encrypted, but initialization failed") != std::string::npos);
         BOOST_CHECK(error.original.find("createpqhdseed and setpqhdseed") != std::string::npos);

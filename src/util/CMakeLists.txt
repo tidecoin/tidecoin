@@ -10,7 +10,6 @@ add_library(tidecoin_util STATIC EXCLUDE_FROM_ALL
   check.cpp
   exec.cpp
   exception.cpp
-  feefrac.cpp
   fs.cpp
   fs_helpers.cpp
   hasher.cpp

@@ -19,8 +19,18 @@ from test_framework.util import assert_equal, assert_raises_rpc_error
 
 
 class HeaderPeer(P2PInterface):
+    def __init__(self):
+        super().__init__()
+        self.announced = set()
+        self.header_sizes = []
+
     def on_inv(self, message):
-        pass  # Observe announcements without requesting blocks automatically.
+        # Observe announcements without requesting blocks automatically.
+        self.announced.update(inv.hash for inv in message.inv)
+
+    def on_headers(self, message):
+        self.announced.update(header.hash_int for header in message.headers)
+        self.header_sizes.append(len(message.serialize()))
 
 
 class AuxpowHeaderServingTest(BitcoinTestFramework):
@@ -137,21 +147,23 @@ class AuxpowHeaderServingTest(BitcoinTestFramework):
         assert_equal(len(self.request_headers(peer, int(genesis, 16), blocks[1].hash_int).headers), 2)
         source.disconnect_p2ps()
 
-        self.log.info('Eight large announcements fall back to inv, followed by bounded getheaders')
+        self.log.info('Reconnected blocks are announced, followed by bounded getheaders')
         source.invalidateblock(blocks[12].hash_hex)
         source.syncwithvalidationinterfacequeue()
         peer = source.add_p2p_connection(HeaderPeer())
         self.request_headers(peer, blocks[10].hash_int, blocks[11].hash_int)
         peer.send_and_ping(msg_sendheaders())
         with p2p_lock:
-            peer.last_message.pop('inv', None)
-            peer.last_message.pop('headers', None)
+            peer.announced.clear()
+            peer.header_sizes.clear()
         source.reconsiderblock(blocks[12].hash_hex)
         source.syncwithvalidationinterfacequeue()
-        peer.wait_until(lambda: 'inv' in peer.last_message)
+        # Reconnection and the message thread run concurrently. Either one
+        # oversized batch falls back to inv or smaller headers batches fit.
+        # auxpow_announcement_size tests the byte-boundary decision directly.
+        peer.wait_until(lambda: blocks[-1].hash_int in peer.announced)
         with p2p_lock:
-            assert_equal(peer.last_message['inv'].inv[-1].hash, blocks[-1].hash_int)
-            assert 'headers' not in peer.last_message
+            assert all(size < 6_000_000 for size in peer.header_sizes)
         assert_equal(len(self.request_headers(peer, blocks[11].hash_int).headers), 7)
         assert_equal(len(self.request_headers(peer, blocks[18].hash_int).headers), 1)
         source.disconnect_p2ps()

@@ -4,11 +4,13 @@
 
 // Unit tests for denial-of-service detection/prevention code
 
+#include <auxpow.h>
 #include <banman.h>
 #include <chainparams.h>
 #include <common/args.h>
 #include <net.h>
 #include <net_processing.h>
+#include <node/blockstorage.h>
 #include <pubkey.h>
 #include <script/sign.h>
 #include <script/signingprovider.h>
@@ -19,6 +21,7 @@
 #include <util/string.h>
 #include <util/time.h>
 #include <validation.h>
+#include <validationinterface.h>
 
 #include <array>
 #include <barrier>
@@ -74,6 +77,99 @@ BOOST_AUTO_TEST_CASE(fetch_block_peer_disconnect)
         BOOST_CHECK_EQUAL(*result, "Peer does not exist");
         connman.ClearTestNodes();
     }
+}
+
+// Queue a complete update before SendMessages; the functional test's network
+// thread may instead announce several smaller batches while a reorg connects.
+BOOST_FIXTURE_TEST_CASE(auxpow_announcement_size, RegTestingSetup)
+{
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+    auto& chainman = *m_node.chainman;
+    auto& blockman = chainman.m_blockman;
+    auto& connman = static_cast<ConnmanTestMsg&>(*m_node.connman);
+    auto& peerman = *m_node.peerman;
+    connman.SetSendBufferSize(20'000'000);
+    CBlockIndex* genesis = WITH_LOCK(cs_main, return chainman.ActiveChain().Tip());
+    std::vector<CBlockIndex*> indexes{genesis};
+    for (int height = 1; height <= 8; ++height) {
+        CBlock block;
+        block.hashPrevBlock = indexes.back()->GetBlockHash();
+        block.nTime = GetTime();
+        block.nBits = genesis->nBits;
+        block.nNonce = height;
+        block.SetBaseVersion(2, Params().GetConsensus().nAuxpowChainId);
+        block.SetAuxpowVersion(true);
+        block.auxpow = std::make_shared<CAuxPow>();
+        // This test exercises serving stored proofs, not proof validation.
+        CMutableTransaction coinbase;
+        coinbase.vin.resize(1);
+        coinbase.vin[0].scriptSig.resize(900'000);
+        DataStream proof;
+        proof << TX_WITH_WITNESS(MakeTransactionRef(coinbase)) << uint256{} << std::vector<uint256>{}
+              << int32_t{0} << std::vector<uint256>{} << int32_t{0} << CBlockHeader{};
+        proof >> *block.auxpow;
+        const auto pos = blockman.WriteBlock(block, height);
+        BOOST_REQUIRE(!pos.IsNull());
+        blockman.UpdateBlockInfo(block, height, pos);
+        LOCK(cs_main);
+        auto* index = blockman.AddToBlockIndex(block, chainman.m_best_header);
+        index->nStatus |= BLOCK_HAVE_DATA;
+        index->nFile = pos.nFile;
+        index->nDataPos = pos.nPos;
+        indexes.push_back(index);
+    }
+    WITH_LOCK(cs_main, chainman.ActiveChain().SetTip(*indexes.back()));
+    // Six proofs fit below the byte threshold; seven and eight exceed it
+    // without exceeding the separate eight-block announcement count limit.
+    for (const int count : {6, 7, 8}) {
+        CNode peer{count, nullptr, CAddress{ip(0xa0b0c001), NODE_NONE},
+                   0, 0, CAddress{}, "", ConnectionType::OUTBOUND_FULL_RELAY, false};
+        connman.Handshake(peer, true, ServiceFlags(NODE_NETWORK | NODE_WITNESS),
+                          ServiceFlags(NODE_NETWORK | NODE_WITNESS), PROTOCOL_VERSION, true);
+        connman.FlushSendBuffer(peer);
+        connman.ReceiveMsgFrom(peer, NetMsg::Make(NetMsgType::INV, std::vector<CInv>{{MSG_BLOCK, genesis->GetBlockHash()}}));
+        connman.ProcessMessagesOnce(peer);
+        connman.ReceiveMsgFrom(peer, NetMsg::Make(NetMsgType::SENDHEADERS));
+        connman.ProcessMessagesOnce(peer);
+        connman.FlushSendBuffer(peer);
+        // Keep the transport occupied so announcements remain in vSendMsg.
+        auto pending = NetMsg::Make(NetMsgType::PING, uint64_t{0});
+        BOOST_REQUIRE(peer.m_transport->SetMessageToSend(pending));
+        m_node.validation_signals->RegisterValidationInterface(&peerman);
+        m_node.validation_signals->UpdatedBlockTip(indexes[count], genesis, false);
+        m_node.validation_signals->SyncWithValidationInterfaceQueue();
+        m_node.validation_signals->UnregisterValidationInterface(&peerman);
+        BOOST_CHECK(peerman.SendMessages(&peer));
+        size_t headers{0}, invs{0};
+        {
+            LOCK(peer.cs_vSend);
+            for (const auto& message : peer.vSendMsg) {
+                DataStream payload{message.data};
+                if (message.m_type == NetMsgType::HEADERS) {
+                    ++headers;
+                    BOOST_CHECK_EQUAL(ReadCompactSize(payload), count);
+                    for (int i = 1; i <= count; ++i) {
+                        CBlockHeader header;
+                        payload >> header;
+                        BOOST_CHECK(header.GetHash() == indexes[i]->GetBlockHash());
+                        BOOST_CHECK_EQUAL(ReadCompactSize(payload), 0);
+                    }
+                    BOOST_CHECK(payload.empty());
+                } else if (message.m_type == NetMsgType::INV) {
+                    ++invs;
+                    std::vector<CInv> inventory;
+                    payload >> inventory;
+                    BOOST_REQUIRE_EQUAL(inventory.size(), 1);
+                    BOOST_CHECK(inventory[0].hash == indexes[count]->GetBlockHash());
+                }
+            }
+        }
+        BOOST_CHECK_EQUAL(headers, count == 6 ? 1 : 0);
+        BOOST_CHECK_EQUAL(invs, count == 6 ? 0 : 1);
+        BOOST_CHECK(!peer.fDisconnect);
+        peerman.FinalizeNode(peer);
+    }
+    WITH_LOCK(cs_main, chainman.ActiveChain().SetTip(*genesis));
 }
 
 // Test eviction of an outbound peer whose chain never advances

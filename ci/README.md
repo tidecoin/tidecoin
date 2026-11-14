@@ -57,6 +57,34 @@ trigger cache-invalidation and rebuilds as necessary.
 
 ## Configuring a repository for CI
 
+### Automatic Docker cleanup on shared hosts
+
+Each build and lint job uses an image tag and container names unique to its
+configuration, workflow run, attempt and a random invocation suffix. Local runs
+also receive unique names. `CONTAINER_NAME` stays stable for the persistent
+ccache, depends and sources volumes; cleanup never removes those volumes.
+
+The shell exit trap removes the job's containers and then its exact image tag
+with `docker image rm --no-prune`, without forcing image deletion. An `always()`
+workflow step retries this cleanup after failure or normal cancellation. Other
+jobs' tags and containers are left alone, including when images share layers or
+have identical contents. Buildx's existing post-job cleanup removes its own
+builder and temporary build state.
+
+Do not run global image pruning from individual jobs. With the containerd image
+store, it can delete leases protecting another job's active image import, even
+with an image-label filter (Moby issue
+[53321](https://github.com/moby/moby/issues/53321)). Targeted tag removal does not
+perform that lease sweep. No idle-host window or manual command is needed for
+normal job-image cleanup.
+
+A host crash, forcibly killed runner, or unavailable Docker daemon can prevent
+cleanup and leave orphaned resources. The automatic cleanup does not remove
+images left by older CI versions or manage persistent cache sizes. Any broader
+host maintenance must still avoid pruning during other jobs' image operations.
+`RESTART_CI_DOCKER_BEFORE_RUN` is an opt-in Podman reset for isolated environments;
+do not enable it on a shared host.
+
 ### Primary repository
 
 To configure the primary repository, follow these steps:

@@ -111,9 +111,15 @@ class PSBTPartialReuseTest(WitnessV1PSBTTest):
         pqhd = node.get_wallet_rpc('pqhd')
         for address_type in ('legacy', 'p2sh-segwit', 'bech32', 'bech32pq'):
             for address in (pqhd.getnewaddress('', address_type), pqhd.getrawchangeaddress(address_type)):
-                outpoint, _ = self.fund(address)
-                base = node.createpsbt([outpoint], {destination: Decimal('0.995')})
-                none_signed = pqhd.walletprocesspsbt(base, True, 'NONE', False)['psbt']
+                outpoint, previous = self.fund(address)
+                base = PSBT.from_base64(node.createpsbt([outpoint], {destination: Decimal('0.995')}))
+                # Signing must not depend on the asynchronous mempool notification
+                # having reached this recipient wallet yet.
+                base.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = previous
+                none_signed = pqhd.walletprocesspsbt(base.to_base64(), True, 'NONE', False)['psbt']
+                signed_input = node.decodepsbt(none_signed)['inputs'][0]
+                assert_equal(signed_input['sighash'], 'NONE')
+                assert_equal(len(signed_input['partial_signatures']), 1)
                 assert_raises_rpc_error(-22, 'sighash', pqhd.walletprocesspsbt, none_signed)
                 result = pqhd.walletprocesspsbt(none_signed, True, 'NONE')
                 assert result['complete'] and node.testmempoolaccept([result['hex']])[0]['allowed']

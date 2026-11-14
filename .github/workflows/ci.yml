@@ -366,6 +366,13 @@ jobs:
       - name: CI script
         run: ./ci/test_run_all.sh
 
+      - &CLEANUP_CI_DOCKER
+        name: Clean up job Docker resources
+        if: ${{ always() && env.CI_DOCKER_NAME != '' }}
+        run: |
+          source ./ci/docker_resources.sh
+          cleanup_ci_docker
+
       - name: Save caches
         uses: ./.github/actions/save-caches
 
@@ -567,6 +574,8 @@ jobs:
       - name: CI script
         run: ./ci/test_run_all.sh
 
+      - *CLEANUP_CI_DOCKER
+
       - name: Save caches
         uses: ./.github/actions/save-caches
 
@@ -590,19 +599,25 @@ jobs:
       - name: CI script
         run: |
           set -o xtrace
-          docker buildx build -t "$CONTAINER_NAME" $DOCKER_BUILD_CACHE_ARG --file "./ci/lint_imagefile" .
+          source ./ci/docker_resources.sh
+          trap cleanup_ci_docker EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker buildx build -t "$CI_DOCKER_IMAGE" $DOCKER_BUILD_CACHE_ARG --file "./ci/lint_imagefile" .
           PR_FLAG=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             PR_FLAG="-e GITHUB_PULL_REQUEST=1"
           fi
-          if docker run --rm -v "$(pwd)":/ci-bind-check:ro "$CONTAINER_NAME" test -e /ci-bind-check/ci/lint/06_script.sh; then
-            docker run --rm $PR_FLAG -e GITHUB_REPOSITORY="${{ github.repository }}" -v "$(pwd)":/tidecoin "$CONTAINER_NAME"
+          if docker run --rm --name "${CI_DOCKER_NAME}-bind-check" -v "$(pwd)":/ci-bind-check:ro "$CI_DOCKER_IMAGE" test -e /ci-bind-check/ci/lint/06_script.sh; then
+            docker run --rm --name "$CI_DOCKER_NAME" $PR_FLAG -e GITHUB_REPOSITORY="${{ github.repository }}" -v "$(pwd)":/tidecoin "$CI_DOCKER_IMAGE"
           else
             echo "Docker daemon cannot bind-mount the Actions workspace; copying the workspace into the linter container instead"
-            CI_CONTAINER_ID=$(docker create $PR_FLAG -e GITHUB_REPOSITORY="${{ github.repository }}" "$CONTAINER_NAME")
+            CI_CONTAINER_ID=$(docker create --name "$CI_DOCKER_NAME" $PR_FLAG -e GITHUB_REPOSITORY="${{ github.repository }}" "$CI_DOCKER_IMAGE")
             docker cp "$(pwd)/." "${CI_CONTAINER_ID}:/tidecoin/"
             docker start -a "${CI_CONTAINER_ID}"
             CI_EXIT_CODE=$(docker inspect "${CI_CONTAINER_ID}" --format '{{.State.ExitCode}}')
             docker rm "${CI_CONTAINER_ID}"
             exit "${CI_EXIT_CODE}"
           fi
+
+      - *CLEANUP_CI_DOCKER

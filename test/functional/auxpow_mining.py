@@ -17,6 +17,8 @@ from test_framework.util import (
     assert_equal,
     assert_greater_than_or_equal,
     assert_raises_rpc_error,
+    get_rpc_proxy,
+    rpc_url,
 )
 
 from test_framework.auxpow import reverseHex
@@ -197,8 +199,12 @@ class AuxpowMiningTest(BitcoinTestFramework):
             assert_raises_rpc_error(-8, error, rpc, hash='0' * 64)
             assert_raises_rpc_error(-8, error, rpc, auxpow='00')
         # Explicit nulls cannot turn an incomplete submission into creation.
+        # CLI mode deliberately leaves node._rpc unset. Use a dedicated JSON-RPC
+        # connection here because these cases exercise literal JSON null values.
+        rpc = get_rpc_proxy(rpc_url(node.datadir_path, node.index, node.chain, node.rpchost), node.index,
+                            timeout=node.rpc_timeout, coveragedir=node.coverage_dir)
         for params in [(None,), (None, None), ('0' * 64, None), (None, '00')]:
-            assert_raises_rpc_error(-8, error, node._rpc.getauxblock, *params)
+            assert_raises_rpc_error(-8, error, rpc.getauxblock, *params)
         assert_equal(node.getbestblockhash(), tip)
         assert_equal(node.getrawmempool(), pool)
         assert_equal(node.getwalletinfo()['keypoolsize'], keypool_size)

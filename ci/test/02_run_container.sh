@@ -11,14 +11,13 @@ set -o errexit -o pipefail -o xtrace
 
 CI_CONTAINER_ID=""
 
-cleanup_ci_container() {
-  if [ -n "${CI_CONTAINER_ID:-}" ]; then
-    docker container rm --force "${CI_CONTAINER_ID}" >/dev/null 2>&1 || true
-  fi
-}
-trap cleanup_ci_container EXIT
+source ./ci/docker_resources.sh
+trap cleanup_ci_docker EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
+  init_ci_docker
   # Env vars during the build can not be changed. For example, a modified
   # $MAKEJOBS is ignored in the build process. Use --cpuset-cpus as an
   # approximation to respect $MAKEJOBS somewhat, if cpuset is available.
@@ -39,7 +38,7 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
       $MAYBE_CPUSET \
       --platform="${CI_IMAGE_PLATFORM}" \
       --label="${CI_IMAGE_LABEL}" \
-      --tag="${CONTAINER_NAME}" \
+      --tag="${CI_DOCKER_IMAGE}" \
       $DOCKER_BUILD_CACHE_ARG \
       "${BASE_READ_ONLY_DIR}"
 
@@ -95,19 +94,12 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
     echo "Prune all dangling images"
     podman image prune --force --external
   fi
-  echo "Prune all dangling $CI_IMAGE_LABEL images"
-  # When detecting podman-docker, `--external` should be added.
-  docker image prune --force --filter "label=$CI_IMAGE_LABEL" || true
-
-  CI_RUNTIME_CONTAINER_NAME="${CONTAINER_NAME}"
-  if [ -n "${GITHUB_RUN_ID:-}" ]; then
-    CI_RUNTIME_CONTAINER_NAME="${CONTAINER_NAME}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-0}-${GITHUB_JOB:-job}"
-  fi
-  CI_RUNTIME_CONTAINER_NAME="$(printf '%s' "${CI_RUNTIME_CONTAINER_NAME}" | tr -c 'A-Za-z0-9_.-' '-')"
+  # Each invocation removes its own image tag on exit. Global image pruning
+  # can corrupt another job's concurrent image import on a shared daemon.
 
   CI_USE_DOCKER_COPY_WORKSPACE=""
   CI_SOURCE_MOUNT="--mount type=bind,src=$BASE_READ_ONLY_DIR,dst=$BASE_READ_ONLY_DIR,readonly"
-  if ! docker run --rm --mount "type=bind,src=$BASE_READ_ONLY_DIR,dst=/ci-bind-check,readonly" --platform="${CI_IMAGE_PLATFORM}" "$CONTAINER_NAME" true >/dev/null 2>&1; then
+  if ! docker run --rm --name "${CI_DOCKER_NAME}-bind-check" --mount "type=bind,src=$BASE_READ_ONLY_DIR,dst=/ci-bind-check,readonly" --platform="${CI_IMAGE_PLATFORM}" "$CI_DOCKER_IMAGE" true >/dev/null 2>&1; then
     echo "Docker daemon cannot bind-mount the Actions workspace; copying the workspace into the container instead"
     CI_USE_DOCKER_COPY_WORKSPACE=1
     CI_SOURCE_MOUNT=""
@@ -125,10 +117,10 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
                   --mount "${CI_DEPENDS_SOURCES_MOUNT}" \
                   ${CI_BUILD_MOUNT} \
                   --env-file "${CI_ENV_FILE:-/tmp/env-${USER:-${LOGNAME:-$(id -u)}}-$CONTAINER_NAME}" \
-                  --name "$CI_RUNTIME_CONTAINER_NAME" \
+                  --name "$CI_DOCKER_NAME" \
                   --network ci-ip6net \
                   --platform="${CI_IMAGE_PLATFORM}" \
-                  "$CONTAINER_NAME")
+                  "$CI_DOCKER_IMAGE")
   export CI_CONTAINER_ID
   export CI_EXEC_CMD_PREFIX="docker exec ${CI_CONTAINER_ID}"
   if [ "$CI_USE_DOCKER_COPY_WORKSPACE" ]; then

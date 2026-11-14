@@ -3,6 +3,14 @@ description: 'Set up Docker build driver and configure build cache args'
 runs:
   using: 'composite'
   steps:
+    - name: Allocate job Docker names
+      shell: bash
+      run: |
+        source ./ci/docker_resources.sh
+        init_ci_docker
+        echo "CI_DOCKER_NAME=$CI_DOCKER_NAME" >> "$GITHUB_ENV"
+        echo "CI_DOCKER_IMAGE=$CI_DOCKER_IMAGE" >> "$GITHUB_ENV"
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4
       with:

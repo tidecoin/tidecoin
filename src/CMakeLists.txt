@@ -108,6 +108,8 @@ add_library(tidecoin_common STATIC EXCLUDE_FROM_ALL
   common/system.cpp
   common/transaction_rules.cpp
   common/url.cpp
+  # Fee-diagram comparison uses consensus's wide integer arithmetic.
+  util/feefrac.cpp
   compressor.cpp
   core_read.cpp
   core_write.cpp
