@@ -36,6 +36,7 @@ CPubKey MakePubKey(const pq::SchemeInfo& scheme, uint8_t fill)
 std::vector<std::vector<uint8_t>> Sigs(const std::vector<size_t>& sizes)
 {
     std::vector<std::vector<uint8_t>> sigs;
+    sigs.reserve(sizes.size());
     for (size_t size : sizes) sigs.emplace_back(size, 0x01);
     return sigs;
 }

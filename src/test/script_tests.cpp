@@ -2275,8 +2275,7 @@ BOOST_AUTO_TEST_CASE(witness_v1_hash_types_are_script_errors)
             else script << pubkey << (verify ? OP_CHECKSIGVERIFY : OP_CHECKSIG);
             if (verify) script << OP_TRUE;
             if (negated) script << OP_NOT;
-            const CScript program = GetScriptForDestination(WitnessV1ScriptHash512(script));
-            const CScript output = program;
+            const CScript output = GetScriptForDestination(WitnessV1ScriptHash512(script));
             CMutableTransaction tx;
             tx.vin.resize(1);
             tx.vout.emplace_back(1, CScript{} << OP_TRUE);

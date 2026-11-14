@@ -140,7 +140,7 @@ class PSBTTest(BitcoinTestFramework):
                         fields[PSBT_IN_REDEEM_SCRIPT] = program
                     psbt = PSBT(g=PSBTMap({PSBT_GLOBAL_UNSIGNED_TX: tx.serialize()}),
                                 i=[PSBTMap(fields.copy()) for _ in tx.vin], o=[PSBTMap()])
-                    result = self.nodes[0].analyzepsbt(psbt.to_base64(), rules=rules)
+                    result = self.nodes[0].analyzepsbt(psbt=psbt.to_base64(), rules=rules)
                     assert_equal(len(result['inputs']), 2)
                     for item in result['inputs']:
                         assert_equal(item['missing'], {field: expected})
