@@ -103,21 +103,60 @@ BOOST_AUTO_TEST_CASE(falcon_strict_sign_retry)
 
 BOOST_AUTO_TEST_CASE(falcon_strict_sign_exhausts_failures)
 {
-    const pq::SchemeInfo* info = pq::SchemeFromId(pq::SchemeId::FALCON_512);
-    BOOST_REQUIRE(info);
+    constexpr std::array<pq::SchemeId, 2> schemes{
+        pq::SchemeId::FALCON_512,
+        pq::SchemeId::FALCON_1024,
+    };
 
-    std::vector<unsigned char> pk(info->pubkey_bytes);
-    std::vector<unsigned char> sk(info->seckey_bytes);
-    BOOST_REQUIRE(pq::GenerateKeyPair(*info, pk, sk));
+    const std::array<unsigned char, 32> msg{};
+    for (const auto scheme_id : schemes) {
+        const pq::SchemeInfo* info = pq::SchemeFromId(scheme_id);
+        BOOST_REQUIRE(info);
 
-    std::array<unsigned char, 32> msg{};
-    pq::SetFalconSignTestFailCount(static_cast<int>(pq::kFalconSignMaxAttempts));
-    std::vector<unsigned char> sig;
-    BOOST_CHECK(!pq::Sign(*info,
-                          std::span<const unsigned char>(msg),
-                          std::span<const unsigned char>(sk),
-                          sig,
-                          /*legacy_mode=*/false));
+        std::vector<unsigned char> pk(info->pubkey_bytes);
+        std::vector<unsigned char> sk(info->seckey_bytes);
+        BOOST_REQUIRE(pq::GenerateKeyPair(*info, pk, sk));
+
+        pq::SetFalconSignTestFailCount(static_cast<int>(pq::kFalconSignMaxAttempts));
+        std::vector<unsigned char> sig;
+        BOOST_CHECK(!pq::Sign(*info,
+                              std::span<const unsigned char>(msg),
+                              std::span<const unsigned char>(sk),
+                              sig,
+                              /*legacy_mode=*/false));
+        BOOST_CHECK_EQUAL(pq::GetFalconSignTestFailCount(), 0);
+        pq::SetFalconSignTestFailCount(0);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(falcon_strict_sign_retry_at_last_attempt)
+{
+    constexpr std::array<pq::SchemeId, 2> schemes{
+        pq::SchemeId::FALCON_512,
+        pq::SchemeId::FALCON_1024,
+    };
+
+    const std::array<unsigned char, 32> msg{};
+    for (const auto scheme_id : schemes) {
+        const pq::SchemeInfo* info = pq::SchemeFromId(scheme_id);
+        BOOST_REQUIRE(info);
+
+        std::vector<unsigned char> pk(info->pubkey_bytes);
+        std::vector<unsigned char> sk(info->seckey_bytes);
+        BOOST_REQUIRE(pq::GenerateKeyPair(*info, pk, sk));
+
+        // The final allowed attempt must still be available after forced failures.
+        pq::SetFalconSignTestFailCount(static_cast<int>(pq::kFalconSignMaxAttempts - 1));
+        std::vector<unsigned char> sig;
+        BOOST_REQUIRE(pq::Sign(*info, msg, sk, sig, /*legacy_mode=*/false));
+        BOOST_CHECK_EQUAL(pq::GetFalconSignTestFailCount(), 0);
+        BOOST_REQUIRE(!sig.empty());
+        BOOST_CHECK(pq::Verify(*info, msg, sig, pk, /*legacy_mode=*/false));
+
+        auto modified_msg = msg;
+        modified_msg[0] ^= 0x01;
+        BOOST_CHECK(!pq::Verify(*info, modified_msg, sig, pk, /*legacy_mode=*/false));
+    }
 }
 
 BOOST_AUTO_TEST_CASE(falcon_sign_retries_until_within_bound)
