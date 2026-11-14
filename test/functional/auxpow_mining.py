@@ -378,6 +378,9 @@ class AuxpowMiningTest(BitcoinTestFramework):
         b0 = node.createauxblock(address_b)
         assert a0["hash"] != b0["hash"]
         tx1 = wallet.send_self_transfer(from_node=node)
+        # The cache checks freeze mock time, which also stops relay timers.
+        # Submit to both mempools instead of waiting for a timed announcement.
+        self.nodes[1].sendrawtransaction(tx1["hex"])
         self.sync_mempools()
 
         set_time(60)
@@ -399,6 +402,7 @@ class AuxpowMiningTest(BitcoinTestFramework):
         assert_equal(node.createauxblock(address_a), a1)
 
         tx2 = wallet.send_self_transfer(from_node=node)
+        self.nodes[1].sendrawtransaction(tx2["hex"])
         self.sync_mempools()
         set_time(122)
         a2 = node.createauxblock(address_a)

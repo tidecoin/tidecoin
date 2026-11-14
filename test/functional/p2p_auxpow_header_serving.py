@@ -15,7 +15,7 @@ from test_framework.messages import CBlock, CBlockHeader, from_hex, msg_getheade
 from test_framework.p2p import P2PInterface, p2p_lock
 from test_framework.script import CScript, OP_RETURN
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import assert_equal, assert_raises_rpc_error
+from test_framework.util import assert_equal, assert_raises_rpc_error, rpc_url
 
 
 class HeaderPeer(P2PInterface):
@@ -52,7 +52,7 @@ class AuxpowHeaderServingTest(BitcoinTestFramework):
         self.setup_nodes()  # Connect deliberately after building the large-proof chain.
 
     def rest(self, node, block_hash, extension, status):
-        url = urlsplit(node.url)
+        url = urlsplit(rpc_url(node.datadir_path, node.index, node.chain, node.rpchost))
         conn = http.client.HTTPConnection(url.hostname, url.port, timeout=10)
         conn.request('GET', f'/rest/headers/{block_hash}.{extension}?count=1')
         response = conn.getresponse()

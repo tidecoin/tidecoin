@@ -17,7 +17,7 @@ from test_framework.psbt import (
     PSBT_IN_WITNESS_SCRIPT, PSBT_IN_WITNESS_UTXO, PSBT_IN_FINAL_SCRIPTSIG, PSBT_IN_FINAL_SCRIPTWITNESS,
     PSBT_OUT_WITNESS_SCRIPT,
 )
-from test_framework.util import assert_equal, assert_not_equal, assert_raises_rpc_error
+from test_framework.util import assert_equal, assert_not_equal, assert_raises_rpc_error, get_rpc_proxy, rpc_url
 from test_framework.wallet_util import generate_keypair
 
 PRE = 'pre-auxpow'
@@ -70,7 +70,7 @@ class TransactionRulesTest(WitnessV1PSBTTest):
                 base = PSBT.from_base64(node.createpsbt([outpoint], {self.destination: Decimal('0.995')}))
                 base.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = previous
                 assert owner.importdescriptors([{'desc': descriptor, 'timestamp': 'now'}])[0]['success']
-                filled = offline.descriptorprocesspsbt(base.to_base64(), [public], finalize=False, rules=POST)['psbt']
+                filled = offline.descriptorprocesspsbt(psbt=base.to_base64(), descriptors=[public], finalize=False, rules=POST)['psbt']
                 scripts = PSBT.from_base64(filled).i[0].map
                 prevout = dict(outpoint, amount=1, scriptPubKey=utxo.scriptPubKey.hex())
                 for field, key in (('redeemScript', PSBT_IN_REDEEM_SCRIPT), ('witnessScript', PSBT_IN_WITNESS_SCRIPT)):
@@ -80,8 +80,8 @@ class TransactionRulesTest(WitnessV1PSBTTest):
                 # All five schemes and four script forms through all four local signers.
                 eligible = scheme == 7 and template != 'wsh512(pk({}))'
                 for is_psbt, call in (
-                    (True, lambda **opts: offline.descriptorprocesspsbt(base.to_base64(), [descriptor], **opts)),
-                    (True, lambda **opts: owner.walletprocesspsbt(base.to_base64(), **opts)),
+                    (True, lambda **opts: offline.descriptorprocesspsbt(psbt=base.to_base64(), descriptors=[descriptor], **opts)),
+                    (True, lambda **opts: owner.walletprocesspsbt(psbt=base.to_base64(), **opts)),
                     (False, lambda **opts: offline.signrawtransactionwithkey(raw, [secret], [prevout], **opts)),
                     (False, lambda **opts: owner.signrawtransactionwithwallet(raw, [prevout], **opts)),
                 ):
@@ -104,7 +104,7 @@ class TransactionRulesTest(WitnessV1PSBTTest):
                                     assert bytes([PSBT_IN_PARTIAL_SIG]) + pubkey in fields
                                 # No private key: an excluded signature must not
                                 # become usable merely by changing the rule era.
-                                checked = offline.finalizepsbt(pre['psbt'], rules=POST)
+                                checked = offline.finalizepsbt(psbt=pre['psbt'], rules=POST)
                             else:
                                 checked = offline.signrawtransactionwithkey(pre['hex'], [], [prevout], rules=POST)
                             assert_equal(checked['complete'], eligible)
@@ -124,9 +124,9 @@ class TransactionRulesTest(WitnessV1PSBTTest):
     def check_contract(self, case, owner):
         node, offline = self.nodes
         _, _, secret, _, descriptor, _, base, prevout, _ = case
-        partial = owner.walletprocesspsbt(base.to_base64(), finalize=False, rules=POST)['psbt']
+        partial = owner.walletprocesspsbt(psbt=base.to_base64(), finalize=False, rules=POST)['psbt']
         raw = base.tx.serialize().hex()
-        final = offline.finalizepsbt(partial, rules=POST)['hex']
+        final = offline.finalizepsbt(psbt=partial, rules=POST)['hex']
         calls = [
             (owner, 'walletprocesspsbt', [base.to_base64()], 5),
             (offline, 'descriptorprocesspsbt', [base.to_base64(), [descriptor]], 4),
@@ -138,11 +138,29 @@ class TransactionRulesTest(WitnessV1PSBTTest):
             # Combining still needs the actual local coin view.
             (node, 'combinerawtransaction', [[final]], 1),
         ]
+        names = {
+            'walletprocesspsbt': ('psbt',),
+            'descriptorprocesspsbt': ('psbt', 'descriptors'),
+            'finalizepsbt': ('psbt',),
+            'analyzepsbt': ('psbt',),
+            'signrawtransactionwithkey': ('hexstring', 'privkeys', 'prevtxs'),
+            'signrawtransactionwithwallet': ('hexstring', 'prevtxs'),
+            'utxoupdatepsbt': ('psbt',),
+            'combinerawtransaction': ('txs',),
+        }
         for rpc, name, args, position in calls:
             call = getattr(rpc, name)
+            named_args = dict(zip(names[name], args))
+            source = node if rpc is node else offline
+            url = rpc_url(source.datadir_path, source.index, source.chain, source.rpchost)
+            if rpc is owner:
+                url += '/wallet/owner'
+            # JSON nulls and non-string type errors require HTTP: the CLI treats
+            # unconverted string arguments (including rules and sighash) as text.
+            json_call = getattr(get_rpc_proxy(url, source.index), name)
             local = POST if rpc is node else PRE
             for era in (PRE, POST, None):
-                for result in (call(*args, rules=era), call(*(args + [None] * (position - len(args)) + [era]))):
+                for result in (call(**named_args, rules=era), json_call(*(args + [None] * (position - len(args)) + [era]))):
                     if isinstance(result, dict):
                         self.metadata(result, era or local, local, explicit=era is not None)
                     elif name == 'utxoupdatepsbt':
@@ -152,30 +170,20 @@ class TransactionRulesTest(WitnessV1PSBTTest):
                 assert isinstance(call(*args), type(result))
             cli = (node if rpc is node else offline).cli(*(['-rpcwallet=owner'] if rpc is owner else []))
             for era in (PRE, POST):
-                names = {
-                    'walletprocesspsbt': ('psbt',),
-                    'descriptorprocesspsbt': ('psbt', 'descriptors'),
-                    'finalizepsbt': ('psbt',),
-                    'analyzepsbt': ('psbt',),
-                    'signrawtransactionwithkey': ('hexstring', 'privkeys', 'prevtxs'),
-                    'signrawtransactionwithwallet': ('hexstring', 'prevtxs'),
-                    'utxoupdatepsbt': ('psbt',),
-                    'combinerawtransaction': ('txs',),
-                }
                 # Base64 padding contains '='; keep every CLI argument named.
-                result = getattr(cli, name)(**dict(zip(names[name], args)), rules=era)
+                result = getattr(cli, name)(**named_args, rules=era)
                 if isinstance(result, dict):
                     self.metadata(result, era, local)
                 else:
                     assert isinstance(result, str)
             for invalid in ('', 'auto', 'POST-AUXPOW', 'bad'):
-                assert_raises_rpc_error(-8, 'rules must be', call, *args, rules=invalid)
+                assert_raises_rpc_error(-8, 'rules must be', call, **named_args, rules=invalid)
             for invalid in (0, True, [], {}):
-                assert_raises_rpc_error(-3, '', call, *args, rules=invalid)
+                assert_raises_rpc_error(-3, '', json_call, **named_args, rules=invalid)
         assert_raises_rpc_error(-25, 'Input not found', offline.combinerawtransaction, [final], POST)
-        matching = node.finalizepsbt(partial, rules=POST)
+        matching = node.finalizepsbt(psbt=partial, rules=POST)
         self.metadata(matching, POST, POST)
-        mismatch = node.finalizepsbt(partial, rules=PRE)
+        mismatch = node.finalizepsbt(psbt=partial, rules=PRE)
         self.metadata(mismatch, PRE, POST)
         self.metadata(node.finalizepsbt(partial), POST, POST, explicit=False)
         for extract in (False, True):
@@ -189,13 +197,13 @@ class TransactionRulesTest(WitnessV1PSBTTest):
     def check_cached(self, case, owner):
         node, offline = self.nodes
         _, _, secret, pubkey, descriptor, _, base, prevout, _ = case
-        partial = PSBT.from_base64(owner.walletprocesspsbt(base.to_base64(), finalize=False, rules=PRE)['psbt'])
+        partial = PSBT.from_base64(owner.walletprocesspsbt(psbt=base.to_base64(), finalize=False, rules=PRE)['psbt'])
         key = bytes([PSBT_IN_PARTIAL_SIG]) + pubkey
         signature = partial.i[0].map[key]
         for variant in falcon_signature_variants(signature, secret):
             partial.i[0].map[key] = variant
-            old = offline.finalizepsbt(partial.to_base64(), rules=PRE)
-            strict = offline.finalizepsbt(partial.to_base64(), rules=POST)
+            old = offline.finalizepsbt(psbt=partial.to_base64(), rules=PRE)
+            strict = offline.finalizepsbt(psbt=partial.to_base64(), rules=POST)
             if old['complete'] and not strict['complete']:
                 break
         else:
@@ -203,15 +211,15 @@ class TransactionRulesTest(WitnessV1PSBTTest):
         self.log.info('Cached partial proven to verify only under pre-auxpow rules')
         value = partial.to_base64()
         # Signing replaces an owned invalid partial. Declaration/ownership behavior is unchanged.
-        for call in (lambda: owner.walletprocesspsbt(value, rules=POST),
-                     lambda: offline.descriptorprocesspsbt(value, [descriptor], rules=POST)):
+        for call in (lambda: owner.walletprocesspsbt(psbt=value, rules=POST),
+                     lambda: offline.descriptorprocesspsbt(psbt=value, descriptors=[descriptor], rules=POST)):
             self.accepted(call())
-        for call in (lambda: self.empty.walletprocesspsbt(value, rules=POST),
-                     lambda: offline.descriptorprocesspsbt(value, [], rules=POST)):
+        for call in (lambda: self.empty.walletprocesspsbt(psbt=value, rules=POST),
+                     lambda: offline.descriptorprocesspsbt(psbt=value, descriptors=[], rules=POST)):
             result = call()
             assert not result['complete']
             assert_equal(PSBT.from_base64(result['psbt']).i[0].map[key], variant)
-        assert not owner.walletprocesspsbt(value, sign=False, rules=POST)['complete']
+        assert not owner.walletprocesspsbt(psbt=value, sign=False, rules=POST)['complete']
         for era, complete in ((PRE, True), (POST, False)):
             final = offline.finalizepsbt(value, False, PRE)['psbt']
             for candidate in (value, final):
@@ -219,8 +227,8 @@ class TransactionRulesTest(WitnessV1PSBTTest):
                     result = offline.finalizepsbt(candidate, extract, era)
                     assert_equal(result['complete'], complete)
                     assert_equal('hex' in result, complete and extract)
-                for call in (lambda: owner.walletprocesspsbt(candidate, rules=era),
-                             lambda: offline.descriptorprocesspsbt(candidate, [descriptor], rules=era)):
+                for call in (lambda: owner.walletprocesspsbt(psbt=candidate, rules=era),
+                             lambda: offline.descriptorprocesspsbt(psbt=candidate, descriptors=[descriptor], rules=era)):
                     # Supplied finals are checked, never silently repaired.
                     if candidate == final:
                         assert_equal(call()['complete'], complete)
@@ -247,7 +255,7 @@ class TransactionRulesTest(WitnessV1PSBTTest):
             own_key = bytes([PSBT_IN_PARTIAL_SIG]) + pubkey
             for mode in ('ALL', 'NONE'):
                 for _ in range(100):
-                    partial = PSBT.from_base64(owner.walletprocesspsbt(base.to_base64(), sighashtype=mode, finalize=False, rules=PRE)['psbt'])
+                    partial = PSBT.from_base64(owner.walletprocesspsbt(psbt=base.to_base64(), sighashtype=mode, finalize=False, rules=PRE)['psbt'])
                     original = partial.i[0].map[own_key]
                     alternates = falcon512_alternates(original)
                     if alternates:
@@ -259,11 +267,11 @@ class TransactionRulesTest(WitnessV1PSBTTest):
                     partial.i[0].map[foreign_key] = foreign_signature
                     value = partial.to_base64()
                     if mode == 'NONE':
-                        assert_raises_rpc_error(-22, 'sighash', owner.walletprocesspsbt, value, rules=PRE)
-                        assert_raises_rpc_error(-22, 'sighash', offline.descriptorprocesspsbt, value, [descriptor], rules=PRE)
+                        assert_raises_rpc_error(-22, 'sighash', owner.walletprocesspsbt, psbt=value, rules=PRE)
+                        assert_raises_rpc_error(-22, 'sighash', offline.descriptorprocesspsbt, psbt=value, descriptors=[descriptor], rules=PRE)
                     calls = (
-                        lambda psbt, era, finalize: owner.walletprocesspsbt(psbt, sighashtype=mode, finalize=finalize, rules=era),
-                        lambda psbt, era, finalize: offline.descriptorprocesspsbt(psbt, [descriptor], sighashtype=mode, finalize=finalize, rules=era),
+                        lambda psbt, era, finalize: owner.walletprocesspsbt(psbt=psbt, sighashtype=mode, finalize=finalize, rules=era),
+                        lambda psbt, era, finalize: offline.descriptorprocesspsbt(psbt=psbt, descriptors=[descriptor], sighashtype=mode, finalize=finalize, rules=era),
                     )
                     final = offline.finalizepsbt(value, False, PRE)['psbt']
                     for call in calls:
@@ -276,13 +284,13 @@ class TransactionRulesTest(WitnessV1PSBTTest):
                         fields = PSBT.from_base64(replaced['psbt']).i[0].map
                         assert_not_equal(fields[own_key], alternate)
                         assert_equal(fields[foreign_key], foreign_signature)
-                        self.accepted(offline.finalizepsbt(replaced['psbt'], rules=POST))
+                        self.accepted(offline.finalizepsbt(psbt=replaced['psbt'], rules=POST))
                     # No key is needed to finish a valid pre-rules partial.
-                    assert offline.descriptorprocesspsbt(value, [], sighashtype=mode, rules=PRE)['complete']
-                    strict = offline.descriptorprocesspsbt(value, [], sighashtype=mode, rules=POST)
+                    assert offline.descriptorprocesspsbt(psbt=value, descriptors=[], sighashtype=mode, rules=PRE)['complete']
+                    strict = offline.descriptorprocesspsbt(psbt=value, descriptors=[], sighashtype=mode, rules=POST)
                     assert not strict['complete']
                     assert_equal(PSBT.from_base64(strict['psbt']).i[0].map[own_key], alternate)
-                    assert not offline.finalizepsbt(final, rules=POST)['complete']
+                    assert not offline.finalizepsbt(psbt=final, rules=POST)['complete']
 
     def check_cleanup_and_missing(self, cases, owner):
         node, offline = self.nodes
@@ -290,15 +298,15 @@ class TransactionRulesTest(WitnessV1PSBTTest):
         _, _, _, _, descriptor, public, base, prevout, filled = v1
         # Public input/output metadata stays available before activation, without
         # invoking a signer or changing address-issuance policy.
-        metadata = offline.descriptorprocesspsbt(base.to_base64(), [public], finalize=False, rules=PRE)['psbt']
+        metadata = offline.descriptorprocesspsbt(psbt=base.to_base64(), descriptors=[public], finalize=False, rules=PRE)['psbt']
         assert_equal(PSBT.from_base64(metadata).i[0].map[PSBT_IN_WITNESS_SCRIPT].hex(), prevout['witnessScript'])
         output_base = node.createpsbt([{k: prevout[k] for k in ('txid', 'vout')}],
                                      {node.deriveaddresses(public)[0]: Decimal('0.99')})
-        for result in (offline.descriptorprocesspsbt(output_base, [public], finalize=False, rules=PRE),
-                       owner.walletprocesspsbt(output_base, sign=False, finalize=False, rules=PRE)):
+        for result in (offline.descriptorprocesspsbt(psbt=output_base, descriptors=[public], finalize=False, rules=PRE),
+                       owner.walletprocesspsbt(psbt=output_base, sign=False, finalize=False, rules=PRE)):
             output = PSBT.from_base64(result['psbt']).o[0].map
             assert_equal(output[PSBT_OUT_WITNESS_SCRIPT].hex(), prevout['witnessScript'])
-        partial = owner.walletprocesspsbt(base.to_base64(), finalize=False, rules=POST)['psbt']
+        partial = owner.walletprocesspsbt(psbt=base.to_base64(), finalize=False, rules=POST)['psbt']
         with_full = PSBT.from_base64(partial)
         with_full.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = base.i[0].map[PSBT_IN_NON_WITNESS_UTXO]
         for era in (PRE, POST):
@@ -306,25 +314,25 @@ class TransactionRulesTest(WitnessV1PSBTTest):
             fields = PSBT.from_base64(updated).i[0].map
             assert_equal(PSBT_IN_NON_WITNESS_UTXO in fields, era == PRE)
             assert PSBT_IN_WITNESS_UTXO in fields
-            assert_equal(offline.finalizepsbt(updated, rules=era)['complete'], era == POST)
+            assert_equal(offline.finalizepsbt(psbt=updated, rules=era)['complete'], era == POST)
         for missing in (PSBT_IN_WITNESS_SCRIPT, PSBT_IN_WITNESS_UTXO):
             bad = PSBT.from_base64(partial)
             bad.i[0].map.pop(missing, None)
-            assert not offline.finalizepsbt(bad.to_base64(), rules=POST)['complete']
+            assert not offline.finalizepsbt(psbt=bad.to_base64(), rules=POST)['complete']
         legacy = cases[0]
-        missing_prev = PSBT.from_base64(owner.walletprocesspsbt(legacy[6].to_base64(), rules=POST)['psbt'])
+        missing_prev = PSBT.from_base64(owner.walletprocesspsbt(psbt=legacy[6].to_base64(), rules=POST)['psbt'])
         missing_prev.i[0].map.pop(PSBT_IN_NON_WITNESS_UTXO)
         missing_prev.i[0].map[PSBT_IN_WITNESS_UTXO] = CTxOut(100_000_000, bytes.fromhex(legacy[7]['scriptPubKey'])).serialize()
-        assert not offline.finalizepsbt(missing_prev.to_base64(), rules=POST)['complete']
+        assert not offline.finalizepsbt(psbt=missing_prev.to_base64(), rules=POST)['complete']
         assert 'fee' not in offline.analyzepsbt(missing_prev.to_base64(), POST)
         # V1 ALL needs every spent output, even an input not owned by this signer.
         mixed = PSBT.from_base64(node.createpsbt([{k: prevout[k] for k in ('txid', 'vout')},
                                                {k: legacy[7][k] for k in ('txid', 'vout')}],
                                               {self.destination: Decimal('1.99')}))
         mixed.i[0].map = dict(PSBT.from_base64(filled).i[0].map)
-        assert not owner.walletprocesspsbt(mixed.to_base64(), rules=POST)['complete']
+        assert not owner.walletprocesspsbt(psbt=mixed.to_base64(), rules=POST)['complete']
         mixed.i[1].map = dict(legacy[6].i[0].map)
-        self.accepted(owner.walletprocesspsbt(mixed.to_base64(), rules=POST))
+        self.accepted(owner.walletprocesspsbt(psbt=mixed.to_base64(), rules=POST))
         # An unsupported wrapped v1 form is not enabled by a processing option.
         assert_raises_rpc_error(-5, '', offline.getdescriptorinfo, descsum_create('sh(' + descriptor.split('#')[0] + ')'))
         wrapped = script_to_p2sh(bytes.fromhex(prevout['scriptPubKey']))
@@ -346,11 +354,11 @@ class TransactionRulesTest(WitnessV1PSBTTest):
         base.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = previous
         one = descsum_create(f'wsh512(multi(2,{first[2]},{second[3].hex()}))')
         two = descsum_create(f'wsh512(multi(2,{first[3].hex()},{second[2]}))')
-        partial = offline.descriptorprocesspsbt(base.to_base64(), [one], finalize=False, rules=POST)
+        partial = offline.descriptorprocesspsbt(psbt=base.to_base64(), descriptors=[one], finalize=False, rules=POST)
         assert not partial['complete']
-        self.accepted(offline.descriptorprocesspsbt(partial['psbt'], [two], rules=POST))
+        self.accepted(offline.descriptorprocesspsbt(psbt=partial['psbt'], descriptors=[two], rules=POST))
         assert owner.importdescriptors([{'desc': private, 'timestamp': 'now'}])[0]['success']
-        self.accepted(owner.walletprocesspsbt(base.to_base64(), rules=POST))
+        self.accepted(owner.walletprocesspsbt(psbt=base.to_base64(), rules=POST))
 
     def check_mixed_eligibility(self, cases, owner):
         node, offline = self.nodes
@@ -377,13 +385,13 @@ class TransactionRulesTest(WitnessV1PSBTTest):
                 one = descriptor(falcon[2], mldsa[3].hex())
                 two = descriptor(falcon[3].hex(), mldsa[2])
                 assert owner.importdescriptors([{'desc': private, 'timestamp': 'now'}])[0]['success']
-                cached = offline.descriptorprocesspsbt(base.to_base64(), [two], finalize=False, rules=POST)['psbt']
+                cached = offline.descriptorprocesspsbt(psbt=base.to_base64(), descriptors=[two], finalize=False, rules=POST)['psbt']
                 original = PSBT.from_base64(cached).i[0].map[mldsa_key]
                 for value in (base.to_base64(), cached):
                     for finalize in (False, True):
                         for result in (
-                            offline.descriptorprocesspsbt(value, [one], finalize=finalize, rules=PRE),
-                            owner.walletprocesspsbt(value, finalize=finalize, rules=PRE),
+                            offline.descriptorprocesspsbt(psbt=value, descriptors=[one], finalize=finalize, rules=PRE),
+                            owner.walletprocesspsbt(psbt=value, finalize=finalize, rules=PRE),
                         ):
                             parsed = PSBT.from_base64(result['psbt'])
                             fields = parsed.i[0].map
@@ -394,13 +402,13 @@ class TransactionRulesTest(WitnessV1PSBTTest):
                                 assert_equal(mldsa_key in fields, value == cached)
                                 if value == cached:
                                     assert_equal(fields[mldsa_key], original)
-                            finished = offline.finalizepsbt(result['psbt'], rules=PRE)
+                            finished = offline.finalizepsbt(psbt=result['psbt'], rules=PRE)
                             assert_equal(finished['complete'], required != 2)
                             if required != 2:
                                 self.accepted(finished)
                             # The preserved eligible partial can finish later with
                             # the other signer under the appropriate rules.
-                            self.accepted(offline.descriptorprocesspsbt(result['psbt'], [two], rules=POST))
+                            self.accepted(offline.descriptorprocesspsbt(psbt=result['psbt'], descriptors=[two], rules=POST))
 
         self.log.info('Mixed inputs retain eligible work without creating excluded signatures')
         mixed_cases = [falcon, mldsa, next(case for case in cases if case[1] == 'wsh512(pk({}))')]
@@ -409,16 +417,16 @@ class TransactionRulesTest(WitnessV1PSBTTest):
         for index, case in enumerate(mixed_cases):
             mixed.i[index].map = dict(case[6].i[0].map)
             mixed.i[index].map[marker] = bytes([index])
-        for result in (owner.walletprocesspsbt(mixed.to_base64(), finalize=False, rules=PRE),
-                       offline.descriptorprocesspsbt(mixed.to_base64(), [case[4] for case in mixed_cases], finalize=False, rules=PRE)):
+        for result in (owner.walletprocesspsbt(psbt=mixed.to_base64(), finalize=False, rules=PRE),
+                       offline.descriptorprocesspsbt(psbt=mixed.to_base64(), descriptors=[case[4] for case in mixed_cases], finalize=False, rules=PRE)):
             assert not result['complete']
             parsed = PSBT.from_base64(result['psbt'])
             for index, case in enumerate(mixed_cases):
                 fields = parsed.i[index].map
                 assert_equal(fields[marker], bytes([index]))
                 assert_equal(bytes([PSBT_IN_PARTIAL_SIG]) + case[3] in fields, index == 0)
-            assert not offline.finalizepsbt(result['psbt'], rules=POST)['complete']
-            self.accepted(owner.walletprocesspsbt(result['psbt'], rules=POST))
+            assert not offline.finalizepsbt(psbt=result['psbt'], rules=POST)['complete']
+            self.accepted(owner.walletprocesspsbt(psbt=result['psbt'], rules=POST))
 
     def check_workflow(self):
         node, offline = self.nodes
@@ -441,14 +449,14 @@ class TransactionRulesTest(WitnessV1PSBTTest):
                               options={'change_address': change, 'psbt': True})
         assert not unsigned['complete']
         self.metadata(offline.analyzepsbt(unsigned['psbt'], POST), POST)
-        none = signer.walletprocesspsbt(unsigned['psbt'], sighashtype='NONE', finalize=False, rules=POST)
-        assert_raises_rpc_error(-22, 'sighash', signer.walletprocesspsbt, none['psbt'], rules=POST)
-        self.accepted(signer.walletprocesspsbt(none['psbt'], sighashtype='NONE', rules=POST))
-        signed = signer.walletprocesspsbt(unsigned['psbt'], rules=POST)
+        none = signer.walletprocesspsbt(psbt=unsigned['psbt'], sighashtype='NONE', finalize=False, rules=POST)
+        assert_raises_rpc_error(-22, 'sighash', signer.walletprocesspsbt, psbt=none['psbt'], rules=POST)
+        self.accepted(signer.walletprocesspsbt(psbt=none['psbt'], sighashtype='NONE', rules=POST))
+        signed = signer.walletprocesspsbt(psbt=unsigned['psbt'], rules=POST)
         self.metadata(signed, POST)
         self.accepted(signed)
         signer.walletlock()
-        final = offline.finalizepsbt(signed['psbt'], rules=POST)
+        final = offline.finalizepsbt(psbt=signed['psbt'], rules=POST)
         self.accepted(final)
         node.sendrawtransaction(final['hex'])
         self.generatetoaddress(node, 1, self.destination, sync_fun=self.no_op)

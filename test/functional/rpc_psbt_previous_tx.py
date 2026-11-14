@@ -32,7 +32,7 @@ class PSBTPreviousTransactionTest(WitnessV1PSBTTest):
             result = offline.finalizepsbt(value, finalize)
             assert_equal(result['complete'], complete)
             assert_equal('hex' in result, complete and finalize)
-            result = offline.descriptorprocesspsbt(value, [], finalize=finalize)
+            result = offline.descriptorprocesspsbt(psbt=value, descriptors=[], finalize=finalize)
             assert_equal(result['complete'], complete)
             assert_equal('hex' in result, complete)
         for sign in (False, True):

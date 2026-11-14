@@ -14,7 +14,7 @@ from feature_auxpow_mempool_transition import falcon_signature_variants
 from rpc_transaction_rules import PRE, POST, TransactionRulesTest
 from test_framework.descriptors import descsum_create
 from test_framework.psbt import PSBT, PSBT_IN_NON_WITNESS_UTXO
-from test_framework.util import assert_equal, assert_raises_rpc_error, get_rpc_proxy
+from test_framework.util import assert_equal, assert_raises_rpc_error, get_rpc_proxy, rpc_url
 from test_framework.wallet_util import generate_keypair
 
 
@@ -49,14 +49,14 @@ class TransactionRulesSignerTest(TransactionRulesTest):
         outpoint, previous = self.fund(address)
         base = PSBT.from_base64(node.createpsbt([outpoint], {change: Decimal('0.995')}))
         base.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = previous
-        request = device.walletprocesspsbt(base.to_base64(), False, finalize=False, rules=POST)['psbt']
-        fresh = node.descriptorprocesspsbt(request, [descriptor], finalize=False, rules=POST)['psbt']
+        request = device.walletprocesspsbt(psbt=base.to_base64(), sign=False, finalize=False, rules=POST)['psbt']
+        fresh = node.descriptorprocesspsbt(psbt=request, descriptors=[descriptor], finalize=False, rules=POST)['psbt']
         partial = PSBT.from_base64(fresh)
         key = b'\x02' + pub
         for variant in falcon_signature_variants(partial.i[0].map[key], secret):
             partial.i[0].map[key] = variant
-            old = offline.finalizepsbt(partial.to_base64(), rules=PRE)
-            if old['complete'] and not offline.finalizepsbt(partial.to_base64(), rules=POST)['complete']:
+            old = offline.finalizepsbt(psbt=partial.to_base64(), rules=PRE)
+            if old['complete'] and not offline.finalizepsbt(psbt=partial.to_base64(), rules=POST)['complete']:
                 break
         else:
             raise AssertionError('No old-only signature')
@@ -64,23 +64,23 @@ class TransactionRulesSignerTest(TransactionRulesTest):
         old_final = offline.finalizepsbt(old_partial, False, PRE)['psbt']
         for response in (old_partial, old_final):
             self.response(response)
-            self.metadata(device.walletprocesspsbt(request, rules=PRE), PRE)
-            assert_raises_rpc_error(-25, 'External signer failed', device.walletprocesspsbt, request, rules=POST)
+            self.metadata(device.walletprocesspsbt(psbt=request, rules=PRE), PRE)
+            assert_raises_rpc_error(-25, 'External signer failed', device.walletprocesspsbt, psbt=request, rules=POST)
         self.response(fresh)
-        self.accepted(device.walletprocesspsbt(old_partial, rules=POST))
+        self.accepted(device.walletprocesspsbt(psbt=old_partial, rules=POST))
         sent = PSBT.from_base64(Path(str(self.state_path) + '.request').read_text())
         assert key not in sent.i[0].map
         calls = Path(str(self.state_path) + '.calls').read_text()
-        assert_raises_rpc_error(-8, 'rules must be', device.walletprocesspsbt, request, rules='invalid')
+        assert_raises_rpc_error(-8, 'rules must be', device.walletprocesspsbt, psbt=request, rules='invalid')
         assert_equal(Path(str(self.state_path) + '.calls').read_text(), calls)
 
         self.log.info('Advance during a device call retains pre rules through extraction')
         self.generatetoaddress(offline, 108, payout, sync_fun=self.no_op)
-        self.metadata(device.walletprocesspsbt(request, sign=False), PRE, explicit=False)
+        self.metadata(device.walletprocesspsbt(psbt=request, sign=False), PRE, explicit=False)
         # The next block at tip 108 is still pre activation. Advance to 109
         # only after the host has selected its context and reached the device.
         self.response(old_partial)
-        worker = get_rpc_proxy(offline.url + '/wallet/device', offline.index, timeout=60)
+        worker = get_rpc_proxy(rpc_url(offline.datadir_path, offline.index, offline.chain, offline.rpchost) + '/wallet/device', offline.index, timeout=60)
         result = self.during_call(
             lambda: worker.walletprocesspsbt(request),
             lambda: self.generatetoaddress(offline, 1, payout, sync_fun=self.no_op))
@@ -101,18 +101,18 @@ class TransactionRulesSignerTest(TransactionRulesTest):
         v1_outpoint, v1_previous = self.fund(v1_address)
         v1_base = PSBT.from_base64(node.createpsbt([v1_outpoint], {change: Decimal('0.995')}))
         v1_base.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = v1_previous
-        v1_request = v1_device.walletprocesspsbt(v1_base.to_base64(), False, finalize=False, rules=POST)['psbt']
+        v1_request = v1_device.walletprocesspsbt(psbt=v1_base.to_base64(), sign=False, finalize=False, rules=POST)['psbt']
         # Post-rule updating may compact a native-v1 previous transaction. Keep
         # the full record so a pre-rule request reaches device-result checking.
         v1_with_full = PSBT.from_base64(v1_request)
         v1_with_full.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = v1_previous
         v1_request = v1_with_full.to_base64()
-        v1_fresh = node.descriptorprocesspsbt(v1_request, [v1_descriptor], rules=POST)['psbt']
-        v1_partial = node.descriptorprocesspsbt(v1_request, [v1_descriptor], finalize=False, rules=POST)['psbt']
+        v1_fresh = node.descriptorprocesspsbt(psbt=v1_request, descriptors=[v1_descriptor], rules=POST)['psbt']
+        v1_partial = node.descriptorprocesspsbt(psbt=v1_request, descriptors=[v1_descriptor], finalize=False, rules=POST)['psbt']
         for response in (v1_partial, v1_fresh):
             self.response(response)
-            assert_raises_rpc_error(-25, 'External signer failed', v1_device.walletprocesspsbt, v1_request, rules=PRE)
-            self.accepted(v1_device.walletprocesspsbt(v1_request, rules=POST))
+            assert_raises_rpc_error(-25, 'External signer failed', v1_device.walletprocesspsbt, psbt=v1_request, rules=PRE)
+            self.accepted(v1_device.walletprocesspsbt(psbt=v1_request, rules=POST))
         for scheme in range(8, 12):
             later_secret, _ = generate_keypair(wif=True, scheme=str(scheme))
             later_descriptor = descsum_create(f'wpkh({later_secret})')
@@ -125,25 +125,25 @@ class TransactionRulesSignerTest(TransactionRulesTest):
             later_outpoint, later_previous = self.fund(node.deriveaddresses(later_public)[0])
             later_base = PSBT.from_base64(node.createpsbt([later_outpoint], {change: Decimal('0.995')}))
             later_base.i[0].map[PSBT_IN_NON_WITNESS_UTXO] = later_previous
-            later_request = later_device.walletprocesspsbt(later_base.to_base64(), False, finalize=False, rules=POST)['psbt']
+            later_request = later_device.walletprocesspsbt(psbt=later_base.to_base64(), sign=False, finalize=False, rules=POST)['psbt']
             for finalize in (False, True):
-                response = node.descriptorprocesspsbt(later_request, [later_descriptor], finalize=finalize, rules=POST)['psbt']
+                response = node.descriptorprocesspsbt(psbt=later_request, descriptors=[later_descriptor], finalize=finalize, rules=POST)['psbt']
                 self.response(response)
-                assert_raises_rpc_error(-25, 'External signer failed', later_device.walletprocesspsbt, later_request, rules=PRE)
-                self.accepted(later_device.walletprocesspsbt(later_request, rules=POST))
+                assert_raises_rpc_error(-25, 'External signer failed', later_device.walletprocesspsbt, psbt=later_request, rules=PRE)
+                self.accepted(later_device.walletprocesspsbt(psbt=later_request, rules=POST))
         self.state['descriptors']['receive'] = [v1_public]
         self.response(v1_fresh)
         self.log.info('Rollback during a device call retains post rules through extraction')
-        worker = get_rpc_proxy(offline.url + '/wallet/device_v1', offline.index, timeout=60)
+        worker = get_rpc_proxy(rpc_url(offline.datadir_path, offline.index, offline.chain, offline.rpchost) + '/wallet/device_v1', offline.index, timeout=60)
         result = self.during_call(lambda: worker.walletprocesspsbt(v1_request),
                                   lambda: offline.invalidateblock(boundary))
         self.metadata(result, POST, POST, explicit=False)
         self.accepted(result)
         assert_equal(offline.getblockcount(), 108)
-        subsequent = v1_device.walletprocesspsbt(v1_fresh, sign=False)
+        subsequent = v1_device.walletprocesspsbt(psbt=v1_fresh, sign=False)
         self.metadata(subsequent, PRE, explicit=False)
         assert not subsequent['complete']
-        self.accepted(v1_device.walletprocesspsbt(v1_fresh, rules=POST))
+        self.accepted(v1_device.walletprocesspsbt(psbt=v1_fresh, rules=POST))
 
         self.log.info('Ordinary send retains its local rules through both fills and extraction')
         offline.reconsiderblock(boundary)
@@ -151,7 +151,7 @@ class TransactionRulesSignerTest(TransactionRulesTest):
         self.generatetoaddress(offline, 1, payout, sync_fun=self.no_op)
         def reply_and_roll_back():
             incoming = Path(str(self.state_path) + '.request').read_text()
-            response = node.descriptorprocesspsbt(incoming, [v1_descriptor], rules=POST)
+            response = node.descriptorprocesspsbt(psbt=incoming, descriptors=[v1_descriptor], rules=POST)
             assert response['complete']
             self.response(response['psbt'])
             offline.invalidateblock(boundary)
@@ -161,7 +161,7 @@ class TransactionRulesSignerTest(TransactionRulesTest):
             reply_and_roll_back)
         assert sent['complete']
         assert 'rules' not in sent
-        expected = offline.finalizepsbt(self.state['response']['psbt'], rules=POST)
+        expected = offline.finalizepsbt(psbt=self.state['response']['psbt'], rules=POST)
         assert_equal(sent['hex'], expected['hex'])
         assert_equal(offline.getblockcount(), 108)
 
@@ -170,7 +170,7 @@ class TransactionRulesSignerTest(TransactionRulesTest):
 
         def reply_v1():
             incoming = Path(str(self.state_path) + '.request').read_text()
-            response = node.descriptorprocesspsbt(incoming, [v1_descriptor], rules=POST)
+            response = node.descriptorprocesspsbt(psbt=incoming, descriptors=[v1_descriptor], rules=POST)
             assert response['complete']
             self.response(response['psbt'])
 
@@ -190,7 +190,7 @@ class TransactionRulesSignerTest(TransactionRulesTest):
             reply_bump_and_roll_back)
         assert_equal(bumped['errors'], [])
         assert 'rules' not in bumped
-        expected = offline.finalizepsbt(self.state['response']['psbt'], rules=POST)
+        expected = offline.finalizepsbt(psbt=self.state['response']['psbt'], rules=POST)
         assert expected['complete']
         assert_equal(bumped['txid'], offline.decoderawtransaction(expected['hex'])['txid'])
         assert_equal(v1_device.gettransaction(bumped['txid'])['hex'], expected['hex'])
