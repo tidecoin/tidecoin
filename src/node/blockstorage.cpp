@@ -1316,7 +1316,7 @@ static auto InitBlocksdirXorKey(const BlockManager::Options& opts)
 
     const fs::path xor_key_path{opts.blocks_dir / "xor.dat"};
     const auto stored_key = ReadBinaryFileBounded(xor_key_path, obfuscation.size());
-    if (stored_key.status == FileReadStatus::ERROR ||
+    if (stored_key.status == FileReadStatus::FAILED ||
         (stored_key.status == FileReadStatus::OK && stored_key.data.size() != obfuscation.size())) {
         throw std::runtime_error{strprintf(
             "Invalid or unreadable XOR key file %s: expected exactly %u bytes. Check file access; "

@@ -49,8 +49,6 @@ private:
             : coinbase_script(script)
         {
         }
-
-        PerWallet(PerWallet&&) = default;
     };
 
     // Compare shared ownership, not wallet names or reusable object addresses.

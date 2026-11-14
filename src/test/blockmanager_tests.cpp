@@ -179,8 +179,8 @@ BOOST_AUTO_TEST_CASE(last_block_file_loading)
         .block_tree_db_params = DBParams{.path = "", .cache_bytes = 1 << 20, .memory_only = true},
     };
     BlockManager blockman{*Assert(m_node.shutdown_signal), opts};
-    auto& db = *blockman.m_block_tree_db;
     LOCK(cs_main);
+    auto& db = *blockman.m_block_tree_db;
     BOOST_REQUIRE(blockman.LoadBlockIndexDB(std::nullopt));
     BOOST_CHECK_THROW(blockman.GetBlockFileInfo(1), std::out_of_range);
 
@@ -252,8 +252,11 @@ BOOST_AUTO_TEST_CASE(last_block_file_load_errors)
     };
     for (const int file_num : {-1, node::MAX_BLOCKFILE_ENTRIES, 0x41414141}) {
         ChainstateManager chainman{*Assert(m_node.shutdown_signal), chain_opts, block_opts};
-        BOOST_REQUIRE(chainman.m_blockman.m_block_tree_db->WriteDatabaseFormatVersion());
-        BOOST_REQUIRE(chainman.m_blockman.m_block_tree_db->Write(uint8_t{'l'}, file_num));
+        {
+            LOCK(cs_main);
+            BOOST_REQUIRE(chainman.m_blockman.m_block_tree_db->WriteDatabaseFormatVersion());
+            BOOST_REQUIRE(chainman.m_blockman.m_block_tree_db->Write(uint8_t{'l'}, file_num));
+        }
         node::ChainstateLoadOptions load_opts;
         load_opts.coins_db_in_memory = true;
         const auto [status, error] = node::LoadChainstate(chainman, kernel::CacheSizes{1 << 20}, load_opts);
@@ -266,7 +269,7 @@ BOOST_AUTO_TEST_CASE(last_block_file_load_errors)
         }
         BOOST_CHECK_THROW(chainman.m_blockman.GetBlockFileInfo(0), std::out_of_range);
         int stored;
-        BOOST_REQUIRE(chainman.m_blockman.m_block_tree_db->Read(uint8_t{'l'}, stored));
+        BOOST_REQUIRE(WITH_LOCK(cs_main, return chainman.m_blockman.m_block_tree_db->Read(uint8_t{'l'}, stored)));
         BOOST_CHECK_EQUAL(stored, file_num);
     }
 }
@@ -321,7 +324,7 @@ BOOST_FIXTURE_TEST_CASE(last_block_file_reindex_recovery, TestChain100Setup)
             BOOST_CHECK(status == node::ChainstateLoadStatus::FAILURE);
             BOOST_CHECK(error.original.find("full rebuild with -reindex may repair it") != std::string::npos);
             int stored;
-            BOOST_REQUIRE(chainman.m_blockman.m_block_tree_db->Read(uint8_t{'l'}, stored));
+            BOOST_REQUIRE(WITH_LOCK(cs_main, return chainman.m_blockman.m_block_tree_db->Read(uint8_t{'l'}, stored)));
             BOOST_CHECK_EQUAL(stored, damaged_file_num);
             const auto unchanged_blocks = ReadBinaryFile(blocks_dir / "blk00000.dat");
             BOOST_REQUIRE(unchanged_blocks.first);
@@ -331,10 +334,10 @@ BOOST_FIXTURE_TEST_CASE(last_block_file_reindex_recovery, TestChain100Setup)
         BOOST_REQUIRE_MESSAGE(status == node::ChainstateLoadStatus::SUCCESS, error.original);
         if (attempt == 2) {
             bool reindexing{false};
-            chainman.m_blockman.m_block_tree_db->ReadReindexing(reindexing);
+            WITH_LOCK(cs_main, chainman.m_blockman.m_block_tree_db->ReadReindexing(reindexing));
             BOOST_REQUIRE(reindexing);
             node::ImportBlocks(chainman, {});
-            chainman.m_blockman.m_block_tree_db->ReadReindexing(reindexing);
+            WITH_LOCK(cs_main, chainman.m_blockman.m_block_tree_db->ReadReindexing(reindexing));
             BOOST_CHECK(!reindexing);
         }
         const auto [verify_status, verify_error] = node::VerifyLoadedChainstate(chainman, load_opts);

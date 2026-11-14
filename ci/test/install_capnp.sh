@@ -25,6 +25,7 @@ patch --batch -p1 -d "${WORK_DIR}/capnproto-c++-${VERSION}" \
   < "${REPO_DIR}/depends/patches/capnp/macos_accept_dead_socket.patch"
 cmake -S "${WORK_DIR}/capnproto-c++-${VERSION}" -B "${WORK_DIR}/build" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="${WORK_DIR}/install" \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF \
   -DWITH_OPENSSL=OFF -DWITH_ZLIB=OFF
 cmake --build "${WORK_DIR}/build" --parallel "${CMAKE_BUILD_PARALLEL_LEVEL:-2}"

@@ -27,13 +27,13 @@ FileReadStatus RegularFileStatus(const fs::path& filename, bool follow_symlinks 
         // A missing/unresolvable parent is an error, not permission to generate
         // a replacement identity through a dangling directory link.
         const auto parent = filename.parent_path().empty() ? fs::path{"."} : filename.parent_path();
-        return fs::is_directory(parent, ec) && !ec ? FileReadStatus::NOT_FOUND : FileReadStatus::ERROR;
+        return fs::is_directory(parent, ec) && !ec ? FileReadStatus::NOT_FOUND : FileReadStatus::FAILED;
     }
     if (!ec && follow_symlinks && fs::is_symlink(status)) {
         status = fs::status(filename, ec);
     }
     // Dangling links must remain errors, even though status() reports not_found.
-    if (ec || !fs::is_regular_file(status)) return FileReadStatus::ERROR;
+    if (ec || !fs::is_regular_file(status)) return FileReadStatus::FAILED;
     return FileReadStatus::OK;
 }
 } // namespace
@@ -44,18 +44,18 @@ FileReadResult ReadBinaryFileBounded(const fs::path& filename, size_t maxsize)
     if (status != FileReadStatus::OK) return {status, {}};
     const auto close_file = [](FILE* file) { fclose(file); };
     std::unique_ptr<FILE, decltype(close_file)> file{fsbridge::fopen(filename, "rb"), close_file};
-    if (!file) return {FileReadStatus::ERROR, {}};
+    if (!file) return {FileReadStatus::FAILED, {}};
     std::string data;
     char buffer[128];
     while (data.size() < maxsize) {
         const size_t n = fread(buffer, 1, std::min(sizeof(buffer), maxsize - data.size()), file.get());
-        if (ferror(file.get())) return {FileReadStatus::ERROR, {}};
+        if (ferror(file.get())) return {FileReadStatus::FAILED, {}};
         data.append(buffer, n);
         if (feof(file.get())) break;
     }
     // Do not accept a valid prefix of an oversized identity (including maxsize=0).
-    if (fgetc(file.get()) != EOF || ferror(file.get())) return {FileReadStatus::ERROR, {}};
-    if (fclose(file.release()) != 0) return {FileReadStatus::ERROR, {}};
+    if (fgetc(file.get()) != EOF || ferror(file.get())) return {FileReadStatus::FAILED, {}};
+    if (fclose(file.release()) != 0) return {FileReadStatus::FAILED, {}};
     return {FileReadStatus::OK, std::move(data)};
 }
 
@@ -102,7 +102,7 @@ bool WriteBinaryFile(const fs::path &filename, const std::string &data, bool com
 bool WriteBinaryFileAtomic(const fs::path& filename, const std::string& data)
 {
     const auto status = RegularFileStatus(filename, /*follow_symlinks=*/true);
-    if (status == FileReadStatus::ERROR) return false;
+    if (status == FileReadStatus::FAILED) return false;
     fs::path destination{filename};
     if (status == FileReadStatus::OK) {
         std::error_code ec;
@@ -112,7 +112,7 @@ bool WriteBinaryFileAtomic(const fs::path& filename, const std::string& data)
     // Replace the resolved target, preserving any symlinks. The temporary must
     // be beside that target, including when the link crosses filesystems.
     const fs::path temporary{destination + ".tmp"};
-    if (RegularFileStatus(temporary) == FileReadStatus::ERROR) return false;
+    if (RegularFileStatus(temporary) == FileReadStatus::FAILED) return false;
     if (!WriteBinaryFile(temporary, data, /*commit=*/true)) return false;
     if (!RenameOver(temporary, destination)) return false;
     if (!DirectoryCommit(destination.parent_path().empty() ? fs::path{"."} : destination.parent_path())) {

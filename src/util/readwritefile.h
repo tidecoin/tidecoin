@@ -20,7 +20,7 @@
  */
 std::pair<bool,std::string> ReadBinaryFile(const fs::path &filename, size_t maxsize=std::numeric_limits<size_t>::max());
 
-enum class FileReadStatus { OK, NOT_FOUND, ERROR };
+enum class FileReadStatus { OK, NOT_FOUND, FAILED };
 struct FileReadResult {
     FileReadStatus status;
     std::string data;
@@ -29,7 +29,7 @@ struct FileReadResult {
 /** Read an entire regular file, following symlinks and rejecting excess bytes and special files.
  * NOT_FOUND means the path is absent, not an unreadable or dangling symlink.
  * Assumes the datadir is trusted: the type check is not resistant to concurrent
- * replacement of paths by another process. ERROR never returns partial data.
+ * replacement of paths by another process. FAILED never returns partial data.
  */
 FileReadResult ReadBinaryFileBounded(const fs::path& filename, size_t maxsize);
 

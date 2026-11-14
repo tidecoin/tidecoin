@@ -71,6 +71,7 @@ RPCHelpMan dumpprivkey()
         {
             std::shared_ptr<CWallet> const pwallet = GetWalletForJSONRPCRequest(request);
             if (!pwallet) return UniValue::VNULL;
+            LOCK(pwallet->cs_wallet);
             EnsureWalletIsUnlocked(*pwallet);
 
             const UniValue options = request.params.size() > 1 ? request.params[1] : UniValue::VNULL;

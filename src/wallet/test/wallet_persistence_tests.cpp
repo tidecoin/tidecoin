@@ -834,7 +834,7 @@ BOOST_AUTO_TEST_CASE(passphrase_failures_preserve_lock_and_disk_state)
             request.context = &context;
             BOOST_REQUIRE(request.params.read("[\"old passphrase\", 600]"));
             if (!locked) walletpassphrase().HandleRequest(request);
-            const auto timeout{wallet->nRelockTime};
+            const auto timeout{WITH_LOCK(wallet->cs_wallet, return wallet->nRelockTime)};
             const auto records{ReadRecords(wallet->GetDatabase())};
             BOOST_CHECK(!wallet->ChangeWalletPassphrase(SecureString{"wrong"}, new_pass));
             BOOST_CHECK_EQUAL(wallet->IsLocked(), locked);
@@ -848,7 +848,7 @@ BOOST_AUTO_TEST_CASE(passphrase_failures_preserve_lock_and_disk_state)
                 [](const auto& e) { return e["code"].template getInt<int>() == RPC_WALLET_ERROR; });
             BOOST_CHECK(Fault(*wallet).hit);
             BOOST_CHECK_EQUAL(wallet->IsLocked(), locked);
-            BOOST_CHECK_EQUAL(wallet->nRelockTime, timeout);
+            BOOST_CHECK_EQUAL(WITH_LOCK(wallet->cs_wallet, return wallet->nRelockTime), timeout);
             BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
             BOOST_CHECK(!wallet->GetDatabase().MakeBatch()->HasActiveTxn());
             RemoveWallet(context, wallet, std::nullopt);
@@ -2177,7 +2177,7 @@ BOOST_AUTO_TEST_CASE(pqhd_cache_seed_mismatch_rejected_without_rewrite)
             BOOST_CHECK_EXCEPTION(walletpassphrasechange().HandleRequest(request), UniValue,
                 [](const auto& e) { return e["code"].template getInt<int>() == RPC_WALLET_ERROR; });
             BOOST_CHECK(wallet->IsLocked());
-            BOOST_CHECK_EQUAL(wallet->nRelockTime, 0);
+            BOOST_CHECK_EQUAL(WITH_LOCK(wallet->cs_wallet, return wallet->nRelockTime), 0);
             RemoveWallet(context, wallet, std::nullopt);
         } else {
             BOOST_CHECK(wallet->LoadWallet() == DBErrors::CORRUPT);
@@ -2958,7 +2958,7 @@ BOOST_AUTO_TEST_CASE(locked_pqhd_load_defers_creation_until_unlock)
                     [](const auto& e) { return e["code"].template getInt<int>() == RPC_WALLET_ERROR; });
                 BOOST_REQUIRE(Fault(*wallet).hit);
                 BOOST_CHECK(wallet->IsLocked());
-                BOOST_CHECK_EQUAL(wallet->nRelockTime, 0);
+                BOOST_CHECK_EQUAL(WITH_LOCK(wallet->cs_wallet, return wallet->nRelockTime), 0);
                 BOOST_CHECK(state == WalletReconciliationTestAccess::Snapshot(*wallet));
                 BOOST_CHECK(records == ReadRecords(wallet->GetDatabase()));
                 BOOST_CHECK(!Database(*wallet).HasActiveTxn());

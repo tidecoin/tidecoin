@@ -141,12 +141,16 @@ jobs:
       - name: Build patched Cap'n Proto
         # NO_DEPENDS bypasses the patched library in depends. Keep the IPC
         # disconnect regression enabled by building the same corrected library here.
-        run: ./ci/test/install_capnp.sh "${BASE_ROOT_DIR}/ci/scratch/capnp"
+        run: |
+          ./ci/test/install_capnp.sh "${BASE_ROOT_DIR}/ci/scratch/capnp"
+          echo "${BASE_ROOT_DIR}/ci/scratch/capnp/install/bin" >> "$GITHUB_PATH"
 
       - name: Install Python packages
         run: |
           git clone -b v2.1.0 https://github.com/capnproto/pycapnp
-          pip3 install ./pycapnp -C force-bundled-libcapnp=True --break-system-packages
+          # Reuse the patched library above; pycapnp's bundled copy is older.
+          PKG_CONFIG_PATH="${BASE_ROOT_DIR}/ci/scratch/capnp/install/lib/pkgconfig" \
+            pip3 install ./pycapnp --break-system-packages
 
       - name: Set Ccache directory
         run: echo "CCACHE_DIR=${RUNNER_TEMP}/ccache_dir" >> "$GITHUB_ENV"

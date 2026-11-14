@@ -1755,46 +1755,46 @@ BOOST_AUTO_TEST_CASE(bounded_identity_files)
     BOOST_REQUIRE(WriteBinaryFile(path, key));
     check(FileReadStatus::OK, 128, key);
     check(FileReadStatus::OK, 129, key);
-    check(FileReadStatus::ERROR, 127);
-    check(FileReadStatus::ERROR, 0);
+    check(FileReadStatus::FAILED, 127);
+    check(FileReadStatus::FAILED, 0);
     BOOST_REQUIRE(WriteBinaryFile(path, key + "x"));
-    check(FileReadStatus::ERROR, 128);
+    check(FileReadStatus::FAILED, 128);
 #ifndef WIN32
     if (geteuid() != 0) {
         fs::permissions(path, fs::perms::none);
-        check(FileReadStatus::ERROR, 1024);
+        check(FileReadStatus::FAILED, 1024);
         fs::permissions(path, fs::perms::owner_read | fs::perms::owner_write);
     }
 #endif
     fs::remove(path);
     fs::create_directory(path);
-    check(FileReadStatus::ERROR, 128);
+    check(FileReadStatus::FAILED, 128);
     fs::remove(path);
 #ifndef WIN32
     // Check before opening: a FIFO with no writer must not hang the reader.
     BOOST_REQUIRE_EQUAL(mkfifo(path.c_str(), 0600), 0);
-    check(FileReadStatus::ERROR, 128);
+    check(FileReadStatus::FAILED, 128);
     fs::remove(path);
     const auto target = m_args.GetDataDirBase() / "identity-target";
     BOOST_REQUIRE(WriteBinaryFile(target, key));
     fs::create_symlink(target, path);
     check(FileReadStatus::OK, 128, key);
-    check(FileReadStatus::ERROR, 127);
+    check(FileReadStatus::FAILED, 127);
     fs::remove(target); // A dangling symlink is an error, not permission to rotate.
-    check(FileReadStatus::ERROR, 128);
+    check(FileReadStatus::FAILED, 128);
     fs::create_directory(target);
-    check(FileReadStatus::ERROR, 128);
+    check(FileReadStatus::FAILED, 128);
     fs::remove(target);
     BOOST_REQUIRE_EQUAL(mkfifo(target.c_str(), 0600), 0);
-    check(FileReadStatus::ERROR, 128); // Following a link to a FIFO must not open it.
+    check(FileReadStatus::FAILED, 128); // Following a link to a FIFO must not open it.
     fs::remove(target);
     fs::create_symlink(path, target); // Unresolvable loop.
-    check(FileReadStatus::ERROR, 128);
+    check(FileReadStatus::FAILED, 128);
     fs::remove(target);
     fs::remove(path);
     // An absent file through a dangling parent link must not count as missing.
     fs::create_directory_symlink(target, path);
-    BOOST_CHECK(ReadBinaryFileBounded(path / "key", 128).status == FileReadStatus::ERROR);
+    BOOST_CHECK(ReadBinaryFileBounded(path / "key", 128).status == FileReadStatus::FAILED);
     fs::remove(path);
 #endif
 }
