@@ -48,7 +48,7 @@ class LegacyWIFTest(BitcoinTestFramework):
 
         node.createwallet('imported', blank=True, passphrase='test-passphrase')
         wallet = node.get_wallet_rpc('imported')
-        wallet.walletpassphrase('test-passphrase', 60)
+        wallet.walletpassphrase('test-passphrase', 1000)
         control_desc = descsum_create(f'wpkh({other_wif})')
         assert wallet.importdescriptors([{'desc': control_desc, 'timestamp': 'now'}])[0]['success']
         control_addr = node.deriveaddresses(control_desc)[0]
@@ -109,7 +109,7 @@ class LegacyWIFTest(BitcoinTestFramework):
         self.log.info('Correct passphrase and saved keys survive lock, unload, and daemon restart')
         wallet.walletlock()
         assert_raises_rpc_error(-14, 'incorrect', wallet.walletpassphrase, 'wrong-passphrase', 60)
-        wallet.walletpassphrase('test-passphrase', 60)
+        wallet.walletpassphrase('test-passphrase', 1000)
         assert_equal(wallet.listdescriptors(private=True), saved)
         assert_equal(wallet.dumpprivkey(control_addr), other_wif)
         wallet.walletlock()
@@ -117,7 +117,7 @@ class LegacyWIFTest(BitcoinTestFramework):
         self.restart_node(0)
         node.loadwallet('imported')
         wallet = node.get_wallet_rpc('imported')
-        wallet.walletpassphrase('test-passphrase', 600)
+        wallet.walletpassphrase('test-passphrase', 1000)
         assert_equal(wallet.listdescriptors(private=True), saved)
         assert_equal(wallet.dumpprivkey(control_addr), other_wif)
         assert_equal(wallet.dumpprivkey(addresses[0], {'format': 'legacy'}), wif)
