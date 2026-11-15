@@ -4,7 +4,7 @@ Tidecoin is independently maintained software derived from Bitcoin Core.
 This changelog documents notable changes to Tidecoin, including post-quantum
 integration, Tidecoin-specific development, and selected upstream updates.
 
-## v1.0.0rc3 (Unreleased)
+## v1.0.0rc3 (2026-11-15)
 
 Third test candidate for the first major release line (`1.x`), initially based on
 Bitcoin Core v30 and maintained independently. Version 1.0.0 final has not been
@@ -26,6 +26,19 @@ activation settings, RPC changes and the complete candidate description.
   and script-fixture generation reproducible
 - Bound local priority adjustments, compare replacement diagrams without fee-total
   overflow, check ban expiry arithmetic and report the actual genesis issuance
+- Restore historical 0.18.3 WIF import and export compatibility, validate embedded
+  public keys against private keys, and clarify private-key export restrictions
+- Enforce the selected transaction era when creating and assembling signatures,
+  and improve PSBT missing-key and excluded-signature diagnostics
+- Synchronize wallet address, policy, GUI send and fee-bump requests with chain
+  notifications before checking activation eligibility
+- Bound AuxPoW header messages and disk reads, handle unavailable proofs explicitly,
+  and isolate mining payout reservations across wallet unloads and replacements
+- Incorporate upstream socket-event, stalled-peer and large undo-file fixes
+- Save Tor/I2P identities, settings and block-storage metadata safely; validate
+  block-file numbers and preserve shutdown requests during reindex retries
+- Apply compiler options to macOS Objective-C++ sources and correct cross-platform
+  CI and functional-test assumptions
 
 ### Post-Quantum Signatures
 
