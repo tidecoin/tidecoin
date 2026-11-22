@@ -10,6 +10,7 @@
 #include <util/result.h>
 #include <wallet/coinselection.h>
 #include <wallet/transaction.h>
+#include <wallet/transactionpreview.h>
 #include <wallet/wallet.h>
 
 #include <map>
@@ -208,6 +209,10 @@ util::Result<SelectionResult> AutomaticCoinSelection(const CWallet& wallet, Coin
 util::Result<SelectionResult> SelectCoins(const CWallet& wallet, CoinsResult& available_coins, const PreSelectedInputs& pre_set_inputs,
                                           const CAmount& nTargetValue, const CCoinControl& coin_control,
                                           const CoinSelectionParams& coin_selection_params) EXCLUSIVE_LOCKS_REQUIRED(wallet.cs_wallet);
+
+/** Estimate selected inputs and recipient/change scripts without selecting coins,
+ * deriving keys, reserving addresses, signing or writing wallet state. */
+util::Result<TransactionPreview> PreviewTransaction(CWallet& wallet, const std::vector<CRecipient>& recipients, const CCoinControl& coin_control) EXCLUSIVE_LOCKS_REQUIRED(wallet.cs_wallet);
 
 struct CreatedTransactionResult
 {

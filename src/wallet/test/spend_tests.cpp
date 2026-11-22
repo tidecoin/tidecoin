@@ -3,10 +3,11 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chainparams.h>
-#include <algorithm>
 #include <consensus/amount.h>
+#include <consensus/validation.h>
 #include <key_io.h>
 #include <policy/fees.h>
+#include <policy/truc_policy.h>
 #include <script/solver.h>
 #include <util/result.h>
 #include <validation.h>
@@ -18,6 +19,8 @@
 #include <wallet/test/wallet_test_fixture.h>
 
 #include <boost/test/unit_test.hpp>
+
+#include <algorithm>
 
 namespace wallet {
 BOOST_FIXTURE_TEST_SUITE(spend_tests, WalletTestingSetup)
@@ -58,6 +61,249 @@ BOOST_AUTO_TEST_CASE(long_chain_error_uses_remaining_amount)
     BOOST_CHECK_EQUAL(util::ErrorString(too_long).original, util::ErrorString(result).original);
     const auto insufficient = AutomaticCoinSelection(m_wallet, coins, 11 * COIN, params);
     BOOST_CHECK(!insufficient);
+}
+
+BOOST_FIXTURE_TEST_CASE(transaction_preview_and_exact_input_weights, TestChain100Setup)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    auto wallet = CreateSyncedWallet(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
+    LOCK(wallet->cs_wallet);
+    CCoinControl control;
+    control.m_feerate = CFeeRate{1000};
+    control.fOverrideFeeRate = true;
+    control.destChange = WitnessV1ScriptHash512{};
+    const std::vector<CRecipient> recipients{{WitnessV1ScriptHash512{}, COIN / 2, false}};
+    for (const auto scheme : {pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_1024, pq::SchemeId::MLDSA_44, pq::SchemeId::MLDSA_65, pq::SchemeId::MLDSA_87}) {
+        CKey key;
+        key.MakeNewKey(scheme);
+        const auto* info = pq::SchemeFromPrefix(static_cast<uint8_t>(scheme));
+        BOOST_REQUIRE(info);
+        auto* manager = CreateDescriptor(*wallet, "wpkh(" + EncodeSecret(key) + ")", true);
+        BOOST_REQUIRE(manager);
+        const CScript script = GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey()});
+        CMutableTransaction previous;
+        previous.vin.emplace_back(Txid::FromUint256(uint256::ONE), static_cast<uint8_t>(scheme));
+        previous.vout.emplace_back(COIN, script);
+        const auto block = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip()->GetBlockHash());
+        BOOST_REQUIRE(wallet->AddToWallet(MakeTransactionRef(previous), TxStateConfirmed{block, 100, 0}));
+        const COutPoint outpoint{previous.GetHash(), 0};
+        control.UnSelectAll();
+        control.Select(outpoint);
+
+        // Serialize a maximum satisfaction independently of descriptor weight calculation.
+        CMutableTransaction maximum;
+        maximum.vin.emplace_back(outpoint);
+        maximum.vin[0].scriptWitness.stack = {std::vector<unsigned char>(info->sig_bytes_sign_max + 1), ToByteVector(key.GetPubKey())};
+        maximum.vout.emplace_back(COIN / 2, GetScriptForDestination(recipients[0].dest));
+        maximum.vout.emplace_back(0, GetScriptForDestination(control.destChange));
+        const int64_t expected_weight = GetTransactionWeight(CTransaction(maximum));
+        const int64_t input_weight = GetTransactionInputWeight(maximum.vin[0]);
+        const auto records_before = GetMockableDatabase(*wallet).m_records;
+        const auto transactions_before = wallet->mapWallet.size();
+        for (int repetition = 0; repetition < 2; ++repetition) {
+            const auto preview = PreviewTransaction(*wallet, recipients, control);
+            BOOST_REQUIRE_MESSAGE(preview, util::ErrorString(preview).original);
+            BOOST_CHECK_EQUAL(preview->weight, expected_weight);
+            BOOST_CHECK_EQUAL(preview->fee, (expected_weight + 3) / 4);
+            BOOST_CHECK_EQUAL(preview->change, COIN / 2 - preview->fee);
+            BOOST_CHECK(!preview->insufficient_funds);
+            BOOST_CHECK(GetMockableDatabase(*wallet).m_records == records_before);
+            BOOST_CHECK_EQUAL(wallet->mapWallet.size(), transactions_before);
+            BOOST_CHECK(!wallet->IsLockedCoin(outpoint));
+        }
+        if (scheme == pq::SchemeId::FALCON_512) {
+            control.destChange = CNoDestination{};
+            control.m_change_type = OutputType::BECH32;
+            BOOST_REQUIRE(wallet->GetChangeScriptForPreview(OutputType::BECH32, std::nullopt));
+            BOOST_REQUIRE(PreviewTransaction(*wallet, recipients, control));
+            BOOST_CHECK(GetMockableDatabase(*wallet).m_records == records_before);
+            control.destChange = WitnessV1ScriptHash512{};
+            control.m_change_type.reset();
+        }
+        for (int delta : {-3, -2, -1, 0, 1}) {
+            control.SetInputWeight(outpoint, input_weight + delta);
+            FastRandomContext rng;
+            CoinSelectionParams params{rng};
+            params.m_effective_feerate = CFeeRate{1000};
+            const auto fetched = FetchSelectedInputs(*wallet, control, params);
+            BOOST_CHECK_EQUAL(bool(fetched), delta >= 0);
+        }
+        control.SetInputWeight(outpoint, input_weight);
+        auto incomplete = recipients;
+        incomplete[0].dest = CNoDestination{};
+        BOOST_CHECK(!PreviewTransaction(*wallet, incomplete, control));
+        control.m_max_tx_weight = expected_weight - 1;
+        BOOST_CHECK(!PreviewTransaction(*wallet, recipients, control));
+        control.m_max_tx_weight = expected_weight;
+        BOOST_CHECK(PreviewTransaction(*wallet, recipients, control));
+        control.m_max_tx_weight.reset();
+        auto subtract = recipients;
+        subtract[0].nAmount = COIN;
+        subtract[0].fSubtractFeeFromAmount = true;
+        const auto no_change = PreviewTransaction(*wallet, subtract, control);
+        BOOST_REQUIRE(no_change);
+        BOOST_CHECK_EQUAL(no_change->change, 0);
+        BOOST_CHECK_EQUAL(no_change->weight, expected_weight - 75 * 4);
+    }
+    BOOST_REQUIRE(wallet->EncryptWallet(SecureString{"preview test passphrase"}));
+    BOOST_REQUIRE(wallet->IsLocked());
+    control.destChange = CNoDestination{};
+    control.m_change_type = OutputType::BECH32;
+    const auto locked_records = GetMockableDatabase(*wallet).m_records;
+    for (int repetition = 0; repetition < 2; ++repetition) {
+        BOOST_REQUIRE(PreviewTransaction(*wallet, recipients, control));
+        BOOST_CHECK(wallet->IsLocked());
+        BOOST_CHECK(GetMockableDatabase(*wallet).m_records == locked_records);
+    }
+    control.m_change_scheme_override = 0xff;
+    BOOST_CHECK(!PreviewTransaction(*wallet, recipients, control));
+    BOOST_CHECK(GetMockableDatabase(*wallet).m_records == locked_records);
+}
+
+BOOST_FIXTURE_TEST_CASE(truc_final_weight_and_preview, TestChain100Setup)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    auto wallet = CreateSyncedWallet(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
+    LOCK(wallet->cs_wallet);
+    CKey key;
+    key.MakeNewKey(pq::SchemeId::MLDSA_44);
+    BOOST_REQUIRE(CreateDescriptor(*wallet, "wpkh(" + EncodeSecret(key) + ")", true));
+    CMutableTransaction parent;
+    parent.version = TRUC_VERSION;
+    parent.vin.emplace_back(Txid::FromUint256(uint256::ONE), 0);
+    for (int i = 0; i < 4; ++i) parent.vout.emplace_back(COIN, GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey()}));
+    BOOST_REQUIRE(wallet->AddToWallet(MakeTransactionRef(parent), TxStateInactive{}));
+    CCoinControl control;
+    control.m_version = TRUC_VERSION;
+    control.m_feerate = CFeeRate{1000};
+    control.fOverrideFeeRate = true;
+    control.destChange = WitnessV1ScriptHash512{};
+    const std::vector<CRecipient> recipients{{WitnessV1ScriptHash512{}, COIN, false}};
+    for (int count : {3, 4}) {
+        control.UnSelectAll();
+        for (int i = 0; i < count; ++i) control.Select(COutPoint{parent.GetHash(), static_cast<uint32_t>(i)});
+        const auto preview = PreviewTransaction(*wallet, recipients, control);
+        BOOST_CHECK_EQUAL(bool(preview), count == 3);
+        for (bool sign : {false, true}) {
+            const auto created = CreateTransaction(*wallet, recipients, std::nullopt, control, sign);
+            BOOST_REQUIRE_MESSAGE(bool(created) == (count == 3), util::ErrorString(created).original);
+            if (!created) BOOST_CHECK_EQUAL(util::ErrorString(created).original, "Transaction too large");
+        }
+    }
+    const auto block = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip()->GetBlockHash());
+    BOOST_REQUIRE(wallet->AddToWallet(MakeTransactionRef(parent), TxStateConfirmed{block, 100, 0}));
+    const auto confirmed = PreviewTransaction(*wallet, recipients, control);
+    BOOST_REQUIRE(confirmed);
+    BOOST_CHECK_EQUAL(confirmed->weight, 16262);
+    BOOST_REQUIRE(CreateTransaction(*wallet, recipients, std::nullopt, control, true));
+}
+
+BOOST_FIXTURE_TEST_CASE(transaction_preview_script_shapes, TestChain100Setup)
+{
+    REQUIRE_WALLET_TESTS_ENABLED();
+    auto wallet = CreateSyncedWallet(*m_node.chain, WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain()), coinbaseKey);
+    LOCK(wallet->cs_wallet);
+    const auto block = WITH_LOCK(Assert(m_node.chainman)->GetMutex(), return m_node.chainman->ActiveChain().Tip()->GetBlockHash());
+    unsigned int serial{0};
+    for (const auto scheme : {pq::SchemeId::FALCON_512, pq::SchemeId::FALCON_1024, pq::SchemeId::MLDSA_44, pq::SchemeId::MLDSA_65, pq::SchemeId::MLDSA_87}) {
+        CKey key, second;
+        key.MakeNewKey(scheme);
+        second.MakeNewKey(scheme);
+        const auto* info = Assert(pq::SchemeFromPrefix(static_cast<uint8_t>(scheme)));
+        const std::vector<unsigned char> sig(info->sig_bytes_sign_max + 1);
+        const auto pub = ToByteVector(key.GetPubKey());
+        const std::string secret = EncodeSecret(key);
+        struct Shape {
+            std::string descriptor;
+            CScript output;
+            CTxIn input;
+        };
+        std::vector<Shape> shapes;
+        CTxIn legacy;
+        legacy.scriptSig = CScript{} << sig << pub;
+        shapes.push_back({"pkh(" + secret + ")", GetScriptForDestination(PKHash{key.GetPubKey()}), legacy});
+        CTxIn wpkh;
+        wpkh.scriptWitness.stack = {sig, pub};
+        const auto wpkh_script = GetScriptForDestination(WitnessV0KeyHash{key.GetPubKey()});
+        shapes.push_back({"wpkh(" + secret + ")", wpkh_script, wpkh});
+        wpkh.scriptSig = CScript{} << ToByteVector(wpkh_script);
+        shapes.push_back({"sh(wpkh(" + secret + "))", GetScriptForDestination(ScriptHash{wpkh_script}), wpkh});
+        const CScript pk_script = GetScriptForRawPubKey(key.GetPubKey());
+        const CScript multi_script = GetScriptForMultisig(2, {key.GetPubKey(), second.GetPubKey()});
+        const CScript miniscript = CScript{} << pub << OP_CHECKSIGVERIFY << OP_1 << OP_CHECKLOCKTIMEVERIFY;
+        for (int kind = 0; kind < 4; ++kind) {
+            const CScript script = kind == 0 ? pk_script : kind == 1 ? GetScriptForDestination(PKHash{key.GetPubKey()}) : kind == 2 ? multi_script : miniscript;
+            const std::string inner = kind == 0 ? "pk(" + secret + ")" : kind == 1 ? "pkh(" + secret + ")" : kind == 2 ? "multi(2," + secret + "," + EncodeSecret(second) + ")" : "and_v(v:pk(" + secret + "),after(1))";
+            for (int wrapper = 0; wrapper < 3; ++wrapper) {
+                const bool v1 = wrapper == 2;
+                const CScript program = v1 ? GetScriptForDestination(WitnessV1ScriptHash512{script}) : GetScriptForDestination(WitnessV0ScriptHash{script});
+                CTxIn input;
+                if (kind == 2) input.scriptWitness.stack = {{}, sig, sig};
+                else if (kind == 1) input.scriptWitness.stack = {sig, pub};
+                // Miniscript's existing estimator uses the conservative external
+                // signature bound even for a locally held Falcon key.
+                else input.scriptWitness.stack = {kind == 3 ? std::vector<unsigned char>(info->sig_bytes_max + 1) : sig};
+                input.scriptWitness.stack.push_back(ToByteVector(script));
+                if (wrapper == 1) input.scriptSig = CScript{} << ToByteVector(program);
+                const std::string descriptor = (v1 ? "wsh512(" : "wsh(") + inner + ")";
+                shapes.push_back({wrapper == 1 ? "sh(" + descriptor + ")" : descriptor,
+                                  wrapper == 1 ? GetScriptForDestination(ScriptHash{program}) : program, input});
+            }
+        }
+        CCoinControl control;
+        control.m_feerate = CFeeRate{1000};
+        control.fOverrideFeeRate = true;
+        control.destChange = WitnessV1ScriptHash512{};
+        const std::vector<CRecipient> recipients{{PKHash{key.GetPubKey()}, COIN / 4, false}, {WitnessV1ScriptHash512{}, COIN / 4, true}};
+        CMutableTransaction mixed;
+        for (const auto& shape : shapes) {
+            BOOST_TEST_CONTEXT(shape.descriptor.substr(0, 20) << " scheme " << int(scheme)) {
+                BOOST_REQUIRE(CreateDescriptor(*wallet, shape.descriptor, true));
+                CMutableTransaction previous;
+                previous.vin.emplace_back(Txid::FromUint256(uint256::ONE), serial++);
+                previous.vout.emplace_back(COIN, shape.output);
+                BOOST_REQUIRE(wallet->AddToWallet(MakeTransactionRef(previous), TxStateConfirmed{block, 100, 0}));
+                CTxIn input{shape.input};
+                input.prevout = COutPoint{previous.GetHash(), 0};
+                control.UnSelectAll();
+                control.Select(input.prevout);
+                CMutableTransaction maximum;
+                maximum.vin.push_back(input);
+                for (const auto& recipient : recipients) maximum.vout.emplace_back(recipient.nAmount, GetScriptForDestination(recipient.dest));
+                maximum.vout.emplace_back(0, GetScriptForDestination(control.destChange));
+                const auto records = GetMockableDatabase(*wallet).m_records;
+                const auto preview = PreviewTransaction(*wallet, recipients, control);
+                BOOST_REQUIRE_MESSAGE(preview, util::ErrorString(preview).original);
+                BOOST_CHECK_EQUAL(preview->weight, GetTransactionWeight(CTransaction(maximum)));
+                BOOST_CHECK_EQUAL(preview->fee, (preview->weight + 3) / 4);
+                BOOST_CHECK_EQUAL(preview->change, COIN / 2);
+                BOOST_CHECK(GetMockableDatabase(*wallet).m_records == records);
+                // The override convention always includes an empty witness count,
+                // including when the complete transaction is legacy-only.
+                const auto input_weight = GetTransactionInputWeight(input);
+                FastRandomContext rng;
+                CoinSelectionParams params{rng};
+                for (const int delta : {-3, -2, -1, 0, 1}) {
+                    control.SetInputWeight(input.prevout, input_weight + delta);
+                    BOOST_CHECK_EQUAL(bool(FetchSelectedInputs(*wallet, control, params)), delta >= 0);
+                }
+                mixed.vin.push_back(input);
+            }
+        }
+        // Mixed legacy, nested-v0, native-v0 and v1: empty legacy witnesses and
+        // marker/flag are counted by serialization, once for the whole transaction.
+        for (const auto& recipient : recipients) mixed.vout.emplace_back(recipient.nAmount, GetScriptForDestination(recipient.dest));
+        mixed.vout.emplace_back(0, GetScriptForDestination(control.destChange));
+        // Use a fresh control to avoid the deliberately conservative overrides above.
+        CCoinControl mixed_control;
+        mixed_control.m_feerate = CFeeRate{1000};
+        mixed_control.fOverrideFeeRate = true;
+        mixed_control.destChange = control.destChange;
+        for (const auto& input : mixed.vin) mixed_control.Select(input.prevout);
+        const auto preview = PreviewTransaction(*wallet, recipients, mixed_control);
+        BOOST_REQUIRE(preview);
+        BOOST_CHECK_EQUAL(preview->weight, GetTransactionWeight(CTransaction(mixed)));
+    }
 }
 
 BOOST_FIXTURE_TEST_CASE(SubtractFee, TestChain100Setup)

@@ -15,11 +15,8 @@
 #include <interfaces/node.h>
 #include <key_io.h>
 #include <policy/policy.h>
-#include <pq/pq_scheme.h>
 #include <script/script.h>
 #include <wallet/coincontrol.h>
-#include <wallet/coinselection.h>
-#include <wallet/spend.h>
 #include <wallet/wallet.h>
 
 #include <QApplication>
@@ -31,57 +28,10 @@
 #include <QSettings>
 #include <QTreeWidget>
 
-#include <limits>
 
 using wallet::CCoinControl;
 
-namespace {
-constexpr size_t CompactSizeLen(size_t size)
-{
-    if (size < 253) return 1;
-    if (size <= std::numeric_limits<uint16_t>::max()) return 3;
-    if (size <= std::numeric_limits<uint32_t>::max()) return 5;
-    return 9;
-}
-
-constexpr size_t ScriptPushLen(size_t payload_size)
-{
-    if (payload_size < OP_PUSHDATA1) return 1 + payload_size;
-    if (payload_size <= std::numeric_limits<uint8_t>::max()) return 2 + payload_size;
-    if (payload_size <= std::numeric_limits<uint16_t>::max()) return 3 + payload_size;
-    return 5 + payload_size;
-}
-
-int EstimateInputVSizeConservative(const CTxOut& txout)
-{
-    const size_t sig_len = pq::MaxKnownSigBytesInScript(/*use_max_sig=*/true);
-    const size_t pubkey_len = pq::MaxKnownPubKeyBytesInScript();
-
-    int witnessversion = 0;
-    std::vector<unsigned char> witnessprogram;
-    if (txout.scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram)) {
-        size_t witness_bytes = 0;
-        if (witnessversion == 0 && witnessprogram.size() == WITNESS_V0_KEYHASH_SIZE) {
-            witness_bytes = CompactSizeLen(/*stack items=*/2) +
-                CompactSizeLen(sig_len) + sig_len +
-                CompactSizeLen(pubkey_len) + pubkey_len;
-        } else {
-            const size_t witness_script_len = ScriptPushLen(pubkey_len) + 1; // <pubkey> OP_CHECKSIG
-            witness_bytes = CompactSizeLen(/*stack items=*/2) +
-                CompactSizeLen(sig_len) + sig_len +
-                CompactSizeLen(witness_script_len) + witness_script_len;
-        }
-        return 32 + 4 + 1 + static_cast<int>(witness_bytes / WITNESS_SCALE_FACTOR) + 4;
-    }
-
-    const size_t scriptsig_bytes = CompactSizeLen(sig_len) + sig_len +
-        CompactSizeLen(pubkey_len) + pubkey_len;
-    return 32 + 4 + 1 + static_cast<int>(scriptsig_bytes) + 4;
-}
-} // namespace
-
-QList<CAmount> CoinControlDialog::payAmounts;
-bool CoinControlDialog::fSubtractFeeFromAmount = false;
+QList<SendCoinsRecipient> CoinControlDialog::payRecipients;
 
 bool CCoinControlWidgetItem::operator<(const QTreeWidgetItem &other) const {
     int column = treeWidget()->sortColumn();
@@ -421,107 +371,28 @@ void CoinControlDialog::updateLabels(CCoinControl& m_coin_control, WalletModel *
     if (!model)
         return;
 
-    // nPayAmount
-    CAmount nPayAmount = 0;
-    for (const CAmount &amount : CoinControlDialog::payAmounts) {
-        nPayAmount += amount;
+    std::vector<wallet::CRecipient> recipients;
+    for (const auto& recipient : payRecipients) {
+        recipients.push_back({DecodeDestination(recipient.address.toStdString()), recipient.amount, recipient.fSubtractFeeFromAmount});
     }
-
-    CAmount nAmount             = 0;
-    CAmount nPayFee             = 0;
-    CAmount nAfterFee           = 0;
-    CAmount nChange             = 0;
-    unsigned int nBytes         = 0;
-    unsigned int nBytesInputs   = 0;
-    unsigned int nQuantity      = 0;
-    bool fWitness               = false;
-
-    auto vCoinControl{m_coin_control.ListSelected()};
-
-    size_t i = 0;
-    for (const auto& out : model->wallet().getCoins(vCoinControl)) {
-        if (out.depth_in_main_chain < 0) continue;
-
-        // unselect already spent, very unlikely scenario, this could happen
-        // when selected are spent elsewhere, like rpc or another computer
-        const COutPoint& outpt = vCoinControl[i++];
-        if (out.is_spent)
-        {
-            m_coin_control.UnSelect(outpt);
+    CAmount nAmount{0};
+    unsigned int nQuantity{0};
+    const auto selected = m_coin_control.ListSelected();
+    const auto coins = model->wallet().getCoins(selected);
+    for (size_t i = 0; i < coins.size(); ++i) {
+        if (coins[i].depth_in_main_chain < 0) continue;
+        if (coins[i].is_spent) {
+            m_coin_control.UnSelect(selected[i]);
             continue;
         }
-
-        // Quantity
-        nQuantity++;
-
-        // Amount
-        nAmount += out.txout.nValue;
-
-        // Bytes: use descriptor-aware wallet sizing when possible.
-        int input_vsize{-1};
-        if (const auto* cwallet = model->wallet().wallet()) {
-            input_vsize = wallet::CalculateMaximumSignedInputSize(out.txout, cwallet, &m_coin_control);
-        }
-        if (input_vsize <= 0) {
-            // Conservative PQ fallback for unsolved/unknown inputs.
-            input_vsize = EstimateInputVSizeConservative(out.txout);
-        }
-        nBytesInputs += input_vsize;
-
-        int witnessversion = 0;
-        std::vector<unsigned char> witnessprogram;
-        if (out.txout.scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram)) {
-            fWitness = true;
-        }
+        ++nQuantity;
+        nAmount += coins[i].txout.nValue;
     }
-
-    // calculation
-    if (nQuantity > 0)
-    {
-        // Bytes
-        nBytes = nBytesInputs + ((CoinControlDialog::payAmounts.size() > 0 ? CoinControlDialog::payAmounts.size() + 1 : 2) * 34) + 10; // always assume +1 output for change here
-        if (fWitness)
-        {
-            // there is some fudging in these numbers related to the actual virtual transaction size calculation that will keep this estimate from being exact.
-            // usually, the result will be an overestimate within a couple of satoshis so that the confirmation dialog ends up displaying a slightly smaller fee.
-            // marker+flag are not included in per-input vsize estimates.
-            nBytes += 2; // account for the serialized marker and flag bytes
-        }
-
-        // in the subtract fee from amount case, we can tell if zero change already and subtract the bytes, so that fee calculation afterwards is accurate
-        if (CoinControlDialog::fSubtractFeeFromAmount)
-            if (nAmount - nPayAmount == 0)
-                nBytes -= 34;
-
-        // Fee
-        nPayFee = model->wallet().getMinimumFee(nBytes, m_coin_control, /*returned_target=*/nullptr, /*reason=*/nullptr);
-
-        if (nPayAmount > 0)
-        {
-            nChange = nAmount - nPayAmount;
-            if (!CoinControlDialog::fSubtractFeeFromAmount)
-                nChange -= nPayFee;
-
-            if (nChange > 0) {
-                // Assumes a p2pkh script size
-                CTxOut txout(nChange, CScript() << std::vector<unsigned char>(24, 0));
-                // Never create dust outputs; if we would, just add the dust to the fee.
-                if (IsDust(txout, model->node().getDustRelayFee()))
-                {
-                    nPayFee += nChange;
-                    nChange = 0;
-                    if (CoinControlDialog::fSubtractFeeFromAmount)
-                        nBytes -= 34; // we didn't detect lack of change above
-                }
-            }
-
-            if (nChange == 0 && !CoinControlDialog::fSubtractFeeFromAmount)
-                nBytes -= 34;
-        }
-
-        // after fee
-        nAfterFee = std::max<CAmount>(nAmount - nPayFee, 0);
-    }
+    const auto preview = model->wallet().previewTransaction(recipients, m_coin_control);
+    const CAmount nPayFee = preview ? preview->fee : 0;
+    const CAmount nAfterFee = preview ? std::max<CAmount>(nAmount - preview->fee, 0) : 0;
+    const CAmount nChange = preview ? preview->change : 0;
+    const int64_t nBytes = preview ? preview->vsize : 0;
 
     // actually update labels
     BitcoinUnit nDisplayUnit = BitcoinUnit::BTC;
@@ -536,32 +407,24 @@ void CoinControlDialog::updateLabels(CCoinControl& m_coin_control, WalletModel *
     QLabel *l8 = dialog->findChild<QLabel *>("labelCoinControlChange");
 
     // enable/disable "change"
-    dialog->findChild<QLabel *>("labelCoinControlChangeText")   ->setEnabled(nPayAmount > 0);
-    dialog->findChild<QLabel *>("labelCoinControlChange")       ->setEnabled(nPayAmount > 0);
+    dialog->findChild<QLabel *>("labelCoinControlChangeText")   ->setEnabled(!payRecipients.empty());
+    dialog->findChild<QLabel *>("labelCoinControlChange")       ->setEnabled(!payRecipients.empty());
 
-    // stats
-    l1->setText(QString::number(nQuantity));                                 // Quantity
-    l2->setText(BitcoinUnits::formatWithUnit(nDisplayUnit, nAmount));        // Amount
-    l3->setText(BitcoinUnits::formatWithUnit(nDisplayUnit, nPayFee));        // Fee
-    l4->setText(BitcoinUnits::formatWithUnit(nDisplayUnit, nAfterFee));      // After Fee
-    l5->setText(((nBytes > 0) ? ASYMP_UTF8 : "") + QString::number(nBytes));        // Bytes
-    l8->setText(BitcoinUnits::formatWithUnit(nDisplayUnit, nChange));        // Change
-    if (nPayFee > 0)
-    {
-        l3->setText(ASYMP_UTF8 + l3->text());
-        l4->setText(ASYMP_UTF8 + l4->text());
-        if (nChange > 0 && !CoinControlDialog::fSubtractFeeFromAmount)
-            l8->setText(ASYMP_UTF8 + l8->text());
-    }
-
-    // how many tideoshis the estimated fee can vary per byte we guess wrong
-    double dFeeVary = (nBytes != 0) ? (double)nPayFee / nBytes : 0;
-
-    QString toolTip4 = tr("Can vary +/- %1 tideoshi(s) per input.").arg(dFeeVary);
-
-    l3->setToolTip(toolTip4);
-    l4->setToolTip(toolTip4);
-    l8->setToolTip(toolTip4);
+    // An incomplete estimate is not a zero fee or an insufficient-funds result.
+    l1->setText(QString::number(nQuantity));
+    l2->setText(BitcoinUnits::formatWithUnit(nDisplayUnit, nAmount));
+    const QString unavailable = tr("Not available");
+    l3->setText(preview ? ASYMP_UTF8 + BitcoinUnits::formatWithUnit(nDisplayUnit, nPayFee) : unavailable);
+    l4->setText(preview ? ASYMP_UTF8 + BitcoinUnits::formatWithUnit(nDisplayUnit, nAfterFee) : unavailable);
+    l5->setText(preview ? ASYMP_UTF8 + QString::number(nBytes) : unavailable);
+    l8->setText(preview ? ASYMP_UTF8 + BitcoinUnits::formatWithUnit(nDisplayUnit, nChange) : unavailable);
+    const QString tooltip = preview
+        ? tr("Estimate for the selected inputs and entered recipients, including ancestor fees. Final fees and change are determined when preparing the transaction.")
+        : QString::fromStdString(util::ErrorString(preview).translated);
+    l3->setToolTip(tooltip);
+    l4->setToolTip(tooltip);
+    l5->setToolTip(preview ? tr("Estimated maximum signed virtual size, using the actual input and output scripts.") : tooltip);
+    l8->setToolTip(tooltip);
     dialog->findChild<QLabel *>("labelCoinControlFeeText")      ->setToolTip(l3->toolTip());
     dialog->findChild<QLabel *>("labelCoinControlAfterFeeText") ->setToolTip(l4->toolTip());
     dialog->findChild<QLabel *>("labelCoinControlBytesText")    ->setToolTip(l5->toolTip());
@@ -570,7 +433,7 @@ void CoinControlDialog::updateLabels(CCoinControl& m_coin_control, WalletModel *
     // Insufficient funds
     QLabel *label = dialog->findChild<QLabel *>("labelCoinControlInsuffFunds");
     if (label)
-        label->setVisible(nChange < 0);
+        label->setVisible(preview && preview->insufficient_funds);
 }
 
 void CoinControlDialog::changeEvent(QEvent* e)

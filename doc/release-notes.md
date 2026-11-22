@@ -20,6 +20,44 @@ Please report bugs using the issue tracker at GitHub:
 
   <https://github.com/tidecoin/tidecoin/issues>
 
+Unreleased wallet funding changes
+=================================
+
+The following changes are **not included in the published v1.0.0rc3 builds**.
+
+Wallet funding and fee bumping now account for transaction input/output count
+encoding changes, including 253 inputs and 252 recipients plus a change output.
+Affordable transactions no longer fail with an internal fee-accounting error at
+these boundaries. Change absorbs fee corrections when viable; genuinely
+insufficient funds produce an ordinary funding error. Recipient amounts remain
+unchanged unless fee subtraction was requested.
+
+Transaction construction enforces the assembled maximum signed weight before
+signing, both for an explicit `max_tx_weight` and for the default standard limit
+of 800,000 weight units. Signed wallet sends previously checked the default limit
+against their actual signed weight; a near-limit transaction can now be refused
+even if its eventual, shorter Falcon signatures would fit. This mainly affects
+large manually selected batches and consolidations; use a smaller batch. Unsigned
+PSBT funding already used the maximum estimate for the default limit.
+
+Version 3 transactions spending an unconfirmed parent also enforce the tighter
+16,000-weight-unit (4,000-vbyte) child limit on the complete transaction, including
+change, for both manually and automatically selected inputs. A tighter requested
+limit is preserved. Coin-control previews use the same limits.
+
+Explicit input weights that are provably too small are rejected
+in weight units, before rounding to virtual bytes. These weights include the
+empty witness-stack count byte for non-witness inputs, matching the existing
+input-weight convention. Unknown external satisfaction sizes remain the caller's
+responsibility.
+
+The GUI coin-control preview uses actual recipient and change scripts and the
+wallet's maximum signed-size estimator. It preserves individual fee-subtraction
+settings and includes ancestor fees. Incomplete or unavailable solving/change
+information displays “Not available” instead of a guessed fee. Previewing does
+not reserve a change address or sign a transaction; final preparation remains
+authoritative. Consensus, signature sizes, activation and dust policy are unchanged.
+
 How to Upgrade
 ==============
 

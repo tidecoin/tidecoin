@@ -505,6 +505,11 @@ public:
         }
         return result;
     }
+    util::Result<wallet::TransactionPreview> previewTransaction(const std::vector<CRecipient>& recipients, const CCoinControl& coin_control) override
+    {
+        LOCK(m_wallet->cs_wallet);
+        return PreviewTransaction(*m_wallet, recipients, coin_control);
+    }
     CAmount getRequiredFee(unsigned int tx_bytes) override { return GetRequiredFee(*m_wallet, tx_bytes); }
     CAmount getMinimumFee(unsigned int tx_bytes,
         const CCoinControl& coin_control,

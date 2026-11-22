@@ -1118,9 +1118,8 @@ void SendCoinsDialog::coinControlUpdateLabels()
 
     updateCoinControlState();
 
-    // set pay amounts
-    CoinControlDialog::payAmounts.clear();
-    CoinControlDialog::fSubtractFeeFromAmount = false;
+    // Preserve destinations and each recipient's fee-subtraction setting for the preview.
+    CoinControlDialog::payRecipients.clear();
 
     for(int i = 0; i < ui->entries->count(); ++i)
     {
@@ -1128,9 +1127,7 @@ void SendCoinsDialog::coinControlUpdateLabels()
         if(entry && !entry->isHidden())
         {
             SendCoinsRecipient rcp = entry->getValue();
-            CoinControlDialog::payAmounts.append(rcp.amount);
-            if (rcp.fSubtractFeeFromAmount)
-                CoinControlDialog::fSubtractFeeFromAmount = true;
+            CoinControlDialog::payRecipients.append(rcp);
         }
     }
 

@@ -16,6 +16,7 @@
 #include <qt/tidecoinamountfield.h>
 #include <qt/tidecoinunits.h>
 #include <qt/clientmodel.h>
+#include <qt/coincontroldialog.h>
 #include <qt/optionsmodel.h>
 #include <qt/psbtoperationsdialog.h>
 #include <qt/walletmodeltransaction.h>
@@ -662,6 +663,46 @@ void TestPSBTSigningDataStatus(interfaces::Node& node)
 //     QT_QPA_PLATFORM=xcb     build/bin/test_tidecoin-qt  # Linux
 //     QT_QPA_PLATFORM=windows build/bin/test_tidecoin-qt  # Windows
 //     QT_QPA_PLATFORM=cocoa   build/bin/test_tidecoin-qt  # macOS
+void TestCoinControlPreview(CWallet& wallet, WalletModel& model, SendCoinsDialog& dialog)
+{
+    const auto groups = model.wallet().listCoins();
+    QVERIFY(!groups.empty());
+    QVERIFY(!groups.begin()->second.empty());
+    const auto& [outpoint, coin] = groups.begin()->second.front();
+    const auto saved_control = *dialog.getCoinControl();
+    auto& control = *dialog.getCoinControl();
+    control.Select(outpoint);
+    control.destChange = WitnessV1ScriptHash512{};
+    SendCoinsRecipient recipient;
+    recipient.address = QString::fromStdString(EncodeDestination(WitnessV1ScriptHash512{}));
+    recipient.amount = coin.txout.nValue / 2;
+    dialog.pasteEntry(recipient);
+    const auto records = WITH_LOCK(wallet.cs_wallet, return wallet::GetMockableDatabase(wallet).m_records);
+    QVERIFY(QMetaObject::invokeMethod(&dialog, "coinControlUpdateLabels"));
+    QCOMPARE(CoinControlDialog::payRecipients.size(), 1);
+    QCOMPARE(CoinControlDialog::payRecipients[0].address, recipient.address);
+    const auto estimate = model.wallet().previewTransaction({{DecodeDestination(recipient.address.toStdString()), recipient.amount, false}}, control);
+    QVERIFY2(estimate.has_value(), util::ErrorString(estimate).original.c_str());
+    auto* size = dialog.findChild<QLabel*>("labelCoinControlBytes");
+    QCOMPARE(size->text(), QString{ASYMP_UTF8} + QString::number(estimate->vsize));
+    QVERIFY(!dialog.findChild<QLabel*>("labelCoinControlInsuffFunds")->isVisible());
+    QVERIFY(WITH_LOCK(wallet.cs_wallet, return wallet::GetMockableDatabase(wallet).m_records == records));
+    QVERIFY(!model.wallet().isLockedCoin(outpoint));
+
+    auto* entries = dialog.findChild<QVBoxLayout*>("entries");
+    auto* entry = qobject_cast<SendCoinsEntry*>(entries->itemAt(0)->widget());
+    entry->findChild<QValidatedLineEdit*>("payTo")->setText("unfinished address");
+    QVERIFY(QMetaObject::invokeMethod(&dialog, "coinControlUpdateLabels"));
+    QCOMPARE(size->text(), QString{"Not available"});
+    QCOMPARE(dialog.findChild<QLabel*>("labelCoinControlFee")->text(), QString{"Not available"});
+    QVERIFY(!dialog.findChild<QLabel*>("labelCoinControlInsuffFunds")->isVisible());
+    QCOMPARE(dialog.findChild<QLabel*>("labelCoinControlQuantity")->text(), QString{"1"});
+    QVERIFY(WITH_LOCK(wallet.cs_wallet, return wallet::GetMockableDatabase(wallet).m_records == records));
+    dialog.clear();
+    control = saved_control;
+    CoinControlDialog::payRecipients.clear();
+}
+
 void TestGUI(interfaces::Node& node, const std::shared_ptr<CWallet>& wallet)
 {
     // Create widgets for sending coins and listing transactions.
@@ -671,6 +712,8 @@ void TestGUI(interfaces::Node& node, const std::shared_ptr<CWallet>& wallet)
     WalletModel& walletModel = *mini_gui.walletModel;
     SendCoinsDialog& sendCoinsDialog = mini_gui.sendCoinsDialog;
     TransactionView& transactionView = mini_gui.transactionView;
+
+    TestCoinControlPreview(*wallet, walletModel, sendCoinsDialog);
 
     TestPSBTAmountRendering(walletModel, mini_gui.clientModel.get());
     if (!walletModel.wallet().privateKeysDisabled()) TestPSBTSigningStatus(*wallet, walletModel, mini_gui.clientModel.get());

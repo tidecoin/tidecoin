@@ -4425,6 +4425,28 @@ ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool intern
     return it->second;
 }
 
+std::optional<CScript> CWallet::GetChangeScriptForPreview(OutputType type, std::optional<uint8_t> scheme_override) const
+{
+    AssertLockHeld(cs_wallet);
+    if (OutputTypePolicyError(type, Params().GetConsensus(), GetTargetHeightForOutputs())) return {};
+    ScriptPubKeyMan* manager = scheme_override ? nullptr : GetScriptPubKeyMan(type, /*internal=*/true);
+    if (!manager) {
+        if (!m_pqhd_policy) return {};
+        const uint8_t scheme = scheme_override.value_or(m_pqhd_policy->default_change_scheme);
+        const auto* info = pq::SchemeFromPrefix(scheme);
+        if (!info || !pq::IsSchemeAllowedAtHeight(info->id, Params().GetConsensus(), GetTargetHeightForOutputs())) return {};
+        manager = FindPQHDDescriptorForPath(type, /*internal=*/true, m_pqhd_policy->default_change_seed_id, scheme);
+    }
+    auto* descriptor = dynamic_cast<DescriptorScriptPubKeyMan*>(manager);
+    if (!descriptor) return {};
+    LOCK(descriptor->cs_desc_man);
+    const auto data = descriptor->GetWalletDescriptor();
+    std::vector<CScript> scripts;
+    FlatSigningProvider provider;
+    if (!descriptor->ExpandPublicFromCache(data.next_index, scripts, provider) || scripts.size() != 1) return {};
+    return scripts.front();
+}
+
 ScriptPubKeyMan* CWallet::GetScriptPubKeyMan(const OutputType& type, bool internal, std::optional<uint8_t> scheme_override) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet)
 {
     AssertLockHeld(cs_wallet);

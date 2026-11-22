@@ -1074,6 +1074,9 @@ public:
     ScriptPubKeyMan* GetScriptPubKeyMan(const OutputType& type, bool internal) const;
     ScriptPubKeyMan* GetScriptPubKeyMan(const OutputType& type, bool internal, std::optional<uint8_t> scheme_override) EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
+    //! Read the next cached internal script without deriving, reserving or saving an address.
+    std::optional<CScript> GetChangeScriptForPreview(OutputType type, std::optional<uint8_t> scheme_override) const EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
+
     //! Get all the ScriptPubKeyMans for a script
     std::set<ScriptPubKeyMan*> GetScriptPubKeyMans(const CScript& script) const;
     //! Get the ScriptPubKeyMan by id

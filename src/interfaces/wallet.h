@@ -18,6 +18,7 @@
 #include <util/result.h>
 #include <util/ui_change_type.h>
 #include <wallet/pqhd.h>
+#include <wallet/transactionpreview.h>
 
 #include <cstdint>
 #include <functional>
@@ -260,6 +261,9 @@ public:
 
     //! Return wallet transaction output information.
     virtual std::vector<WalletTxOut> getCoins(const std::vector<COutPoint>& outputs) = 0;
+
+    //! Estimate the selected-input transaction using a read-only wallet snapshot.
+    virtual util::Result<wallet::TransactionPreview> previewTransaction(const std::vector<wallet::CRecipient>& recipients, const wallet::CCoinControl& coin_control) = 0;
 
     //! Get required fee.
     virtual CAmount getRequiredFee(unsigned int tx_bytes) = 0;

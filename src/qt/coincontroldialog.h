@@ -6,6 +6,7 @@
 #define BITCOIN_QT_COINCONTROLDIALOG_H
 
 #include <consensus/amount.h>
+#include <qt/sendcoinsrecipient.h>
 
 #include <QAbstractButton>
 #include <QAction>
@@ -50,8 +51,7 @@ public:
     // static because also called from sendcoinsdialog
     static void updateLabels(wallet::CCoinControl& m_coin_control, WalletModel*, QDialog*);
 
-    static QList<CAmount> payAmounts;
-    static bool fSubtractFeeFromAmount;
+    static QList<SendCoinsRecipient> payRecipients;
 
 protected:
     void changeEvent(QEvent* e) override;

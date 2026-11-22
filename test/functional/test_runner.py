@@ -134,6 +134,7 @@ BASE_SCRIPTS = [
     'rpc_psbt_previous_tx.py --preactivation',
     'wallet_fundrawtransaction.py',
     'wallet_p2sh_fee_estimation.py',
+    'wallet_fee_accounting.py',
     'wallet_bumpfee.py',
     'wallet_bumpfee_large_cluster.py',
     'wallet_v3_txs.py',
