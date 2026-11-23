@@ -21,14 +21,14 @@ Release Process
   the RC suffix; platform fields requiring numeric versions retain their numeric
   form. Artifact names must identify the candidate consistently.
 * Run the full default unit and functional suites on the final source state.
-  Also explicitly enable all 15 gated wallet suites with
+  Also explicitly enable all gated wallet suites with
   `TIDECOIN_RUN_WALLET_TESTS=1`; a default CTest pass does not run them. Run the
   applicable compiler-instrumented checks, PQ source reconstruction, fixture
   coverage and lints. Record the build configuration and any skipped checks.
 * Keep test logs, temporary node data and review evidence outside the source
   repository. Check outgoing history as well as the final tree for research
   files before pushing release commits or tags.
-* For the planned testnet restart, verify the current network parameters and
+* When preparing a testnet restart, verify the current network parameters and
   coordinate fresh data directories and initial peers with the operators. The
   existing testnet genesis and message-start bytes do not isolate an old chain
   automatically. See [testnet restart](release-notes.md#testnet-restart).

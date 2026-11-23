@@ -1,7 +1,7 @@
-Tidecoin v1.0.0rc3 Release Notes
+Tidecoin v1.0.0rc4 Release Notes
 ===============================
 
-This is the third release candidate for Tidecoin 1.0.0; version 1.0.0 final has
+This is the fourth release candidate for Tidecoin 1.0.0; version 1.0.0 final has
 not been released.
 
 Published builds:
@@ -20,10 +20,15 @@ Please report bugs using the issue tracker at GitHub:
 
   <https://github.com/tidecoin/tidecoin/issues>
 
-Unreleased wallet funding changes
-=================================
+Changes since v1.0.0rc3
+======================
 
-The following changes are **not included in the published v1.0.0rc3 builds**.
+This candidate fixes wallet funding and fee estimation for large transactions
+and restores build compatibility with CMake 4.5. The changes below are new in
+rc4; the remaining sections describe the broader Tidecoin 1.0 release.
+
+Wallet funding, weight limits and GUI estimates
+----------------------------------------------
 
 Wallet funding and fee bumping now account for transaction input/output count
 encoding changes, including 253 inputs and 252 recipients plus a change output.
@@ -58,12 +63,24 @@ information displays “Not available” instead of a guessed fee. Previewing do
 not reserve a change address or sign a transaction; final preparation remains
 authoritative. Consensus, signature sizes, activation and dust policy are unchanged.
 
+Build compatibility
+-------------------
+
+Source and generated-header include paths now use target-specific CMake
+configuration. This fixes configuration failures with CMake 4.5 when developer
+warnings are treated as errors, including native macOS CI builds. Older supported
+CMake versions remain compatible; compiler and developer checks remain enabled.
+
 How to Upgrade
 ==============
 
 Back up your wallets and shut down the old node completely before replacing the
 executables. See [wallet backup and migration](managing-wallets.md) for legacy
 wallet migration instructions.
+
+Upgrading from v1.0.0rc3 requires no new wallet migration or database rebuild.
+The storage-format rebuild described below applies to older databases that do
+not already have the format version.
 
 This release records an overall database storage-format version. Existing
 databases without that version, including those created by earlier development
@@ -77,9 +94,10 @@ alone is insufficient for this migration.
 Testnet restart
 ---------------
 
-This candidate is intended for the coordinated testnet restart. Existing
-testnet history is not a supported upgrade path. Stop the old testnet node,
-retain its wallet backups and data separately, and start the candidate with a
+Tidecoin 1.0 requires a coordinated testnet restart from the legacy chain.
+Upgrading an rc3 node on the restarted testnet to rc4 does not require another
+restart. Legacy testnet history is not a supported upgrade path. Stop the old
+testnet node, retain its wallet backups and data separately, and start the candidate with a
 fresh data directory and new test wallets. Connect initially only to the peers
 agreed by the testnet operators. Do not copy old testnet blocks, chainstate,
 indexes or peer records into the new directory.
@@ -739,9 +757,10 @@ Active witness-v1 nonempty signature arguments are restricted to hash-type
 bytes 01, 02, 03, 81, 82 and 83. Other bytes
 cause SIG_HASHTYPE, including unused arguments of an executed multisig opcode.
 Empty signatures, legacy and witness-v0 verification remain unchanged. Activation
-heights are unchanged. Include the v1 message and hash-type changes in the planned
-testnet relaunch; deploying after that relaunch requires a further
-coordinated restart. Existing testnet history is not a supported migration path.
+heights are unchanged. These v1 message and hash-type rules were already included
+in rc3 and are part of the coordinated Tidecoin 1.0 testnet restart described
+above. This candidate introduces no further rule change or restart requirement. Legacy
+testnet history is not a supported migration path.
 
 Mempool admission and relay also require the six defined hash-type bytes for
 nonempty legacy and witness-v0 signature arguments. This policy does not change

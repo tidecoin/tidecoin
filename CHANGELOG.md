@@ -4,11 +4,32 @@ Tidecoin is independently maintained software derived from Bitcoin Core.
 This changelog documents notable changes to Tidecoin, including post-quantum
 integration, Tidecoin-specific development, and selected upstream updates.
 
+## v1.0.0rc4 (2026-11-23)
+
+Fourth release candidate for Tidecoin 1.0.0. See the
+[release notes](doc/release-notes.md#changes-since-v100rc3) for details.
+
+- Correct wallet funding and fee bumping at input/output count encoding
+  boundaries, including 253 inputs and 252 recipients plus change
+- Reconcile fee shortfalls with change while preserving recipient amounts
+  unless fee subtraction was requested
+- Enforce maximum signed-weight estimates for explicit and default limits,
+  including the complete 16,000-WU child limit for version 3 transactions
+  spending an unconfirmed parent; near-limit batches may need to be reduced
+- Reject provably undersized explicit input weights before virtual-size rounding
+- Use actual scripts, fee-subtraction settings and ancestor fees in GUI
+  coin-control estimates; show unavailable estimates instead of guessed fees
+- Restore CMake 4.5 configuration compatibility without disabling build checks
+
+Mainnet AuxPoW remains disabled, testnet activation remains at height 1,000,
+and consensus rules are unchanged. Upgrading from rc3 requires no new wallet
+migration or database rebuild.
+
 ## v1.0.0rc3 (2026-11-15)
 
 Third test candidate for the first major release line (`1.x`), initially based on
 Bitcoin Core v30 and maintained independently. Version 1.0.0 final has not been
-released. See the [release notes](doc/release-notes.md) for upgrade instructions,
+released. See the [rc3 release notes](https://github.com/tidecoin/tidecoin/blob/v1.0.0rc3/doc/release-notes.md) for upgrade instructions,
 activation settings, RPC changes and the complete candidate description.
 
 ### Candidate corrections
