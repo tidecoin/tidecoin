@@ -15,7 +15,15 @@ $ FUZZ=process_message build_fuzz/bin/fuzz
 # abort fuzzing using ctrl-c
 ```
 
-One can use `--preset=libfuzzer-nosan` to do the same without common sanitizers enabled.
+To run without common sanitizers, use the `libfuzzer-nosan` preset. This preset
+uses a separate `build_fuzz_nosan` build directory:
+
+```sh
+$ cmake --preset=libfuzzer-nosan
+$ cmake --build build_fuzz_nosan
+$ FUZZ=process_message build_fuzz_nosan/bin/fuzz
+```
+
 See [further](#run-without-sanitizers-for-increased-throughput) for more information.
 
 There is also a runner script to execute all fuzz targets. Refer to
